@@ -28,7 +28,7 @@ export class McpServer {
 
         switch (method) {
             case 'initialize':
-                return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'code-knowledge-tool', version: '1.0.0' } } };
+                return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'cynapx', version: '1.0.0' } } };
             
             case 'tools/list':
                 return {
@@ -86,8 +86,28 @@ export class McpServer {
                     const targetNode = this.graphEngine.getNodeByQualifiedName(args.qualified_name);
                     if (!targetNode || targetNode.id === undefined) return { isError: true, content: [{ type: 'text', text: 'Symbol not found' }] };
                     const results = this.graphEngine.traverse(targetNode.id, 'BFS', { direction: 'incoming', maxDepth: args.max_depth || 3 });
+                    
+                    const formatted = results.map(r => {
+                        const pathSteps = [...r.path].reverse();
+                        const impactPath = pathSteps.map((step, index) => {
+                            const n = this.graphEngine.getNodeById(step.nodeId);
+                            const qname = n ? n.qualified_name : 'unknown';
+                            if (index < pathSteps.length - 1) {
+                                const edge = step.edge;
+                                const lineInfo = edge?.call_site_line ? ` (line ${edge.call_site_line})` : '';
+                                return `${qname}${lineInfo}`;
+                            }
+                            return qname;
+                        });
+                        return {
+                            node: r.node.qualified_name,
+                            distance: r.distance,
+                            impact_path: impactPath.join(' -> ')
+                        };
+                    });
+
                     return {
-                        content: [{ type: 'text', text: JSON.stringify(results.map(r => ({ qname: r.node.qualified_name, distance: r.distance })), null, 2) }]
+                        content: [{ type: 'text', text: JSON.stringify(formatted, null, 2) }]
                     };
 
                 default:

@@ -81,6 +81,7 @@ export class UpdatePipeline {
                     if (res.event.event === 'ADD' || res.event.event === 'MODIFY') {
                         await this.writeDeltaToDb(res.event.file_path, res.delta);
                     }
+                    console.log(`Successfully processed ${res.event.file_path}`);
                 }
             }
 

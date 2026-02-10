@@ -1,7 +1,7 @@
 # setup.ps1
 # This script ensures Node.js is installed and installs project dependencies.
 
-Write-Host "--- Code Knowledge Tool Setup & Update ---" -ForegroundColor Cyan
+Write-Host "--- Cynapx Setup & Update ---" -ForegroundColor Cyan
 
 # 1. Check Node.js version
 try {

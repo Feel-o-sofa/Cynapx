@@ -1,5 +1,5 @@
 -- schema/schema.sql
--- Single source of truth for the Code Knowledge Tool database schema.
+-- Single source of truth for the Cynapx database schema.
 
 -- Node table: Stores symbols (files, classes, methods, etc.)
 CREATE TABLE IF NOT EXISTS nodes (

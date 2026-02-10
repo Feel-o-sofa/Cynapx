@@ -8,7 +8,7 @@ import path from 'path';
 export class DatabaseManager {
     private db: Database.Database;
 
-    constructor(dbPath: string = 'knowledge.db') {
+    constructor(dbPath: string) {
         // Ensure the database file's directory exists
         const dirname = path.dirname(dbPath);
         if (!fs.existsSync(dirname)) {
@@ -28,7 +28,8 @@ export class DatabaseManager {
      * Reads and executes the schema.sql file to set up the database.
      */
     private initializeSchema(): void {
-        const schemaPath = path.join(__dirname, '../../schema/schema.sql');
+        // schema.sql is always located relative to this source file in the project
+        const schemaPath = path.resolve(__dirname, '../../schema/schema.sql');
         if (!fs.existsSync(schemaPath)) {
             throw new Error(`Schema file not found at ${schemaPath}`);
         }

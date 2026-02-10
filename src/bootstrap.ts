@@ -12,12 +12,14 @@ import { GitService } from './indexer/git-service';
 import { ApiServer } from './server/api-server';
 import { McpServer } from './server/mcp-server';
 import { FileWatcher } from './watcher/file-watcher';
+import { getDatabasePath } from './utils/paths';
+import { FileFilter } from './utils/file-filter';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
 /**
- * The Bootstrap class initializes and wires all components of the Code Knowledge Tool.
+ * The Bootstrap class initializes and wires all components of Cynapx.
  */
 async function bootstrap() {
     const isMcpMode = process.env.MCP_MODE === 'true';
@@ -30,15 +32,48 @@ async function bootstrap() {
         console.warn = console.error;
     }
     
-    const log = console.error;
+    const log = isMcpMode ? console.error : console.log;
 
-    log('--- Starting Code Knowledge Tool (Parallel Mode) ---');
+    // 0. Parse Arguments & Resolve Project Path
+    const args = process.argv.slice(2);
+    
+    if (args.includes('--help') || args.includes('-h')) {
+        log(`
+Cynapx: High-Performance Isolated Code Knowledge Engine
+
+Usage:
+  npx ts-node src/bootstrap.ts [options]
+
+Options:
+  --path <dir>    Path to the project directory to analyze (default: current directory)
+  --help, -h      Show this help message
+
+Environment Variables:
+  MCP_MODE=true   Start in MCP (Model Context Protocol) mode via stdio
+  PORT=<number>   Port for the HTTP API server (default: 3000)
+        `);
+        process.exit(0);
+    }
+
+    const pathIndex = args.indexOf('--path');
+    const projectPath = pathIndex !== -1 && args[pathIndex + 1] 
+        ? path.resolve(args[pathIndex + 1]) 
+        : process.cwd();
+
+    if (!fs.existsSync(projectPath) || !fs.statSync(projectPath).isDirectory()) {
+        console.error(`Error: Invalid project path: ${projectPath}`);
+        process.exit(1);
+    }
+
+    log(`--- Starting Cynapx (Parallel Mode) ---`);
+    log(`Target Project: ${projectPath}`);
 
     try {
-        // 1. Initialize Database
-        const dbManager = new DatabaseManager('knowledge.db');
+        // 1. Initialize Database (Centralized & Isolated)
+        const dbPath = getDatabasePath(projectPath);
+        const dbManager = new DatabaseManager(dbPath);
         const db = dbManager.getDb();
-        log('Database initialized successfully.');
+        log(`Database initialized at: ${dbPath}`);
 
         // 2. Setup Repositories
         const nodeRepo = new NodeRepository(db);
@@ -59,17 +94,17 @@ async function bootstrap() {
         log(`Update Pipeline initialized with WorkerPool (${os.cpus().length} cores).`);
 
         // 5. Setup Git Service (Phase D)
-        const gitService = new GitService(path.join(__dirname, '..'));
+        const gitService = new GitService(projectPath);
         log('Git Service initialized.');
 
         // 6. Initial Scan (Phase 5.2)
         log('Starting Initial Project Scan with Git history...');
-        const rootDir = path.join(__dirname, '..');
-        const srcDir = path.join(rootDir, 'src');
         
-        const rootFiles = await getFiles(rootDir, false);
-        const srcFiles = await getFiles(srcDir, true);
-        const allFiles = [...new Set([...rootFiles, ...srcFiles])];
+        // Setup File Filter
+        const fileFilter = new FileFilter(projectPath);
+        
+        // Scan the target project path
+        const allFiles = await getFiles(projectPath, true, fileFilter);
         
         log(`Found ${allFiles.length} files to index. Processing in batch mode...`);
         const version = Date.now();
@@ -89,7 +124,7 @@ async function bootstrap() {
 
         // 7. Start File Watcher (Phase 5.2)
         const watcher = new FileWatcher(updatePipeline);
-        watcher.start(srcDir);
+        watcher.start(projectPath);
 
         // 8. Start API Server or MCP Server
         if (isMcpMode) {
@@ -100,7 +135,7 @@ async function bootstrap() {
             const apiServer = new ApiServer(graphEngine);
             const port = parseInt(process.env.PORT || '0', 10);
             apiServer.start(port);
-            log(`Knowledge Tool API listening on port ${port}`);
+            log(`Cynapx API listening on port ${port}`);
         }
 
         log('--- Startup Sequence Complete ---');
@@ -122,7 +157,7 @@ async function bootstrap() {
 /**
  * Recursively collects supported files from a directory.
  */
-async function getFiles(directory: string, recursive: boolean): Promise<string[]> {
+async function getFiles(directory: string, recursive: boolean, filter?: FileFilter): Promise<string[]> {
     const results: string[] = [];
     if (!fs.existsSync(directory)) return results;
     
@@ -130,11 +165,16 @@ async function getFiles(directory: string, recursive: boolean): Promise<string[]
 
     for (const file of files) {
         const fullPath = path.resolve(directory, file);
+        
+        if (filter && filter.isIgnored(fullPath)) {
+            continue;
+        }
+
         const stat = fs.statSync(fullPath);
 
         if (stat.isDirectory()) {
-            if (recursive && file !== 'node_modules' && file !== '.git') {
-                const subFiles = await getFiles(fullPath, true);
+            if (recursive) {
+                const subFiles = await getFiles(fullPath, true, filter);
                 results.push(...subFiles);
             }
         } else if (
