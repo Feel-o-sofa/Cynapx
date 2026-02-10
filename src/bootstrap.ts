@@ -56,8 +56,10 @@ async function bootstrap() {
 
         // 8. Start API Server
         const apiServer = new ApiServer(graphEngine);
-        const port = parseInt(process.env.PORT || '3000', 10);
-        apiServer.listen(port);
+
+        // Use PORT=0 to auto-assign a free port if variable is not set or set to 0
+        const port = parseInt(process.env.PORT || '0', 10);
+        apiServer.start(port);
 
         console.log('--- Startup Sequence Complete ---');
         console.log(`Knowledge Tool API listening on port ${port}`);

@@ -28,6 +28,12 @@ Thumbs.db
 .idea/
 
 # Test files
-test_*.py
-src/test_*.py
+test_*
+*.test.*
+*.spec.*
 tests/
+__tests__/
+
+# Agent files
+GEMINI.md
+agent_docs/

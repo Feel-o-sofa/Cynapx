@@ -31,16 +31,19 @@ export class TreeSitterParser implements CodeParser {
             py: `
                 (function_definition name: (identifier) @function.name) @function.def
                 (class_definition name: (identifier) @class.name) @class.def
+                (call function: (identifier) @call.name) @call.expr
             `,
             ts: `
                 (class_declaration name: (identifier) @class.name) @class.def
                 (method_definition name: (property_identifier) @method.name) @method.def
                 (function_declaration name: (identifier) @function.name) @function.def
+                (call_expression function: (identifier) @call.name) @call.expr
             `,
             js: `
                 (function_declaration name: (identifier) @function.name) @function.def
                 (class_declaration name: (identifier) @class.name) @class.def
                 (method_definition name: (property_identifier) @method.name) @method.def
+                (call_expression function: (identifier) @call.name) @call.expr
             `
         };
         return new Parser.Query(language, queryStrings[extension] || '');
@@ -80,17 +83,20 @@ export class TreeSitterParser implements CodeParser {
             loc: sourceCode.split('\n').length
         });
 
-        // 2. Extract Symbols using Matches
+        // 2. Extract Symbols and Calls using Matches
+        // Map to find current function context for 'from_qname'
+        const rangeToSymbolMap = new Map<string, string>(); // 'startLine-endLine' -> qname
+
+        // First pass: Definitions
         for (const match of matches) {
             const captures = match.captures;
             const defCapture = captures.find(c => c.name.endsWith('.def'));
             const nameCapture = captures.find(c => c.name.endsWith('.name'));
 
-            if (defCapture && nameCapture) {
+            if (defCapture && nameCapture && !captures.some(c => c.name.startsWith('call'))) {
                 const node = defCapture.node;
                 const name = nameCapture.node.text;
                 const type = this.c_to_symbol_type(defCapture.name);
-
                 const qname = `${filePath}#${name}`;
 
                 nodes.push({
@@ -113,6 +119,48 @@ export class TreeSitterParser implements CodeParser {
                     to_qname: qname,
                     edge_type: 'defines',
                     dynamic: false
+                } as any);
+
+                // Index range for context lookup (1-based to match callLine)
+                const startLine1 = node.startPosition.row + 1;
+                const endLine1 = node.endPosition.row + 1;
+                const rangeKey = `${startLine1}-${endLine1}`;
+                rangeToSymbolMap.set(rangeKey, qname);
+            }
+        }
+
+        // Second pass: Calls
+        for (const match of matches) {
+            const captures = match.captures;
+            const callCapture = captures.find(c => c.name.endsWith('.expr'));
+            const nameCapture = captures.find(c => c.name.endsWith('.name'));
+
+            if (callCapture && nameCapture && captures.some(c => c.name.startsWith('call'))) {
+                const node = callCapture.node;
+                const targetName = nameCapture.node.text;
+                const callLine = node.startPosition.row + 1;
+
+                // Find enclosing symbol (context)
+                let fromQName = filePath; // Default to file level
+                let minRange = Number.MAX_SAFE_INTEGER;
+
+                for (const [range, qname] of rangeToSymbolMap) {
+                    const [start, end] = range.split('-').map(Number);
+                    if (callLine >= start && callLine <= end) { // Inside function body (inclusive)
+                        const len = end - start;
+                        if (len < minRange) { // Get tightest scope
+                            minRange = len;
+                            fromQName = qname;
+                        }
+                    }
+                }
+                edges.push({
+                    from_qname: fromQName,
+                    to_qname: targetName, // Just simple name, needs heuristic resolution
+                    edge_type: 'calls',
+                    dynamic: true, // Dynamic because we don't have type checker
+                    call_site_line: callLine,
+                    target_file_hint: undefined
                 } as any);
             }
         }

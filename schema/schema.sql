@@ -53,3 +53,27 @@ CREATE INDEX IF NOT EXISTS idx_edges_to_id ON edges (to_id);
 CREATE INDEX IF NOT EXISTS idx_edges_edge_type ON edges (edge_type);
 CREATE INDEX IF NOT EXISTS idx_edges_edge_type_dynamic ON edges (edge_type, dynamic);
 CREATE INDEX IF NOT EXISTS idx_nodes_symbol_type_language ON nodes (symbol_type, language);
+
+
+-- FTS5 Virtual Table for Fast Symbol Search (Task 2)
+CREATE VIRTUAL TABLE IF NOT EXISTS fts_symbols USING fts5(
+    qualified_name,
+    symbol_type,
+    file_path,
+    content='nodes',
+    content_rowid='id'
+);
+
+-- Triggers to ensure FTS index is kept in sync with the nodes table
+CREATE TRIGGER IF NOT EXISTS nodes_ai AFTER INSERT ON nodes BEGIN
+  INSERT INTO fts_symbols(rowid, qualified_name, symbol_type, file_path) VALUES (new.id, new.qualified_name, new.symbol_type, new.file_path);
+END;
+
+CREATE TRIGGER IF NOT EXISTS nodes_ad AFTER DELETE ON nodes BEGIN
+  INSERT INTO fts_symbols(fts_symbols, rowid, qualified_name, symbol_type, file_path) VALUES('delete', old.id, old.qualified_name, old.symbol_type, old.file_path);
+END;
+
+CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
+  INSERT INTO fts_symbols(fts_symbols, rowid, qualified_name, symbol_type, file_path) VALUES('delete', old.id, old.qualified_name, old.symbol_type, old.file_path);
+  INSERT INTO fts_symbols(rowid, qualified_name, symbol_type, file_path) VALUES (new.id, new.qualified_name, new.symbol_type, new.file_path);
+END;

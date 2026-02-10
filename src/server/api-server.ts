@@ -231,9 +231,19 @@ export class ApiServer {
         };
     }
 
-    public listen(port: number): void {
-        this.app.listen(port, () => {
-            console.log(`Knowledge Tool API listening on port ${port}`);
+    public start(port: number = 3000): void {
+        const server = this.app.listen(port, () => {
+            const address = server.address();
+            const assignedPort = typeof address === 'string' ? port : address?.port;
+
+            console.log(`Knowledge Tool API listening on port ${assignedPort}`);
+
+            // Save port to file so test scripts can find it
+            try {
+                fs.writeFileSync('.server-port', String(assignedPort));
+            } catch (err) {
+                console.error('Failed to write .server-port file:', err);
+            }
         });
     }
 }

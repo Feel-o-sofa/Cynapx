@@ -141,8 +141,22 @@ export class UpdatePipeline {
             if (targetNode) return targetNode.id;
         }
 
-        // Fallback to name-only lookup
+        // Fallback to name-only lookup (Exact Match)
         const existingNode = this.nodeRepo.getNodeByQualifiedName(qname);
-        return existingNode?.id;
+        if (existingNode) return existingNode.id;
+
+        // Heuristic Suffix Match (New Logic for Task 1)
+        // If qname is simple (e.g., 'greet' from Python), try to find symbols ending with '#greet'
+        if (side === 'to' && !qname.includes('#') && !qname.includes('/')) {
+            const candidates = this.nodeRepo.findNodesBySymbolName(qname);
+            if (candidates.length > 0) {
+                // If multiple candidates exist, we might need better disambiguation.
+                // For now, if we have a file hint constraint or other heuristics, we could use them.
+                // Returning the first one is a basic heuristic.
+                return candidates[0].id;
+            }
+        }
+
+        return undefined;
     }
 }

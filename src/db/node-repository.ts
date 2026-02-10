@@ -87,8 +87,30 @@ export class NodeRepository {
     }
 
     public searchSymbols(query: string, limit: number = 20): CodeNode[] {
-        const stmt = this.db.prepare('SELECT * FROM nodes WHERE qualified_name LIKE ? LIMIT ?');
-        const rows = stmt.all(`%${query}%`, limit);
+        const ftsQuery = `"${query}"* OR ${query}`;
+        try {
+            const stmt = this.db.prepare(`
+                SELECT n.* 
+                FROM fts_symbols f 
+                JOIN nodes n ON f.rowid = n.id 
+                WHERE fts_symbols MATCH ? 
+                ORDER BY rank 
+                LIMIT ?
+            `);
+            const rows = stmt.all(ftsQuery, limit);
+            return rows.map(row => this.mapRowToNode(row));
+        } catch (error) {
+            // Fallback to LIKE if FTS fails
+            const stmt = this.db.prepare('SELECT * FROM nodes WHERE qualified_name LIKE ? LIMIT ?');
+            const rows = stmt.all(`%${query}%`, limit);
+            return rows.map(row => this.mapRowToNode(row));
+        }
+    }
+
+    public findNodesBySymbolName(name: string): CodeNode[] {
+        const stmt = this.db.prepare("SELECT * FROM nodes WHERE qualified_name = ? OR qualified_name LIKE ?");
+        // Match exact name (if global) or suffixed name
+        const rows = stmt.all(name, `%#${name}`);
         return rows.map(row => this.mapRowToNode(row));
     }
 
