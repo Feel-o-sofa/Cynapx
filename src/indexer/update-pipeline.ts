@@ -1,6 +1,8 @@
 import { Database } from 'better-sqlite3';
 import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
+import { MetadataRepository } from '../db/metadata-repository';
+import { GitService } from './git-service';
 import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
 import { WorkerPool } from './worker-pool';
 
@@ -13,6 +15,8 @@ export class UpdatePipeline {
         private nodeRepo: NodeRepository,
         private edgeRepo: EdgeRepository,
         private parser: CodeParser,
+        private metadataRepo?: MetadataRepository,
+        private gitService?: GitService,
         private workerPool?: WorkerPool
     ) { }
 
@@ -36,6 +40,11 @@ export class UpdatePipeline {
                 await this.applyDeleteSerial(file_path);
             }
 
+            // Update last_indexed_commit if it was a real commit (not 'watcher-change')
+            if (this.metadataRepo && this.gitService && commit !== 'watcher-change' && commit !== 'deleted' && commit !== 'unknown') {
+                this.metadataRepo.setLastIndexedCommit(commit);
+            }
+
             console.log(`Successfully processed ${file_path}`);
         } catch (error) {
             console.error(`Failed to process change event for ${file_path}:`, error);
@@ -46,8 +55,12 @@ export class UpdatePipeline {
     public async processBatch(events: FileChangeEvent[], version: number): Promise<void> {
         console.log(`Processing batch of ${events.length} files...`);
         
-        // 1. Parallel Parse
+        // 1. Parallel Parse (Skip for DELETE)
         const results = await Promise.all(events.map(async (event) => {
+            if (event.event === 'DELETE') {
+                return { event, delta: { nodes: [], edges: [] }, status: 'success' as const };
+            }
+
             try {
                 let delta: DeltaGraph;
                 if (this.workerPool) {
@@ -86,6 +99,15 @@ export class UpdatePipeline {
             }
 
             this.db.prepare('COMMIT').run();
+
+            // After successful batch, if we have gitService, update to HEAD
+            if (this.metadataRepo && this.gitService) {
+                const head = await this.gitService.getCurrentHead();
+                if (head !== 'unknown') {
+                    this.metadataRepo.setLastIndexedCommit(head);
+                }
+            }
+
             console.log(`Batch processing complete.`);
         } catch (error) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
@@ -94,6 +116,55 @@ export class UpdatePipeline {
         } finally {
             resolveLock!();
         }
+    }
+
+    /**
+     * Synchronizes the database with the current Git HEAD.
+     */
+    public async syncWithGit(projectPath: string): Promise<void> {
+        if (!this.metadataRepo || !this.gitService) {
+            console.warn('MetadataRepo or GitService not provided. Skipping Git sync.');
+            return;
+        }
+
+        const lastCommit = this.metadataRepo.getLastIndexedCommit();
+        const currentHead = await this.gitService.getCurrentHead();
+        const version = Date.now();
+
+        if (!lastCommit) {
+            console.log('No previous index found. Sync skipped (initial scan should handle this).');
+            return;
+        }
+
+        if (lastCommit === currentHead) {
+            console.log(`Index is already up-to-date with Git HEAD (${currentHead.substring(0, 7)}).`);
+            return;
+        }
+
+        console.log(`Index out of sync. (DB: ${lastCommit.substring(0, 7)}, HEAD: ${currentHead.substring(0, 7)})`);
+        console.log('Starting Git-based Catch-up Sync...');
+
+        const diffs = await this.gitService.getDiffFiles(lastCommit, currentHead);
+        console.log(`Detected ${diffs.length} changed files since last session.`);
+
+        if (diffs.length === 0) {
+            this.metadataRepo.setLastIndexedCommit(currentHead);
+            return;
+        }
+
+        const events = await Promise.all(diffs.map(async (d) => {
+            const fullPath = require('path').resolve(projectPath, d.file);
+            const commit = d.status === 'DELETE' ? 'deleted' : await this.gitService!.getLatestCommit(fullPath);
+            return {
+                event: d.status as 'ADD' | 'MODIFY' | 'DELETE',
+                file_path: fullPath,
+                commit: commit
+            };
+        }));
+
+        await this.processBatch(events, version);
+        this.metadataRepo.setLastIndexedCommit(currentHead);
+        console.log('Catch-up Sync Complete.');
     }
 
     /**

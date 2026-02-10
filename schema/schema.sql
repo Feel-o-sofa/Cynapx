@@ -77,3 +77,9 @@ CREATE TRIGGER IF NOT EXISTS nodes_au AFTER UPDATE ON nodes BEGIN
   INSERT INTO fts_symbols(fts_symbols, rowid, qualified_name, symbol_type, file_path) VALUES('delete', old.id, old.qualified_name, old.symbol_type, old.file_path);
   INSERT INTO fts_symbols(rowid, qualified_name, symbol_type, file_path) VALUES (new.id, new.qualified_name, new.symbol_type, new.file_path);
 END;
+
+-- Metadata table for tracking system state (Task 13-1)
+CREATE TABLE IF NOT EXISTS index_metadata (
+    key TEXT PRIMARY KEY,
+    value TEXT
+);

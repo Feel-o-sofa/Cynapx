@@ -49,6 +49,27 @@ export class ApiServer {
 
         // 3.7 Search API (Phase E)
         this.app.post('/api/search/symbols', this.handleSymbolSearch.bind(this));
+
+        // 3.8 Export API (Task 14)
+        this.app.post('/api/graph/export', this.handleExportGraph.bind(this));
+    }
+
+    private async handleExportGraph(req: Request, res: Response) {
+        const { root_qname, max_depth, format } = req.body;
+        
+        if (format && format !== 'mermaid') {
+            return res.status(400).json({ error_code: 'INVALID_FORMAT', message: 'Only "mermaid" format is supported currently.' });
+        }
+
+        try {
+            const result = await this.graphEngine.exportToMermaid({
+                rootQName: root_qname,
+                maxDepth: max_depth
+            });
+            res.json({ format: 'mermaid', content: result });
+        } catch (error) {
+            res.status(500).json({ error_code: 'EXPORT_FAILED', message: String(error) });
+        }
     }
 
     private handleGetSymbol(req: Request, res: Response) {

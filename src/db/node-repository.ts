@@ -70,6 +70,12 @@ export class NodeRepository {
         return rows.map(row => this.mapRowToNode(row));
     }
 
+    public getAllFilePaths(): string[] {
+        const stmt = this.db.prepare('SELECT DISTINCT file_path FROM nodes');
+        const rows = stmt.all() as { file_path: string }[];
+        return rows.map(r => r.file_path);
+    }
+
     public updateMetrics(id: number, metrics: { loc?: number, cyclomatic?: number, fan_in?: number, fan_out?: number }): void {
         const sets: string[] = [];
         const values: any[] = [];

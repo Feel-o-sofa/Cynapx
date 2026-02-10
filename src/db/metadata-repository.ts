@@ -1,0 +1,22 @@
+import { Database } from 'better-sqlite3';
+
+export class MetadataRepository {
+    constructor(private db: Database) { }
+
+    public getValue(key: string): string | undefined {
+        const row = this.db.prepare('SELECT value FROM index_metadata WHERE key = ?').get(key) as { value: string } | undefined;
+        return row?.value;
+    }
+
+    public setValue(key: string, value: string): void {
+        this.db.prepare('INSERT OR REPLACE INTO index_metadata (key, value) VALUES (?, ?)').run(key, value);
+    }
+
+    public getLastIndexedCommit(): string | undefined {
+        return this.getValue('last_indexed_commit');
+    }
+
+    public setLastIndexedCommit(commit: string): void {
+        this.setValue('last_indexed_commit', commit);
+    }
+}

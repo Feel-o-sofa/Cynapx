@@ -1,6 +1,8 @@
+#!/usr/bin/env node
 import { DatabaseManager } from './db/database';
 import { NodeRepository } from './db/node-repository';
 import { EdgeRepository } from './db/edge-repository';
+import { MetadataRepository } from './db/metadata-repository';
 import { GraphEngine } from './graph/graph-engine';
 import { UpdatePipeline } from './indexer/update-pipeline';
 import { TypeScriptParser } from './indexer/typescript-parser';
@@ -78,52 +80,54 @@ Environment Variables:
         // 2. Setup Repositories
         const nodeRepo = new NodeRepository(db);
         const edgeRepo = new EdgeRepository(db);
+        const metadataRepo = new MetadataRepository(db);
 
         // 3. Initialize Graph Engine
         const graphEngine = new GraphEngine(nodeRepo, edgeRepo);
         log('Graph Engine initialized.');
 
-        // 4. Setup Indexing Pipeline
+        // 4. Setup Git Service
+        const gitService = new GitService(projectPath);
+        log('Git Service initialized.');
+
+        // 5. Setup Indexing Pipeline
         const tsParser = new TypeScriptParser();
         const treeSitterParser = new TreeSitterParser();
         const depParser = new DependencyParser();
         const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
 
         const workerPool = new WorkerPool(os.cpus().length);
-        const updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, workerPool);
+        const updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool);
         log(`Update Pipeline initialized with WorkerPool (${os.cpus().length} cores).`);
 
-        // 5. Setup Git Service (Phase D)
-        const gitService = new GitService(projectPath);
-        log('Git Service initialized.');
-
-        // 6. Initial Scan (Phase 5.2)
-        log('Starting Initial Project Scan with Git history...');
-        
-        // Setup File Filter
-        const fileFilter = new FileFilter(projectPath);
-        
-        // Scan the target project path
-        const allFiles = await getFiles(projectPath, true, fileFilter);
-        
-        log(`Found ${allFiles.length} files to index. Processing in batch mode...`);
+        // 6. Sync / Initial Scan (Phase 5.1 - Task 13-1)
+        const lastCommit = metadataRepo.getLastIndexedCommit();
+        const currentHead = await gitService.getCurrentHead();
         const version = Date.now();
-        
-        const events = await Promise.all(allFiles.map(async (fullPath) => {
-            const commit = await gitService.getLatestCommit(fullPath);
-            return {
-                event: 'MODIFY' as const,
-                file_path: fullPath,
-                commit: commit
-            };
-        }));
 
-        await updatePipeline.processBatch(events, version);
-        
-        log('Initial Scan Complete.');
+        if (!lastCommit) {
+            log('No previous index found. Starting Full Initial Scan...');
+            const fileFilter = new FileFilter(projectPath);
+            const allFiles = await getFiles(projectPath, true, fileFilter);
+            
+            log(`Found ${allFiles.length} files to index.`);
+            const events = await Promise.all(allFiles.map(async (fullPath) => {
+                const commit = await gitService.getLatestCommit(fullPath);
+                return {
+                    event: 'ADD' as const,
+                    file_path: fullPath,
+                    commit: commit
+                };
+            }));
+            await updatePipeline.processBatch(events, version);
+            metadataRepo.setLastIndexedCommit(currentHead);
+            log('Full Initial Scan Complete.');
+        } else {
+            await updatePipeline.syncWithGit(projectPath);
+        }
 
         // 7. Start File Watcher (Phase 5.2)
-        const watcher = new FileWatcher(updatePipeline);
+        const watcher = new FileWatcher(updatePipeline, projectPath);
         watcher.start(projectPath);
 
         // 8. Start API Server or MCP Server
@@ -133,7 +137,7 @@ Environment Variables:
             log('MCP Server active on stdio.');
         } else {
             const apiServer = new ApiServer(graphEngine);
-            const port = parseInt(process.env.PORT || '0', 10);
+            const port = parseInt(process.env.PORT || '3000', 10);
             apiServer.start(port);
             log(`Cynapx API listening on port ${port}`);
         }

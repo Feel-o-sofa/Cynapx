@@ -3,10 +3,19 @@
   "version": "1.0.0",
   "description": "Cynapx: High-Performance Isolated Code Knowledge Engine for AI Agents",
   "main": "dist/bootstrap.js",
+  "bin": {
+    "cynapx": "dist/bootstrap.js"
+  },
+  "files": [
+    "dist",
+    "schema",
+    "README.md"
+  ],
   "scripts": {
     "start": "ts-node src/bootstrap.ts",
     "build": "tsc",
-    "dev": "ts-node-dev --respawn src/bootstrap.ts"
+    "dev": "ts-node-dev --respawn src/bootstrap.ts",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0",

@@ -93,6 +93,67 @@ export class GraphEngine {
         return results;
     }
 
+    public async exportToMermaid(options: {
+        rootQName?: string;
+        maxDepth?: number;
+    } = {}): Promise<string> {
+        let nodesToExport: CodeNode[] = [];
+        let edgesToExport: CodeEdge[] = [];
+
+        if (options.rootQName) {
+            const root = this.getNodeByQualifiedName(options.rootQName);
+            if (!root || !root.id) return 'graph TD\n  RootNotFound["Root Symbol Not Found"]';
+
+            const results = this.traverse(root.id, 'BFS', { maxDepth: options.maxDepth ?? 3 });
+            nodesToExport = results.map(r => r.node);
+            const nodeIds = new Set(nodesToExport.map(n => n.id!));
+
+            for (const id of nodeIds) {
+                const outgoing = this.getOutgoingEdges(id);
+                for (const e of outgoing) {
+                    if (nodeIds.has(e.to_id)) {
+                        edgesToExport.push(e);
+                    }
+                }
+            }
+        } else {
+            // Limited full export of the first few files and their contents
+            const allFiles = this.nodeRepo.searchSymbols('', 10).filter(n => n.symbol_type === 'file');
+            const nodeIds = new Set<number>();
+            
+            for (const file of allFiles) {
+                const results = this.traverse(file.id!, 'BFS', { maxDepth: 1 });
+                results.forEach(r => {
+                    nodesToExport.push(r.node);
+                    nodeIds.add(r.node.id!);
+                });
+            }
+
+            for (const id of nodeIds) {
+                const outgoing = this.getOutgoingEdges(id);
+                for (const e of outgoing) {
+                    if (nodeIds.has(e.to_id)) {
+                        edgesToExport.push(e);
+                    }
+                }
+            }
+        }
+
+        let mermaid = 'graph TD\n';
+        // Dedup nodes
+        const uniqueNodes = Array.from(new Map(nodesToExport.map(n => [n.id, n])).values());
+        
+        for (const node of uniqueNodes) {
+            const shortName = node.qualified_name.split(/[#.\/]/).pop();
+            const label = `${node.symbol_type}: ${shortName}`;
+            mermaid += `  N${node.id}["${label}"]\n`;
+        }
+        for (const edge of edgesToExport) {
+            mermaid += `  N${edge.from_id} -- ${edge.edge_type} --> N${edge.to_id}\n`;
+        }
+        return mermaid;
+    }
+
     private bfs(
         startId: number,
         direction: 'outgoing' | 'incoming',
