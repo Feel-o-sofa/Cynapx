@@ -11,6 +11,7 @@ import { DependencyParser } from './indexer/dependency-parser';
 import { CompositeParser } from './indexer/composite-parser';
 import { WorkerPool } from './indexer/worker-pool';
 import { GitService } from './indexer/git-service';
+import { ConsistencyChecker } from './indexer/consistency-checker';
 import { ApiServer } from './server/api-server';
 import { McpServer } from './server/mcp-server';
 import { FileWatcher } from './watcher/file-watcher';
@@ -130,9 +131,12 @@ Environment Variables:
         const watcher = new FileWatcher(updatePipeline, projectPath);
         watcher.start(projectPath);
 
+        // 7.5 Setup Consistency Checker
+        const consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
+
         // 8. Start API Server or MCP Server
         if (isMcpMode) {
-            const mcpServer = new McpServer(graphEngine);
+            const mcpServer = new McpServer(graphEngine, consistencyChecker);
             mcpServer.start();
             log('MCP Server active on stdio.');
         } else {
