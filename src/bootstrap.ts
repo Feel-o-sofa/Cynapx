@@ -87,6 +87,14 @@ Environment Variables:
         const graphEngine = new GraphEngine(nodeRepo, edgeRepo);
         log('Graph Engine initialized.');
 
+        // 8. Start MCP Server early if in MCP mode (to prevent discovery timeout)
+        let mcpServer: McpServer | undefined;
+        if (isMcpMode) {
+            mcpServer = new McpServer(graphEngine);
+            mcpServer.start();
+            log('MCP Server handshake active on stdio.');
+        }
+
         // 4. Setup Git Service
         const gitService = new GitService(projectPath);
         log('Git Service initialized.');
@@ -133,13 +141,12 @@ Environment Variables:
 
         // 7.5 Setup Consistency Checker
         const consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
+        if (mcpServer) {
+            mcpServer.setConsistencyChecker(consistencyChecker);
+        }
 
-        // 8. Start API Server or MCP Server
-        if (isMcpMode) {
-            const mcpServer = new McpServer(graphEngine, consistencyChecker);
-            mcpServer.start();
-            log('MCP Server active on stdio.');
-        } else {
+        // 8. Start API Server (if not in MCP mode)
+        if (!isMcpMode) {
             const apiServer = new ApiServer(graphEngine);
             const port = parseInt(process.env.PORT || '3000', 10);
             apiServer.start(port);

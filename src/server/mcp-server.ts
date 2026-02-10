@@ -8,20 +8,41 @@ export class McpServer {
         private consistencyChecker?: ConsistencyChecker
     ) {}
 
+    public setConsistencyChecker(checker: ConsistencyChecker) {
+        this.consistencyChecker = checker;
+    }
+
     public start() {
         const rl = readline.createInterface({
             input: process.stdin,
-            output: process.stdout,
             terminal: false
         });
 
         rl.on('line', async (line) => {
+            if (!line.trim()) return;
             try {
                 const request = JSON.parse(line);
+                if (request.method === 'notifications/initialized') {
+                    return; // Ignore initialized notification
+                }
                 const response = await this.handleRequest(request);
-                process.stdout.write(JSON.stringify(response) + '\n');
-            } catch (err) {
-                // Ignore non-json or invalid requests
+                if (request.id !== undefined) {
+                    process.stdout.write(JSON.stringify(response) + '\n');
+                }
+            } catch (err: any) {
+                // If we have a valid request ID, try to send an error response
+                try {
+                    const errorRequest = JSON.parse(line);
+                    if (errorRequest.id !== undefined) {
+                        process.stdout.write(JSON.stringify({
+                            jsonrpc: '2.0',
+                            id: errorRequest.id,
+                            error: { code: -32603, message: err.message || 'Internal error' }
+                        }) + '\n');
+                    }
+                } catch {
+                    // Total failure, ignore
+                }
             }
         });
     }
@@ -31,7 +52,17 @@ export class McpServer {
 
         switch (method) {
             case 'initialize':
-                return { jsonrpc: '2.0', id, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'cynapx', version: '1.0.0' } } };
+                return { 
+                    jsonrpc: '2.0', 
+                    id, 
+                    result: { 
+                        protocolVersion: '2024-11-05', 
+                        capabilities: {
+                            tools: {}
+                        }, 
+                        serverInfo: { name: 'cynapx', version: '1.0.0' } 
+                    } 
+                };
             
             case 'tools/list':
                 return {
