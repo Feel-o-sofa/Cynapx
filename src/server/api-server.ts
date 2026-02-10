@@ -69,6 +69,33 @@ export class ApiServer {
         });
     }
 
+    private formatPath(path: any[], direction: 'incoming' | 'outgoing'): string[] {
+        // Build a readable path: A -> B -> C
+        // TraversalResult.path is [Start, ..., Current]
+        
+        // For 'incoming' (Callers/Impact): [ChangedSymbol, Caller1, Caller2, ...]
+        // We want: [CallerN, ..., Caller1, ChangedSymbol]
+        
+        // For 'outgoing' (Callees): [StartSymbol, Callee1, Callee2, ...]
+        // We want: [StartSymbol, Callee1, ..., CalleeN]
+
+        const steps = direction === 'incoming' ? [...path].reverse() : path;
+        
+        return steps.map((step, index) => {
+            const n = this.graphEngine.nodeRepo.getNodeById(step.nodeId);
+            const qname = n ? n.qualified_name : 'unknown';
+            
+            if (index < steps.length - 1) {
+                // For 'incoming', the edge is on the current step (A calls B)
+                // For 'outgoing', the edge is on the NEXT step (A calls B)
+                const edge = direction === 'incoming' ? step.edge : steps[index + 1].edge;
+                const lineInfo = edge?.call_site_line ? ` (line ${edge.call_site_line})` : '';
+                return `${qname}${lineInfo}`;
+            }
+            return qname;
+        });
+    }
+
     private handleGetCallers(req: Request, res: Response) {
         const { symbol, max_depth } = req.body;
         const node = this.graphEngine.getNodeByQualifiedName(symbol.qualified_name);
@@ -82,7 +109,8 @@ export class ApiServer {
             root: this.mapToGraphNode(node),
             callers: results.filter(r => r.node.id !== node.id).map(r => ({
                 node: this.mapToGraphNode(r.node),
-                distance: r.distance
+                distance: r.distance,
+                path: this.formatPath(r.path, 'incoming')
             }))
         });
     }
@@ -100,7 +128,8 @@ export class ApiServer {
             root: this.mapToGraphNode(node),
             callees: results.filter(r => r.node.id !== node.id).map(r => ({
                 node: this.mapToGraphNode(r.node),
-                distance: r.distance
+                distance: r.distance,
+                path: this.formatPath(r.path, 'outgoing')
             }))
         });
     }
@@ -115,35 +144,11 @@ export class ApiServer {
 
         const results = this.graphEngine.traverse(node.id, 'BFS', { direction: 'incoming', maxDepth: max_depth || 3 });
 
-        const affected_nodes = results.map(r => {
-            // Build a readable impact path: Caller -> Caller -> ... -> Changed Symbol
-            // The path in TraversalResult is [Start, ..., Current]
-            // For incoming direction, it's [ChangedSymbol, Caller1, Caller2, ...]
-            const pathSteps = [...r.path].reverse();
-            const formattedPath = pathSteps.map((step, index) => {
-                const n = this.graphEngine.nodeRepo.getNodeById(step.nodeId);
-                const qname = n ? n.qualified_name : 'unknown';
-                
-                if (index < pathSteps.length - 1) {
-                    const nextStep = pathSteps[index + 1];
-                    // The edge used to reach 'step' (which is the caller) FROM 'nextStep' (which is the callee)
-                    // Wait, in incoming direction: Start(C) <- B (edge: B calls C) <- A (edge: A calls B)
-                    // r.path for A is [C, B, A]
-                    // reversed is [A, B, C]
-                    // step A has edge (A calls B). step B has edge (B calls C). step C has no edge.
-                    const edge = step.edge;
-                    const lineInfo = edge?.call_site_line ? ` (line ${edge.call_site_line})` : '';
-                    return `${qname}${lineInfo}`;
-                }
-                return qname;
-            });
-
-            return {
-                node: this.mapToGraphNode(r.node),
-                impact_path: formattedPath,
-                distance: r.distance
-            };
-        });
+        const affected_nodes = results.map(r => ({
+            node: this.mapToGraphNode(r.node),
+            impact_path: this.formatPath(r.path, 'incoming'),
+            distance: r.distance
+        }));
 
         res.json({
             affected_nodes: affected_nodes

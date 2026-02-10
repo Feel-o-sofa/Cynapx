@@ -1,7 +1,8 @@
 import { Database } from 'better-sqlite3';
 import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
-import { FileChangeEvent, CodeParser, DeltaGraph } from './types';
+import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
+import { WorkerPool } from './worker-pool';
 
 /**
  * UpdatePipeline manages the incremental update process for the knowledge graph.
@@ -11,8 +12,11 @@ export class UpdatePipeline {
         private db: Database,
         private nodeRepo: NodeRepository,
         private edgeRepo: EdgeRepository,
-        private parser: CodeParser
+        private parser: CodeParser,
+        private workerPool?: WorkerPool
     ) { }
+
+    private writeLock: Promise<void> = Promise.resolve();
 
     public async processChangeEvent(event: FileChangeEvent, version: number): Promise<void> {
         const { event: type, file_path, commit } = event;
@@ -20,26 +24,188 @@ export class UpdatePipeline {
         try {
             console.log(`Processing ${type} for ${file_path} (Commit: ${commit}, Version: ${version})`);
 
-            this.db.prepare('BEGIN').run();
-
-            // 1. DELETE phase (for MODIFY and DELETE events)
-            if (type === 'DELETE' || type === 'MODIFY') {
-                this.handleDelete(file_path);
+            let delta: DeltaGraph;
+            if (type === 'ADD' || type === 'MODIFY') {
+                if (this.workerPool) {
+                    delta = await this.workerPool.runTask({ filePath: file_path, commit, version });
+                } else {
+                    delta = await this.parser.parse(file_path, commit, version);
+                }
+                await this.applyDelta(file_path, delta, type);
+            } else if (type === 'DELETE') {
+                await this.applyDeleteSerial(file_path);
             }
 
-            // 2. ADD phase (for ADD and MODIFY events)
-            if (type === 'ADD' || type === 'MODIFY') {
-                await this.handleAdd(file_path, commit, version);
+            console.log(`Successfully processed ${file_path}`);
+        } catch (error) {
+            console.error(`Failed to process change event for ${file_path}:`, error);
+            throw error;
+        }
+    }
+
+    public async processBatch(events: FileChangeEvent[], version: number): Promise<void> {
+        console.log(`Processing batch of ${events.length} files...`);
+        
+        // 1. Parallel Parse
+        const results = await Promise.all(events.map(async (event) => {
+            try {
+                let delta: DeltaGraph;
+                if (this.workerPool) {
+                    delta = await this.workerPool.runTask({ filePath: event.file_path, commit: event.commit, version });
+                } else {
+                    delta = await this.parser.parse(event.file_path, event.commit, version);
+                }
+                return { event, delta, status: 'success' as const };
+            } catch (error) {
+                console.error(`Failed to parse ${event.file_path}:`, error);
+                return { event, status: 'error' as const };
+            }
+        }));
+
+        // 2. Serial Commit in a single large transaction
+        const previousLock = this.writeLock;
+        let resolveLock: () => void;
+        this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
+
+        await previousLock;
+
+        try {
+            this.db.prepare('BEGIN').run();
+            
+            for (const res of results) {
+                if (res.status === 'success') {
+                    // Similar to applyDelta but inside this transaction
+                    if (res.event.event === 'MODIFY' || res.event.event === 'DELETE') {
+                        this.handleDelete(res.event.file_path);
+                    }
+                    if (res.event.event === 'ADD' || res.event.event === 'MODIFY') {
+                        await this.writeDeltaToDb(res.event.file_path, res.delta);
+                    }
+                }
             }
 
             this.db.prepare('COMMIT').run();
-            console.log(`Successfully processed ${file_path}`);
+            console.log(`Batch processing complete.`);
         } catch (error) {
-            if (this.db.inTransaction) {
-                this.db.prepare('ROLLBACK').run();
-            }
-            console.error(`Failed to process change event for ${file_path}:`, error);
+            if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+            console.error(`Failed to commit batch:`, error);
             throw error;
+        } finally {
+            resolveLock!();
+        }
+    }
+
+    /**
+     * Internal helper to write delta to DB without its own transaction.
+     */
+    private async writeDeltaToDb(filePath: string, delta: DeltaGraph): Promise<void> {
+        const qualifiedNameToId = new Map<string, number>();
+
+        // 1. Insert Nodes
+        for (const node of delta.nodes) {
+            const nodeId = this.nodeRepo.createNode(node);
+            qualifiedNameToId.set(node.qualified_name, nodeId);
+        }
+
+        // 2. Insert Edges
+        for (const edge of delta.edges) {
+            const fromId = this.resolveNodeId(edge, 'from', qualifiedNameToId);
+            const toId = this.resolveNodeId(edge, 'to', qualifiedNameToId);
+
+            if (fromId !== undefined && toId !== undefined) {
+                this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
+            }
+        }
+
+        // 3. Update Metrics
+        const allInvolvedIds = new Set<number>([...qualifiedNameToId.values()]);
+        for (const edge of delta.edges) {
+            const toId = this.resolveNodeId(edge, 'to', qualifiedNameToId);
+            if (toId) allInvolvedIds.add(toId);
+        }
+
+        for (const id of allInvolvedIds) {
+            const fanIn = this.edgeRepo.getIncomingEdges(id, 'calls').length;
+            const fanOut = this.edgeRepo.getOutgoingEdges(id, 'calls').length;
+            this.nodeRepo.updateMetrics(id, { fan_in: fanIn, fan_out: fanOut });
+        }
+    }
+
+    /**
+     * Applies a pre-parsed DeltaGraph to the database sequentially.
+     */
+    public async applyDelta(filePath: string, delta: DeltaGraph, type: ChangeType): Promise<void> {
+        // Serial Committer: Queue the database write
+        const previousLock = this.writeLock;
+        let resolveLock: () => void;
+        this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
+
+        await previousLock;
+
+        try {
+            this.db.prepare('BEGIN').run();
+            // 1. DELETE old info if MODIFY
+            if (type === 'MODIFY') {
+                this.handleDelete(filePath);
+            }
+
+            // 2. ADD new info
+            const qualifiedNameToId = new Map<string, number>();
+
+            // 2.1 Insert Nodes
+            for (const node of delta.nodes) {
+                const nodeId = this.nodeRepo.createNode(node);
+                qualifiedNameToId.set(node.qualified_name, nodeId);
+            }
+
+            // 2.2 Insert Edges
+            for (const edge of delta.edges) {
+                const fromId = this.resolveNodeId(edge, 'from', qualifiedNameToId);
+                const toId = this.resolveNodeId(edge, 'to', qualifiedNameToId);
+
+                if (fromId !== undefined && toId !== undefined) {
+                    this.edgeRepo.createEdge({
+                        ...edge,
+                        from_id: fromId,
+                        to_id: toId
+                    });
+                }
+            }
+
+            // 2.3 Update Metrics
+            const allInvolvedIds = new Set<number>([...qualifiedNameToId.values()]);
+            for (const edge of delta.edges) {
+                const toId = this.resolveNodeId(edge, 'to', qualifiedNameToId);
+                if (toId) allInvolvedIds.add(toId);
+            }
+
+            for (const id of allInvolvedIds) {
+                const fanIn = this.edgeRepo.getIncomingEdges(id, 'calls').length;
+                const fanOut = this.edgeRepo.getOutgoingEdges(id, 'calls').length;
+                this.nodeRepo.updateMetrics(id, { fan_in: fanIn, fan_out: fanOut });
+            }
+
+            this.db.prepare('COMMIT').run();
+        } catch (e) {
+            if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+            throw e;
+        } finally {
+            resolveLock!();
+        }
+    }
+
+    private async applyDeleteSerial(filePath: string): Promise<void> {
+        const previousLock = this.writeLock;
+        let resolveLock: () => void;
+        this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
+
+        await previousLock;
+        try {
+            this.db.prepare('BEGIN').run();
+            this.handleDelete(filePath);
+            this.db.prepare('COMMIT').run();
+        } finally {
+            resolveLock!();
         }
     }
 
@@ -60,62 +226,6 @@ export class UpdatePipeline {
 
         // Delete the nodes themselves
         this.nodeRepo.deleteNodesByFilePath(filePath);
-    }
-
-    /**
-     * Parses a file and adds its nodes and edges to the database.
-     */
-    private async handleAdd(filePath: string, commit: string, version: number): Promise<void> {
-        if (!this.parser.supports(filePath)) {
-            console.warn(`No parser supported for file: ${filePath}`);
-            return;
-        }
-
-        // Parse the file to get definitions and relations
-        const delta: DeltaGraph = await this.parser.parse(filePath, commit, version);
-
-        // Map to keep track of newly created internal IDs for edge creation
-        const qualifiedNameToId = new Map<string, number>();
-
-        // 1. Insert Nodes
-        for (const node of delta.nodes) {
-            // Check for existing symbol (though handleDelete should have cleared it if it was in the same file)
-            // If it exists in another file, it's a conflict based on qualified_name UNIQUE constraint.
-            const nodeId = this.nodeRepo.createNode(node);
-            qualifiedNameToId.set(node.qualified_name, nodeId);
-        }
-
-        // 2. Insert Edges
-        for (const edge of delta.edges) {
-            // Resolve IDs for the edge
-            // Internal nodes are resolved via our map
-            // External nodes must be resolved via the database
-
-            const fromId = this.resolveNodeId(edge, 'from', qualifiedNameToId);
-            const toId = this.resolveNodeId(edge, 'to', qualifiedNameToId);
-
-            if (fromId !== undefined && toId !== undefined) {
-                this.edgeRepo.createEdge({
-                    ...edge,
-                    from_id: fromId,
-                    to_id: toId
-                });
-            }
-        }
-
-        // 3. Update Fan-in / Fan-out for all involved nodes
-        const allInvolvedIds = new Set<number>([...qualifiedNameToId.values()]);
-        // Also include nodes that were targets of new edges
-        for (const edge of delta.edges) {
-            const toId = this.resolveNodeId(edge, 'to', qualifiedNameToId);
-            if (toId) allInvolvedIds.add(toId);
-        }
-
-        for (const id of allInvolvedIds) {
-            const fanIn = this.edgeRepo.getIncomingEdges(id, 'calls').length;
-            const fanOut = this.edgeRepo.getOutgoingEdges(id, 'calls').length;
-            this.nodeRepo.updateMetrics(id, { fan_in: fanIn, fan_out: fanOut });
-        }
     }
 
     /**
@@ -145,14 +255,10 @@ export class UpdatePipeline {
         const existingNode = this.nodeRepo.getNodeByQualifiedName(qname);
         if (existingNode) return existingNode.id;
 
-        // Heuristic Suffix Match (New Logic for Task 1)
-        // If qname is simple (e.g., 'greet' from Python), try to find symbols ending with '#greet'
+        // Heuristic Suffix Match
         if (side === 'to' && !qname.includes('#') && !qname.includes('/')) {
             const candidates = this.nodeRepo.findNodesBySymbolName(qname);
             if (candidates.length > 0) {
-                // If multiple candidates exist, we might need better disambiguation.
-                // For now, if we have a file hint constraint or other heuristics, we could use them.
-                // Returning the first one is a basic heuristic.
                 return candidates[0].id;
             }
         }

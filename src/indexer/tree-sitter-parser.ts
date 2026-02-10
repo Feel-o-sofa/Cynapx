@@ -32,6 +32,8 @@ export class TreeSitterParser implements CodeParser {
                 (function_definition name: (identifier) @function.name) @function.def
                 (class_definition name: (identifier) @class.name) @class.def
                 (call function: (identifier) @call.name) @call.expr
+                (import_statement) @import.stmt
+                (import_from_statement) @import.from_stmt
             `,
             ts: `
                 (class_declaration name: (identifier) @class.name) @class.def
@@ -165,33 +167,72 @@ export class TreeSitterParser implements CodeParser {
                     call_site_line: callLine,
                     target_file_hint: undefined
                 } as any);
-            } else if (importCapture && nameCapture && !captures.some(c => c.name.startsWith('call'))) {
-                // Handle Imports (Task 4)
-                let pkgName = nameCapture.node.text;
-                
-                // Cleanup JS/TS string literals (e.g. 'express' -> express)
-                if ((extension === 'ts' || extension === 'js') && (pkgName.startsWith("'") || pkgName.startsWith('"'))) {
-                    pkgName = pkgName.substring(1, pkgName.length - 1);
-                }
+            } else if (importCapture && !captures.some(c => c.name.startsWith('call'))) {
+                // Handle Imports (Task 4 & 7)
+                if (extension === 'py') {
+                    this.resolvePythonImport(importCapture.node, filePath, edges);
+                } else if (nameCapture) {
+                    let pkgName = nameCapture.node.text;
+                    
+                    // Cleanup JS/TS string literals (e.g. 'express' -> express)
+                    if ((extension === 'ts' || extension === 'js') && (pkgName.startsWith("'") || pkgName.startsWith('"'))) {
+                        pkgName = pkgName.substring(1, pkgName.length - 1);
+                    }
 
-                // Skip relative imports
-                if (!pkgName.startsWith('.')) {
-                    // For Python, if it's 'from os import path', pkgName might be 'os'
-                    // For JS, if it's 'import express from "express"', pkgName is 'express'
-                    const prefix = extension === 'py' ? 'pypi' : 'package';
-                    const pkgNodeQName = `${prefix}:${pkgName.split('.')[0]}`; // Just the base package
+                    // Skip relative imports
+                    if (!pkgName.startsWith('.')) {
+                        const prefix = extension === 'py' ? 'pypi' : 'package';
+                        const pkgNodeQName = `${prefix}:${pkgName.split('.')[0]}`; // Just the base package
 
-                    edges.push({
-                        from_qname: filePath,
-                        to_qname: pkgNodeQName,
-                        edge_type: 'depends_on',
-                        dynamic: false
-                    } as any);
+                        edges.push({
+                            from_qname: filePath,
+                            to_qname: pkgNodeQName,
+                            edge_type: 'depends_on',
+                            dynamic: false
+                        } as any);
+                    }
                 }
             }
         }
 
         return { nodes, edges };
+    }
+
+    private resolvePythonImport(node: Parser.SyntaxNode, filePath: string, edges: CodeEdge[]) {
+        if (node.type === 'import_statement') {
+            // import os, sys as system
+            for (let i = 0; i < node.childCount; i++) {
+                const child = node.child(i)!;
+                if (child.type === 'aliased_import') {
+                    const nameNode = child.childForFieldName('name');
+                    if (nameNode) {
+                        const pkgName = nameNode.text.split('.')[0];
+                        edges.push({ from_qname: filePath, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false } as any);
+                    }
+                } else if (child.type === 'dotted_name') {
+                    // import requests
+                    const pkgName = child.text.split('.')[0];
+                    edges.push({ from_qname: filePath, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false } as any);
+                }
+            }
+        } else if (node.type === 'import_from_statement') {
+            // from math import sqrt
+            const moduleNode = node.childForFieldName('module_name');
+            if (moduleNode) {
+                const pkgName = moduleNode.text.split('.')[0];
+                let isRelative = false;
+                for (let i = 0; i < node.childCount; i++) {
+                    if (node.child(i)!.type === 'relative_import' || node.child(i)!.text.startsWith('.')) {
+                        isRelative = true;
+                        break;
+                    }
+                }
+
+                if (!isRelative) {
+                    edges.push({ from_qname: filePath, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false } as any);
+                }
+            }
+        }
     }
 
     /**

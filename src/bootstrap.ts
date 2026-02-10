@@ -7,23 +7,38 @@ import { TypeScriptParser } from './indexer/typescript-parser';
 import { TreeSitterParser } from './indexer/tree-sitter-parser';
 import { DependencyParser } from './indexer/dependency-parser';
 import { CompositeParser } from './indexer/composite-parser';
+import { WorkerPool } from './indexer/worker-pool';
 import { GitService } from './indexer/git-service';
 import { ApiServer } from './server/api-server';
+import { McpServer } from './server/mcp-server';
 import { FileWatcher } from './watcher/file-watcher';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as os from 'os';
 
 /**
  * The Bootstrap class initializes and wires all components of the Code Knowledge Tool.
  */
 async function bootstrap() {
-    console.log('--- Starting Code Knowledge Tool ---');
+    const isMcpMode = process.env.MCP_MODE === 'true';
+    
+    // In MCP mode, ALL logs MUST go to stderr. stdout is for JSON-RPC only.
+    if (isMcpMode) {
+        console.log = console.error;
+        console.info = console.error;
+        console.debug = console.error;
+        console.warn = console.error;
+    }
+    
+    const log = console.error;
+
+    log('--- Starting Code Knowledge Tool (Parallel Mode) ---');
 
     try {
         // 1. Initialize Database
         const dbManager = new DatabaseManager('knowledge.db');
         const db = dbManager.getDb();
-        console.log('Database initialized successfully.');
+        log('Database initialized successfully.');
 
         // 2. Setup Repositories
         const nodeRepo = new NodeRepository(db);
@@ -31,7 +46,7 @@ async function bootstrap() {
 
         // 3. Initialize Graph Engine
         const graphEngine = new GraphEngine(nodeRepo, edgeRepo);
-        console.log('Graph Engine initialized.');
+        log('Graph Engine initialized.');
 
         // 4. Setup Indexing Pipeline
         const tsParser = new TypeScriptParser();
@@ -39,43 +54,61 @@ async function bootstrap() {
         const depParser = new DependencyParser();
         const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
 
-        const updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser);
-        console.log('Update Pipeline initialized with Multi-language support.');
+        const workerPool = new WorkerPool(os.cpus().length);
+        const updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, workerPool);
+        log(`Update Pipeline initialized with WorkerPool (${os.cpus().length} cores).`);
 
         // 5. Setup Git Service (Phase D)
         const gitService = new GitService(path.join(__dirname, '..'));
-        console.log('Git Service initialized.');
+        log('Git Service initialized.');
 
         // 6. Initial Scan (Phase 5.2)
-        console.log('Starting Initial Project Scan with Git history...');
+        log('Starting Initial Project Scan with Git history...');
         const rootDir = path.join(__dirname, '..');
         const srcDir = path.join(rootDir, 'src');
         
-        // Scan root for config files (non-recursive)
-        await scanDirectory(rootDir, updatePipeline, gitService, false);
-        // Scan src recursively
-        await scanDirectory(srcDir, updatePipeline, gitService, true);
+        const rootFiles = await getFiles(rootDir, false);
+        const srcFiles = await getFiles(srcDir, true);
+        const allFiles = [...new Set([...rootFiles, ...srcFiles])];
         
-        console.log('Initial Scan Complete.');
+        log(`Found ${allFiles.length} files to index. Processing in batch mode...`);
+        const version = Date.now();
+        
+        const events = await Promise.all(allFiles.map(async (fullPath) => {
+            const commit = await gitService.getLatestCommit(fullPath);
+            return {
+                event: 'MODIFY' as const,
+                file_path: fullPath,
+                commit: commit
+            };
+        }));
+
+        await updatePipeline.processBatch(events, version);
+        
+        log('Initial Scan Complete.');
 
         // 7. Start File Watcher (Phase 5.2)
         const watcher = new FileWatcher(updatePipeline);
         watcher.start(srcDir);
 
-        // 8. Start API Server
-        const apiServer = new ApiServer(graphEngine);
+        // 8. Start API Server or MCP Server
+        if (isMcpMode) {
+            const mcpServer = new McpServer(graphEngine);
+            mcpServer.start();
+            log('MCP Server active on stdio.');
+        } else {
+            const apiServer = new ApiServer(graphEngine);
+            const port = parseInt(process.env.PORT || '0', 10);
+            apiServer.start(port);
+            log(`Knowledge Tool API listening on port ${port}`);
+        }
 
-        // Use PORT=0 to auto-assign a free port if variable is not set or set to 0
-        const port = parseInt(process.env.PORT || '0', 10);
-        apiServer.start(port);
-
-        console.log('--- Startup Sequence Complete ---');
-        console.log(`Knowledge Tool API listening on port ${port}`);
-        console.log('The tool is now ready to handle queries.');
+        log('--- Startup Sequence Complete ---');
 
         // Handle graceful shutdown
         process.on('SIGINT', () => {
-            console.log('Shutting down...');
+            log('Shutting down...');
+            workerPool.shutdown();
             dbManager.close();
             process.exit(0);
         });
@@ -87,13 +120,13 @@ async function bootstrap() {
 }
 
 /**
- * Scans a directory and indexes supported files.
+ * Recursively collects supported files from a directory.
  */
-async function scanDirectory(directory: string, pipeline: UpdatePipeline, gitService: GitService, recursive: boolean) {
-    if (!fs.existsSync(directory)) return;
+async function getFiles(directory: string, recursive: boolean): Promise<string[]> {
+    const results: string[] = [];
+    if (!fs.existsSync(directory)) return results;
     
     const files = fs.readdirSync(directory);
-    const version = Date.now();
 
     for (const file of files) {
         const fullPath = path.resolve(directory, file);
@@ -101,7 +134,8 @@ async function scanDirectory(directory: string, pipeline: UpdatePipeline, gitSer
 
         if (stat.isDirectory()) {
             if (recursive && file !== 'node_modules' && file !== '.git') {
-                await scanDirectory(fullPath, pipeline, gitService, true);
+                const subFiles = await getFiles(fullPath, true);
+                results.push(...subFiles);
             }
         } else if (
             file.endsWith('.ts') || 
@@ -110,14 +144,10 @@ async function scanDirectory(directory: string, pipeline: UpdatePipeline, gitSer
             file === 'package.json' ||
             file === 'requirements.txt'
         ) {
-            const commit = await gitService.getLatestCommit(fullPath);
-            await pipeline.processChangeEvent({
-                event: 'MODIFY',
-                file_path: fullPath,
-                commit: commit
-            }, version);
+            results.push(fullPath);
         }
     }
+    return results;
 }
 
 // Execute the bootstrap sequence

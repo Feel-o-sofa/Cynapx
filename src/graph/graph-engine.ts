@@ -19,13 +19,41 @@ export interface TraversalResult {
  * GraphEngine implements the logic for graph traversal and symbol resolution.
  */
 export class GraphEngine {
+    private nodeCache = new Map<number, CodeNode>();
+    private qnameCache = new Map<string, CodeNode>();
+
     constructor(
         public nodeRepo: NodeRepository,
         private edgeRepo: EdgeRepository
     ) { }
 
     public getNodeByQualifiedName(qualifiedName: string): CodeNode | null {
-        return this.nodeRepo.getNodeByQualifiedName(qualifiedName);
+        if (this.qnameCache.has(qualifiedName)) {
+            return this.qnameCache.get(qualifiedName)!;
+        }
+        const node = this.nodeRepo.getNodeByQualifiedName(qualifiedName);
+        if (node && node.id) {
+            this.qnameCache.set(qualifiedName, node);
+            this.nodeCache.set(node.id, node);
+        }
+        return node;
+    }
+
+    public getNodeById(id: number): CodeNode | null {
+        if (this.nodeCache.has(id)) {
+            return this.nodeCache.get(id)!;
+        }
+        const node = this.nodeRepo.getNodeById(id);
+        if (node && node.id) {
+            this.nodeCache.set(id, node);
+            this.qnameCache.set(node.qualified_name, node);
+        }
+        return node;
+    }
+
+    public clearCache(): void {
+        this.nodeCache.clear();
+        this.qnameCache.clear();
     }
 
     public getOutgoingEdges(nodeId: number, edgeType?: EdgeType): CodeEdge[] {
@@ -81,7 +109,7 @@ export class GraphEngine {
         while (queue.length > 0) {
             const { id, depth, path } = queue.shift()!;
 
-            const node = this.nodeRepo.getNodeById(id);
+            const node = this.getNodeById(id);
             if (node) {
                 results.push({ node, distance: depth, path });
             }
@@ -119,7 +147,7 @@ export class GraphEngine {
         if (visited.has(currentId) || depth > maxDepth) return;
 
         visited.add(currentId);
-        const node = this.nodeRepo.getNodeById(currentId);
+        const node = this.getNodeById(currentId);
         // Path is already built by the caller or initial call
         const currentPath = path.length === 0 ? [{ nodeId: currentId }] : path;
 
