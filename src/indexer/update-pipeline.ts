@@ -88,7 +88,7 @@ export class UpdatePipeline {
             for (const res of results) {
                 if (res.status === 'success') {
                     // Similar to applyDelta but inside this transaction
-                    if (res.event.event === 'MODIFY' || res.event.event === 'DELETE') {
+                    if (res.event.event === 'ADD' || res.event.event === 'MODIFY' || res.event.event === 'DELETE') {
                         this.handleDelete(res.event.file_path);
                     }
                     if (res.event.event === 'ADD' || res.event.event === 'MODIFY') {
