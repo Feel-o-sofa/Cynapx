@@ -38,12 +38,14 @@ export class TreeSitterParser implements CodeParser {
                 (method_definition name: (property_identifier) @method.name) @method.def
                 (function_declaration name: (identifier) @function.name) @function.def
                 (call_expression function: (identifier) @call.name) @call.expr
+                (import_statement source: (string) @import.name)
             `,
             js: `
                 (function_declaration name: (identifier) @function.name) @function.def
                 (class_declaration name: (identifier) @class.name) @class.def
                 (method_definition name: (property_identifier) @method.name) @method.def
                 (call_expression function: (identifier) @call.name) @call.expr
+                (import_statement source: (string) @import.name)
             `
         };
         return new Parser.Query(language, queryStrings[extension] || '');
@@ -93,7 +95,7 @@ export class TreeSitterParser implements CodeParser {
             const defCapture = captures.find(c => c.name.endsWith('.def'));
             const nameCapture = captures.find(c => c.name.endsWith('.name'));
 
-            if (defCapture && nameCapture && !captures.some(c => c.name.startsWith('call'))) {
+            if (defCapture && nameCapture && !captures.some(c => c.name.startsWith('call')) && !captures.some(c => c.name.startsWith('import'))) {
                 const node = defCapture.node;
                 const name = nameCapture.node.text;
                 const type = this.c_to_symbol_type(defCapture.name);
@@ -129,10 +131,11 @@ export class TreeSitterParser implements CodeParser {
             }
         }
 
-        // Second pass: Calls
+        // Second pass: Calls & Imports
         for (const match of matches) {
             const captures = match.captures;
             const callCapture = captures.find(c => c.name.endsWith('.expr'));
+            const importCapture = captures.find(c => c.name.startsWith('import'));
             const nameCapture = captures.find(c => c.name.endsWith('.name'));
 
             if (callCapture && nameCapture && captures.some(c => c.name.startsWith('call'))) {
@@ -162,6 +165,29 @@ export class TreeSitterParser implements CodeParser {
                     call_site_line: callLine,
                     target_file_hint: undefined
                 } as any);
+            } else if (importCapture && nameCapture && !captures.some(c => c.name.startsWith('call'))) {
+                // Handle Imports (Task 4)
+                let pkgName = nameCapture.node.text;
+                
+                // Cleanup JS/TS string literals (e.g. 'express' -> express)
+                if ((extension === 'ts' || extension === 'js') && (pkgName.startsWith("'") || pkgName.startsWith('"'))) {
+                    pkgName = pkgName.substring(1, pkgName.length - 1);
+                }
+
+                // Skip relative imports
+                if (!pkgName.startsWith('.')) {
+                    // For Python, if it's 'from os import path', pkgName might be 'os'
+                    // For JS, if it's 'import express from "express"', pkgName is 'express'
+                    const prefix = extension === 'py' ? 'pypi' : 'package';
+                    const pkgNodeQName = `${prefix}:${pkgName.split('.')[0]}`; // Just the base package
+
+                    edges.push({
+                        from_qname: filePath,
+                        to_qname: pkgNodeQName,
+                        edge_type: 'depends_on',
+                        dynamic: false
+                    } as any);
+                }
             }
         }
 

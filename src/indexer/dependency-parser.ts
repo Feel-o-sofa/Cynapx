@@ -33,21 +33,22 @@ export class DependencyParser implements CodeParser {
                 const json = JSON.parse(content);
                 const deps = { ...json.dependencies, ...json.devDependencies };
 
-                for (const pkgName of Object.keys(deps)) {
+                for (const [pkgName, versionSpec] of Object.entries(deps)) {
                     const pkgNodeQName = `package:${pkgName}`;
 
                     // Package Node (External)
                     nodes.push({
                         qualified_name: pkgNodeQName,
-                        symbol_type: 'module', // Use module for package
+                        symbol_type: 'package',
                         language: 'javascript',
-                        file_path: 'node_modules/' + pkgName,
+                        file_path: filePath,
                         start_line: 0,
                         end_line: 0,
                         visibility: 'public',
                         is_generated: true,
                         last_updated_commit: commit,
-                        version: version
+                        version: version,
+                        signature: versionSpec as string
                     });
 
                     // Edge: File -> Package (depends_on)
@@ -71,19 +72,22 @@ export class DependencyParser implements CodeParser {
                 const match = trimmed.match(/^([a-zA-Z0-9_\-]+)/);
                 if (match) {
                     const pkgName = match[1];
+                    const versionMatch = trimmed.match(/[=<>!~]+(.+)$/);
+                    const pkgVersion = versionMatch ? versionMatch[1] : 'latest';
                     const pkgNodeQName = `pypi:${pkgName}`;
 
                     nodes.push({
                         qualified_name: pkgNodeQName,
-                        symbol_type: 'module',
+                        symbol_type: 'package',
                         language: 'python',
-                        file_path: 'site-packages/' + pkgName,
+                        file_path: filePath,
                         start_line: 0,
                         end_line: 0,
                         visibility: 'public',
                         is_generated: true,
                         last_updated_commit: commit,
-                        version: version
+                        version: version,
+                        signature: pkgVersion
                     });
 
                     edges.push({

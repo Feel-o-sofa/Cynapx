@@ -4,10 +4,15 @@ import { CodeNode, CodeEdge, EdgeType } from '../types';
 
 export type TraversalStrategy = 'DFS' | 'BFS';
 
+export interface TraversalPathStep {
+    nodeId: number;
+    edge?: CodeEdge;
+}
+
 export interface TraversalResult {
     node: CodeNode;
     distance: number;
-    path: number[];
+    path: TraversalPathStep[];
 }
 
 /**
@@ -68,7 +73,9 @@ export class GraphEngine {
         results: TraversalResult[],
         visited: Set<number>
     ): void {
-        const queue: { id: number, depth: number, path: number[] }[] = [{ id: startId, depth: 0, path: [startId] }];
+        const queue: { id: number, depth: number, path: TraversalPathStep[] }[] = [
+            { id: startId, depth: 0, path: [{ nodeId: startId }] }
+        ];
         visited.add(startId);
 
         while (queue.length > 0) {
@@ -89,7 +96,11 @@ export class GraphEngine {
                 const nextId = direction === 'outgoing' ? edge.to_id : edge.from_id;
                 if (!visited.has(nextId)) {
                     visited.add(nextId);
-                    queue.push({ id: nextId, depth: depth + 1, path: [...path, nextId] });
+                    queue.push({
+                        id: nextId,
+                        depth: depth + 1,
+                        path: [...path, { nodeId: nextId, edge }]
+                    });
                 }
             }
         }
@@ -98,7 +109,7 @@ export class GraphEngine {
     private dfs(
         currentId: number,
         depth: number,
-        path: number[],
+        path: TraversalPathStep[],
         direction: 'outgoing' | 'incoming',
         edgeType: EdgeType | undefined,
         maxDepth: number,
@@ -109,7 +120,8 @@ export class GraphEngine {
 
         visited.add(currentId);
         const node = this.nodeRepo.getNodeById(currentId);
-        const currentPath = [...path, currentId];
+        // Path is already built by the caller or initial call
+        const currentPath = path.length === 0 ? [{ nodeId: currentId }] : path;
 
         if (node) {
             results.push({ node, distance: depth, path: currentPath });
@@ -123,7 +135,8 @@ export class GraphEngine {
 
         for (const edge of edges) {
             const nextId = direction === 'outgoing' ? edge.to_id : edge.from_id;
-            this.dfs(nextId, depth + 1, currentPath, direction, edgeType, maxDepth, results, visited);
+            const nextPath = [...currentPath, { nodeId: nextId, edge }];
+            this.dfs(nextId, depth + 1, nextPath, direction, edgeType, maxDepth, results, visited);
         }
     }
 }

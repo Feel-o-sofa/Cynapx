@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import * as fs from 'fs';
 import { GraphEngine, TraversalResult } from '../graph/graph-engine';
 import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
 
@@ -115,14 +116,31 @@ export class ApiServer {
         const results = this.graphEngine.traverse(node.id, 'BFS', { direction: 'incoming', maxDepth: max_depth || 3 });
 
         const affected_nodes = results.map(r => {
-            const impact_path = r.path.map((id: number) => {
-                const n = this.graphEngine.nodeRepo.getNodeById(id);
-                return n ? n.qualified_name : 'unknown';
+            // Build a readable impact path: Caller -> Caller -> ... -> Changed Symbol
+            // The path in TraversalResult is [Start, ..., Current]
+            // For incoming direction, it's [ChangedSymbol, Caller1, Caller2, ...]
+            const pathSteps = [...r.path].reverse();
+            const formattedPath = pathSteps.map((step, index) => {
+                const n = this.graphEngine.nodeRepo.getNodeById(step.nodeId);
+                const qname = n ? n.qualified_name : 'unknown';
+                
+                if (index < pathSteps.length - 1) {
+                    const nextStep = pathSteps[index + 1];
+                    // The edge used to reach 'step' (which is the caller) FROM 'nextStep' (which is the callee)
+                    // Wait, in incoming direction: Start(C) <- B (edge: B calls C) <- A (edge: A calls B)
+                    // r.path for A is [C, B, A]
+                    // reversed is [A, B, C]
+                    // step A has edge (A calls B). step B has edge (B calls C). step C has no edge.
+                    const edge = step.edge;
+                    const lineInfo = edge?.call_site_line ? ` (line ${edge.call_site_line})` : '';
+                    return `${qname}${lineInfo}`;
+                }
+                return qname;
             });
 
             return {
                 node: this.mapToGraphNode(r.node),
-                impact_path: impact_path,
+                impact_path: formattedPath,
                 distance: r.distance
             };
         });

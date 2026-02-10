@@ -29,6 +29,7 @@ Thumbs.db
 
 # Test files
 test_*
+verify_*
 *.test.*
 *.spec.*
 tests/

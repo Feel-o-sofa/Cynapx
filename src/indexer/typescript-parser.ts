@@ -65,7 +65,25 @@ export class TypeScriptParser implements CodeParser {
                 }
             }
 
-            // 3. Resolve Calls (Edge Extraction)
+            // 3. Resolve Imports (Dependency Extraction - Task 4)
+            if (ts.isImportDeclaration(node)) {
+                const moduleSpecifier = node.moduleSpecifier;
+                if (ts.isStringLiteral(moduleSpecifier)) {
+                    const pkgName = moduleSpecifier.text;
+                    // Only link to external packages (not relative imports)
+                    if (!pkgName.startsWith('.')) {
+                        const pkgNodeQName = `package:${pkgName}`;
+                        edges.push({
+                            from_qname: filePath,
+                            to_qname: pkgNodeQName,
+                            edge_type: 'depends_on',
+                            dynamic: false
+                        } as any);
+                    }
+                }
+            }
+
+            // 4. Resolve Calls (Edge Extraction)
             if (ts.isCallExpression(node)) {
                 const centerNode = this.findParentSymbol(node);
                 const fromQName = centerNode ? this.getName(centerNode) : filePath;
