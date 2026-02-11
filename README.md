@@ -1,61 +1,113 @@
-# Cynapx (시냅스엑스)
+# Cynapx MCP - High-Performance AI-Native Code Knowledge Engine
 
-**Cynapx**는 AI 에이전트와 개발자를 위한 고성능 격리형 코드 지식 엔진입니다. 프로젝트의 구조를 분석하여 지식 그래프를 구축하고, AI 에이전트가 코드를 직접 전수 조사하지 않고도 프로젝트를 깊이 있게 이해할 수 있도록 돕습니다.
+**Cynapx** is a high-performance, isolated code analysis engine built for AI agents and developers. It builds a multi-dimensional knowledge graph of your codebase, allowing LLMs like Gemini to understand complex architectures, dependencies, and code quality without manual context-gathering.
 
-## 주요 특징
+## ❌ Without Cynapx
 
-- **AI 에이전트 최적화**: MCP(Model Context Protocol) 서버를 내장하여 AI 도구와 즉시 연동 가능.
-- **격리형 저장소 (Zero-Pollution)**: 분석 대상 프로젝트 폴더를 오염시키지 않고 중앙 격리 디렉터리(`~/.cynapx/`)에 인덱스 저장.
-- **실시간 증분 업데이트**: 파일 시스템 감시와 Git 이력 동기화를 통해 항상 최신 인덱스 유지.
-- **다국어 지원**: TypeScript, JavaScript, Python 코드의 정밀 분석 및 의존성 추적.
-- **정합성 보장**: 자가 진단 엔진을 통해 실제 파일과 인덱스 간의 일관성 유지.
-- **시각화 지원**: Mermaid 형식을 통한 코드 호출 그래프 익스포트.
+AI agents struggle to see the "big picture" of large projects. They often:
+- ❌ Rely on shallow grep searches that miss logical connections.
+- ❌ Lack understanding of call hierarchies and ripple effects.
+- ❌ Waste tokens reading irrelevant files to find definitions.
+- ❌ Hallucinate impacts of code changes due to missing context.
 
-## 설치 방법
+## ✅ With Cynapx
+
+Cynapx provides a deep, graph-based understanding of your code. Your AI agent gains:
+- ✅ **Instant Symbol Discovery**: Find any function, class, or variable with full metadata.
+- ✅ **Impact Analysis**: Automatically trace what will break if you modify a specific symbol.
+- ✅ **Quality Metrics**: Identify technical debt via Cyclomatic Complexity and Coupling (Fan-in/out).
+- ✅ **Visual Architecture**: Export logic-flow diagrams directly into the chat using Mermaid.
+
+---
+
+## Quick Start
+
+### Installation
 
 ```bash
-# 로컬 패키지 파일로 설치하는 경우
+# Install the package (local tgz or from npm)
 npm install ./cynapx-0.1.0.tgz
 ```
 
-## 사용 방법
+### Setup in Gemini CLI
 
-### CLI 실행 (HTTP API 서버)
+Register Cynapx as an MCP server to enable specialized slash commands and deep analysis tools.
 
 ```bash
-npx cynapx --path "/path/to/your/project"
+# Replace /your/project/path with the absolute path to your codebase
+gemini mcp add cynapx "npx" "--" "cynapx" "--path" "/your/project/path" -e MCP_MODE=true
 ```
 
-기본적으로 `http://localhost:3000`에서 API 서버가 시작됩니다.
+### Verification
 
-### MCP 모드 실행 (AI 에이전트 연동용)
-
-**Windows (PowerShell):**
-```powershell
-$env:MCP_MODE="true"; npx cynapx --path "C:\your\project\path"
-```
-
-**Linux / macOS:**
+Inside Gemini CLI, run:
 ```bash
-MCP_MODE=true npx cynapx --path "/your/project/path"
+/mcp
+```
+You should see `cynapx` listed as a connected server with tools like `search_symbols`, `analyze_impact`, etc.
+
+---
+
+## Core Capabilities
+
+### 🛠️ Analysis Tools (MCP Tools)
+
+- `search_symbols`: Search for any symbol with FTS5-powered indexing.
+- `get_symbol_details`: View detailed metrics and **real-time source code** for any symbol.
+- `analyze_impact`: Trace incoming dependencies to predict the ripple effect of changes.
+- `get_hotspots`: Detect "dangerous" code areas with high complexity or tight coupling.
+- `export_graph`: Generate **Mermaid.js** diagrams centered around specific symbols.
+- `check_consistency`: Ensure the index is perfectly synced with your filesystem and Git state.
+
+### 📄 Live Resources (MCP Resources)
+
+- `graph://summary`: Get a snapshot of your project's knowledge density (nodes, edges, files).
+
+### 💡 Workflow Prompts (MCP Prompts)
+
+- `/explain-impact`: Ask the AI to perform a risk assessment for a specific code change.
+- `/check-health`: Request a diagnostic report on the current index and project health.
+
+---
+
+## Security & Sandboxing
+
+Cynapx is built with a **Zero-Pollution** philosophy. It never writes files to your project directory; all index data is stored in a central isolated directory (`~/.cynapx/`).
+
+### Recommended Sandbox Setup (Docker)
+
+For high-security environments, run Cynapx in a Read-Only container:
+
+```bash
+docker run -i --rm \
+  -v "/your/project/path:/workspace:ro" \
+  -v "$HOME/.cynapx:/root/.cynapx" \
+  cynapx-image --path /workspace
 ```
 
-Claude Desktop 등 MCP 호환 도구의 설정(config)에 위 명령어를 추가하여 연동할 수 있습니다.
+### Protection Layers
+- **Path Traversal Guard**: Built-in validation ensures the server never reads files outside your project root.
+- **SQL Injection Shield**: Whitelisted metric queries prevent malicious database manipulation.
+- **Privacy First**: No personal data, machine identifiers, or SSH keys are ever indexed or transmitted.
 
-### 주요 옵션
+---
 
-- `--path <dir>`: 분석할 프로젝트의 경로 (기본값: 현재 디렉터리)
-- `--help`: 도움말 표시
+## Advanced Usage
 
-## 제공 도구 (MCP Tools)
+### Hybrid Synchronization
+Cynapx uses a unique **Hybrid Sync** logic. Every time the server starts, it reconciles your index using:
+1. **Git State**: Rapidly catches up with commits and branch switches.
+2. **File Checksums**: Detects local, uncommitted changes that Git might miss.
+3. **Real-time Watcher**: Actively monitors and updates the graph as you type.
 
-- `search_symbols`: 심볼 이름 기반 검색 (FTS5 활용)
-- `get_symbol_details`: 특정 심볼의 정의 위치, 호출 수, 피호출 수 등 상세 정보 조회
-- `analyze_impact`: 특정 심볼 변경 시 영향을 받는 상위 호출 체계 분석 (영향 범위 파악)
-- `get_hotspots`: 복잡도(Cyclomatic)나 결합도(Fan-in)가 높은 코드 영역 탐지
-- `export_graph`: 특정 심볼 중심의 관계를 Mermaid 다이어그램 코드로 추출 (시각화)
-- `check_consistency`: 인덱스와 실제 소스 파일/Git 상태 간의 정합성 검사 및 자동 복구
+### Command Line Interface
+You can also run Cynapx as a standalone API server:
+```bash
+npx cynapx --path "./my-project" --port 3000
+```
 
-## 라이선스
+---
 
-이 프로젝트는 내부용으로 개발되었습니다.
+## License
+
+Internal proprietary software. All rights reserved.

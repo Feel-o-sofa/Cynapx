@@ -9,9 +9,10 @@ export class WorkerPool {
     private queue: { task: any, resolve: Function, reject: Function }[] = [];
 
     constructor(private size: number = os.cpus().length) {
-        const workerPath = path.resolve(__dirname, 'index-worker.ts');
+        const isTsNode = process.execArgv.includes('ts-node/register') || process.argv[1].endsWith('.ts');
+        const workerPath = path.resolve(__dirname, isTsNode ? 'index-worker.ts' : 'index-worker.js');
         // Use ts-node to run the worker if we are in dev environment
-        const execArgv = process.execArgv.includes('--loader') ? process.execArgv : ['-r', 'ts-node/register'];
+        const execArgv = isTsNode ? (process.execArgv.includes('--loader') ? process.execArgv : ['-r', 'ts-node/register']) : [];
 
         for (let i = 0; i < this.size; i++) {
             const worker = new Worker(workerPath, { execArgv });

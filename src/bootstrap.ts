@@ -45,7 +45,7 @@ async function bootstrap() {
 Cynapx: High-Performance Isolated Code Knowledge Engine
 
 Usage:
-  npx ts-node src/bootstrap.ts [options]
+  cynapx [options]
 
 Options:
   --path <dir>    Path to the project directory to analyze (default: current directory)
@@ -91,7 +91,7 @@ Environment Variables:
         let mcpServer: McpServer | undefined;
         if (isMcpMode) {
             mcpServer = new McpServer(graphEngine);
-            mcpServer.start();
+            await mcpServer.start();
             log('MCP Server handshake active on stdio.');
         }
 
@@ -116,30 +116,21 @@ Environment Variables:
             mcpServer.setConsistencyChecker(consistencyChecker);
         }
 
-        // 7. Sync / Initial Scan (Phase 5.1 - Task 13-1)
+        // 7. Sync / Initial Scan (Hybrid: Git + File System)
         const lastCommit = metadataRepo.getLastIndexedCommit();
         const currentHead = await gitService.getCurrentHead();
-        const version = Date.now();
-
+        
         if (!lastCommit) {
             log('No previous index found. Starting Full Initial Scan...');
-            const fileFilter = new FileFilter(projectPath);
-            const allFiles = await getFiles(projectPath, true, fileFilter);
-            
-            log(`Found ${allFiles.length} files to index.`);
-            const events = await Promise.all(allFiles.map(async (fullPath) => {
-                const commit = await gitService.getLatestCommit(fullPath);
-                return {
-                    event: 'ADD' as const,
-                    file_path: fullPath,
-                    commit: commit
-                };
-            }));
-            await updatePipeline.processBatch(events, version);
+            const results = await consistencyChecker.validate(true);
             metadataRepo.setLastIndexedCommit(currentHead);
-            log('Full Initial Scan Complete.');
+            log(`Full Initial Scan Complete. Indexed ${results.totalFiles} files.`);
         } else {
-            await updatePipeline.syncWithGit(projectPath);
+            log('Synchronizing index with Project state...');
+            // This captures BOTH Git changes and uncommitted local changes via checksums
+            await consistencyChecker.validate(true);
+            metadataRepo.setLastIndexedCommit(currentHead);
+            log('Synchronization Complete.');
         }
 
         // 8. Start File Watcher (Phase 5.2)
@@ -156,9 +147,23 @@ Environment Variables:
 
         log('--- Startup Sequence Complete ---');
 
+        if (mcpServer) {
+            mcpServer.markReady();
+        }
+
+        if (isMcpMode) {
+            process.stdin.on('end', () => {
+                log('STDIN closed, triggering graceful shutdown...');
+                process.emit('SIGINT');
+            });
+        }
+
         // Handle graceful shutdown
-        process.on('SIGINT', () => {
+        process.on('SIGINT', async () => {
             log('Shutting down...');
+            if (mcpServer) {
+                await mcpServer.close();
+            }
             workerPool.shutdown();
             dbManager.close();
             process.exit(0);

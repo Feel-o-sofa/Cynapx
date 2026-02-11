@@ -5,6 +5,7 @@ import { GitService } from './git-service';
 import { UpdatePipeline } from './update-pipeline';
 import { FileFilter } from '../utils/file-filter';
 import { calculateFileChecksum } from '../utils/checksum';
+import { FileChangeEvent } from './types';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -104,7 +105,7 @@ export class ConsistencyChecker {
 
         // Fetch all latest commits in parallel
         const repairFiles = [...results.missingFiles, ...results.outdatedFiles];
-        const events = await Promise.all(repairFiles.map(async (f) => {
+        const events: FileChangeEvent[] = await Promise.all(repairFiles.map(async (f) => {
             const commit = await this.gitService.getLatestCommit(f);
             return { event: 'MODIFY' as const, file_path: f, commit };
         }));

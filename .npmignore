@@ -1,0 +1,24 @@
+# Source code
+src/
+tsconfig.json
+
+# Development tools
+node_modules/
+.git/
+.gitignore
+
+# Documentation & Agent files
+agent_docs/
+GEMINI.md
+README_KR.md (if any)
+
+# Tests
+tests/
+*.test.ts
+*.spec.ts
+
+# Temporary files
+*.log
+.DS_Store
+mcp-test-client.js
+src/verify-mcp.ts
