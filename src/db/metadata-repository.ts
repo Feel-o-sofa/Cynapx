@@ -19,4 +19,9 @@ export class MetadataRepository {
     public setLastIndexedCommit(commit: string): void {
         this.setValue('last_indexed_commit', commit);
     }
+
+    public getTotalCallsCount(): number {
+        const val = this.getValue('total_calls_count');
+        return val ? parseInt(val, 10) : 0;
+    }
 }

@@ -13,6 +13,7 @@ knowledge.db-wal
 # Build outputs
 dist/
 build/
+*.tgz
 
 # Logs
 *.log

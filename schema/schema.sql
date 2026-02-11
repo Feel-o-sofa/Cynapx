@@ -83,3 +83,38 @@ CREATE TABLE IF NOT EXISTS index_metadata (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Initialize global counters
+INSERT OR IGNORE INTO index_metadata (key, value) VALUES ('total_calls_count', '0');
+
+-- Trigger to auto-update fan_in/out metrics on nodes AND global counter when an edge is inserted
+CREATE TRIGGER IF NOT EXISTS edges_ai_metrics AFTER INSERT ON edges
+WHEN new.edge_type = 'calls'
+BEGIN
+  UPDATE nodes SET fan_out = fan_out + 1 WHERE id = new.from_id;
+  UPDATE nodes SET fan_in = fan_in + 1 WHERE id = new.to_id;
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'total_calls_count';
+END;
+
+-- Trigger to auto-update fan_in/out metrics on nodes AND global counter when an edge is deleted
+CREATE TRIGGER IF NOT EXISTS edges_ad_metrics AFTER DELETE ON edges
+WHEN old.edge_type = 'calls'
+BEGIN
+  UPDATE nodes SET fan_out = fan_out - 1 WHERE id = old.from_id;
+  UPDATE nodes SET fan_in = fan_in - 1 WHERE id = old.to_id;
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) - 1 WHERE key = 'total_calls_count';
+END;
+
+-- Handle edge type updates (rare but possible)
+CREATE TRIGGER IF NOT EXISTS edges_au_metrics AFTER UPDATE ON edges
+BEGIN
+  -- If type changed from non-calls to calls
+  UPDATE nodes SET fan_out = fan_out + 1 WHERE id = new.from_id AND old.edge_type != 'calls' AND new.edge_type = 'calls';
+  UPDATE nodes SET fan_in = fan_in + 1 WHERE id = new.to_id AND old.edge_type != 'calls' AND new.edge_type = 'calls';
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'total_calls_count' AND old.edge_type != 'calls' AND new.edge_type = 'calls';
+  
+  -- If type changed from calls to non-calls
+  UPDATE nodes SET fan_out = fan_out - 1 WHERE id = old.from_id AND old.edge_type = 'calls' AND new.edge_type != 'calls';
+  UPDATE nodes SET fan_in = fan_in - 1 WHERE id = old.to_id AND old.edge_type = 'calls' AND new.edge_type != 'calls';
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) - 1 WHERE key = 'total_calls_count' AND old.edge_type = 'calls' AND new.edge_type != 'calls';
+END;

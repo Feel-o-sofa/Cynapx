@@ -94,11 +94,9 @@ export class UpdatePipeline {
                         this.handleDelete(res.event.file_path);
                     }
                     if (res.event.event === 'ADD' || res.event.event === 'MODIFY') {
-                        // Inline writeDeltaToDb logic with symbolCache
                         for (const node of res.delta.nodes) {
                             const nodeId = this.nodeRepo.createNode(node);
                             symbolCache.set(node.qualified_name, nodeId);
-                            affectedNodeIds.add(nodeId);
                         }
 
                         for (const edge of res.delta.edges) {
@@ -107,22 +105,14 @@ export class UpdatePipeline {
 
                             if (fromId !== undefined && toId !== undefined) {
                                 this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
-                                affectedNodeIds.add(fromId);
-                                affectedNodeIds.add(toId);
                             }
                         }
                     }
-                    console.log(`Successfully processed ${res.event.file_path}`);
                 }
             }
 
-            // 3. Batch Metric Updates (Once per transaction)
-            console.log(`Updating metrics for ${affectedNodeIds.size} nodes...`);
-            for (const id of affectedNodeIds) {
-                const fanIn = this.edgeRepo.getIncomingEdges(id, 'calls').length;
-                const fanOut = this.edgeRepo.getOutgoingEdges(id, 'calls').length;
-                this.nodeRepo.updateMetrics(id, { fan_in: fanIn, fan_out: fanOut });
-            }
+            // 3. Ledger Check (Consistency Verification)
+            this.verifyLedger();
 
             this.db.prepare('COMMIT').run();
 
@@ -141,6 +131,26 @@ export class UpdatePipeline {
             throw error;
         } finally {
             resolveLock!();
+        }
+    }
+
+    /**
+     * Verifies that the global ledger (metadata) matches the sum of individual node metrics.
+     * This ensures 'Conservation of Call Edges'.
+     */
+    private verifyLedger(): void {
+        if (!this.metadataRepo) return;
+        
+        const totalCalls = this.metadataRepo.getTotalCallsCount();
+        const sumFanIn = (this.db.prepare('SELECT SUM(fan_in) as s FROM nodes').get() as any).s || 0;
+        const sumFanOut = (this.db.prepare('SELECT SUM(fan_out) as s FROM nodes').get() as any).s || 0;
+
+        console.log(`[Ledger Check] Global: ${totalCalls}, Sum(In): ${sumFanIn}, Sum(Out): ${sumFanOut}`);
+
+        if (totalCalls !== sumFanIn || totalCalls !== sumFanOut) {
+            console.error(`!!! LEDGER INCONSISTENCY DETECTED !!!`);
+            console.error(`Difference: In: ${sumFanIn - totalCalls}, Out: ${sumFanOut - totalCalls}`);
+            // In a production system, we might trigger a full repair here.
         }
     }
 
@@ -194,42 +204,6 @@ export class UpdatePipeline {
     }
 
     /**
-     * Internal helper to write delta to DB without its own transaction.
-     */
-    private async writeDeltaToDb(filePath: string, delta: DeltaGraph): Promise<void> {
-        const qualifiedNameToId = new Map<string, number>();
-
-        // 1. Insert Nodes
-        for (const node of delta.nodes) {
-            const nodeId = this.nodeRepo.createNode(node);
-            qualifiedNameToId.set(node.qualified_name, nodeId);
-        }
-
-        // 2. Insert Edges
-        for (const edge of delta.edges) {
-            const fromId = this.resolveNodeId(edge, 'from', qualifiedNameToId);
-            const toId = this.resolveNodeId(edge, 'to', qualifiedNameToId);
-
-            if (fromId !== undefined && toId !== undefined) {
-                this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
-            }
-        }
-
-        // 3. Update Metrics
-        const allInvolvedIds = new Set<number>([...qualifiedNameToId.values()]);
-        for (const edge of delta.edges) {
-            const toId = this.resolveNodeId(edge, 'to', qualifiedNameToId);
-            if (toId) allInvolvedIds.add(toId);
-        }
-
-        for (const id of allInvolvedIds) {
-            const fanIn = this.edgeRepo.getIncomingEdges(id, 'calls').length;
-            const fanOut = this.edgeRepo.getOutgoingEdges(id, 'calls').length;
-            this.nodeRepo.updateMetrics(id, { fan_in: fanIn, fan_out: fanOut });
-        }
-    }
-
-    /**
      * Applies a pre-parsed DeltaGraph to the database sequentially.
      */
     public async applyDelta(filePath: string, delta: DeltaGraph, type: ChangeType): Promise<void> {
@@ -270,18 +244,8 @@ export class UpdatePipeline {
                 }
             }
 
-            // 2.3 Update Metrics
-            const allInvolvedIds = new Set<number>([...qualifiedNameToId.values()]);
-            for (const edge of delta.edges) {
-                const toId = this.resolveNodeId(edge, 'to', qualifiedNameToId);
-                if (toId) allInvolvedIds.add(toId);
-            }
-
-            for (const id of allInvolvedIds) {
-                const fanIn = this.edgeRepo.getIncomingEdges(id, 'calls').length;
-                const fanOut = this.edgeRepo.getOutgoingEdges(id, 'calls').length;
-                this.nodeRepo.updateMetrics(id, { fan_in: fanIn, fan_out: fanOut });
-            }
+            // 3. Ledger Check
+            this.verifyLedger();
 
             this.db.prepare('COMMIT').run();
         } catch (e) {
@@ -292,7 +256,7 @@ export class UpdatePipeline {
         }
     }
 
-    private async applyDeleteSerial(filePath: string): Promise<void> {
+    public async applyDeleteSerial(filePath: string): Promise<void> {
         const previousLock = this.writeLock;
         let resolveLock: () => void;
         this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
@@ -301,7 +265,11 @@ export class UpdatePipeline {
         try {
             this.db.prepare('BEGIN').run();
             this.handleDelete(filePath);
+            this.verifyLedger();
             this.db.prepare('COMMIT').run();
+        } catch (e) {
+            if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+            throw e;
         } finally {
             resolveLock!();
         }
@@ -311,18 +279,9 @@ export class UpdatePipeline {
      * Removes all nodes and edges associated with a file.
      */
     private handleDelete(filePath: string): void {
-        // Get all nodes defined in this file
-        const nodes = this.nodeRepo.getNodesByFilePath(filePath);
-
-        for (const node of nodes) {
-            if (node.id) {
-                // FK constraints ON DELETE CASCADE will handle edges if set up, 
-                // but we explicitly clean up if needed according to rules.
-                this.edgeRepo.deleteEdgesByNodeId(node.id);
-            }
-        }
-
-        // Delete the nodes themselves
+        // Delete the nodes defined in this file. 
+        // ON DELETE CASCADE on edges table will automatically handle edge removal,
+        // and our new AFTER DELETE trigger will handle metric decrements.
         this.nodeRepo.deleteNodesByFilePath(filePath);
     }
 
