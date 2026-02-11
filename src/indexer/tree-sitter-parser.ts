@@ -8,6 +8,7 @@ import JavaScript from 'tree-sitter-javascript';
 import { CodeParser, DeltaGraph } from './types';
 import { CodeNode, CodeEdge, SymbolType } from '../types';
 import * as fs from 'fs';
+import { calculateChecksum } from '../utils/checksum';
 
 /**
  * Advanced TreeSitterParser using Query API for precise multi-language extraction.
@@ -84,6 +85,7 @@ export class TreeSitterParser implements CodeParser {
             is_generated: false,
             last_updated_commit: commit,
             version: version,
+            checksum: calculateChecksum(sourceCode),
             loc: sourceCode.split('\n').length
         });
 

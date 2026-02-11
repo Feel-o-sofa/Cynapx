@@ -105,11 +105,18 @@ Environment Variables:
         const depParser = new DependencyParser();
         const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
 
-        const workerPool = new WorkerPool(os.cpus().length);
+        const workerPoolSize = Math.min(os.cpus().length, 4);
+        const workerPool = new WorkerPool(workerPoolSize);
         const updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool);
-        log(`Update Pipeline initialized with WorkerPool (${os.cpus().length} cores).`);
+        log(`Update Pipeline initialized with WorkerPool (${workerPoolSize} cores).`);
 
-        // 6. Sync / Initial Scan (Phase 5.1 - Task 13-1)
+        // 6. Setup Consistency Checker early (Phase 5.1)
+        const consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
+        if (mcpServer) {
+            mcpServer.setConsistencyChecker(consistencyChecker);
+        }
+
+        // 7. Sync / Initial Scan (Phase 5.1 - Task 13-1)
         const lastCommit = metadataRepo.getLastIndexedCommit();
         const currentHead = await gitService.getCurrentHead();
         const version = Date.now();
@@ -135,17 +142,11 @@ Environment Variables:
             await updatePipeline.syncWithGit(projectPath);
         }
 
-        // 7. Start File Watcher (Phase 5.2)
+        // 8. Start File Watcher (Phase 5.2)
         const watcher = new FileWatcher(updatePipeline, projectPath);
         watcher.start(projectPath);
 
-        // 7.5 Setup Consistency Checker
-        const consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
-        if (mcpServer) {
-            mcpServer.setConsistencyChecker(consistencyChecker);
-        }
-
-        // 8. Start API Server (if not in MCP mode)
+        // 9. Start API Server (if not in MCP mode)
         if (!isMcpMode) {
             const apiServer = new ApiServer(graphEngine);
             const port = parseInt(process.env.PORT || '3000', 10);

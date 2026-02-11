@@ -4,6 +4,7 @@ import { NodeRepository } from '../db/node-repository';
 import { GitService } from './git-service';
 import { UpdatePipeline } from './update-pipeline';
 import { FileFilter } from '../utils/file-filter';
+import { calculateFileChecksum } from '../utils/checksum';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -41,20 +42,36 @@ export class ConsistencyChecker {
         const allPhysicalFiles = await this.getFiles(this.projectPath, true, fileFilter);
         results.totalFiles = allPhysicalFiles.length;
 
-        // 1. Check for Outdated or Missing files
-        for (const fullPath of allPhysicalFiles) {
-            const nodes = this.nodeRepo.getNodesByFilePath(fullPath);
-            const fileNode = nodes.find(n => n.symbol_type === 'file');
+        // 1. Check for Outdated or Missing files (Throttled Parallelization)
+        const CONCURRENCY_LIMIT = 10;
+        const chunks = [];
+        for (let i = 0; i < allPhysicalFiles.length; i += CONCURRENCY_LIMIT) {
+            chunks.push(allPhysicalFiles.slice(i, i + CONCURRENCY_LIMIT));
+        }
 
-            if (!fileNode) {
-                results.missingFiles.push(fullPath);
-                continue;
-            }
+        for (const chunk of chunks) {
+            await Promise.all(chunk.map(async (fullPath) => {
+                const nodes = this.nodeRepo.getNodesByFilePath(fullPath);
+                const fileNode = nodes.find(n => n.symbol_type === 'file');
 
-            const currentGitCommit = await this.gitService.getLatestCommit(fullPath);
-            if (fileNode.last_updated_commit !== currentGitCommit) {
-                results.outdatedFiles.push(fullPath);
-            }
+                if (!fileNode) {
+                    results.missingFiles.push(fullPath);
+                    return;
+                }
+
+                const [currentGitCommit, currentChecksum] = await Promise.all([
+                    this.gitService.getLatestCommit(fullPath),
+                    Promise.resolve(calculateFileChecksum(fullPath))
+                ]);
+
+                const isOutdated = 
+                    fileNode.last_updated_commit !== currentGitCommit ||
+                    fileNode.checksum !== currentChecksum;
+
+                if (isOutdated) {
+                    results.outdatedFiles.push(fullPath);
+                }
+            }));
         }
 
         // 2. Check for Orphaned nodes in DB (Files that no longer exist on disk)
@@ -85,17 +102,16 @@ export class ConsistencyChecker {
         console.log('Repairing inconsistencies...');
         const version = Date.now();
 
-        const events: any[] = [];
-
-        // Add missing or outdated
-        for (const f of [...results.missingFiles, ...results.outdatedFiles]) {
+        // Fetch all latest commits in parallel
+        const repairFiles = [...results.missingFiles, ...results.outdatedFiles];
+        const events = await Promise.all(repairFiles.map(async (f) => {
             const commit = await this.gitService.getLatestCommit(f);
-            events.push({ event: 'MODIFY', file_path: f, commit });
-        }
+            return { event: 'MODIFY' as const, file_path: f, commit };
+        }));
 
-        // Delete orphaned
+        // Add delete events
         for (const f of results.orphanedNodes) {
-            events.push({ event: 'DELETE', file_path: f, commit: 'deleted' });
+            events.push({ event: 'DELETE' as const, file_path: f, commit: 'deleted' });
         }
 
         if (events.length > 0) {

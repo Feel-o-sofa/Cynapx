@@ -82,20 +82,46 @@ export class UpdatePipeline {
 
         await previousLock;
 
+        const symbolCache = new Map<string, number>();
+        const affectedNodeIds = new Set<number>();
+
         try {
             this.db.prepare('BEGIN').run();
             
             for (const res of results) {
                 if (res.status === 'success') {
-                    // Similar to applyDelta but inside this transaction
                     if (res.event.event === 'ADD' || res.event.event === 'MODIFY' || res.event.event === 'DELETE') {
                         this.handleDelete(res.event.file_path);
                     }
                     if (res.event.event === 'ADD' || res.event.event === 'MODIFY') {
-                        await this.writeDeltaToDb(res.event.file_path, res.delta);
+                        // Inline writeDeltaToDb logic with symbolCache
+                        for (const node of res.delta.nodes) {
+                            const nodeId = this.nodeRepo.createNode(node);
+                            symbolCache.set(node.qualified_name, nodeId);
+                            affectedNodeIds.add(nodeId);
+                        }
+
+                        for (const edge of res.delta.edges) {
+                            const fromId = this.resolveNodeId(edge, 'from', symbolCache);
+                            const toId = this.resolveNodeId(edge, 'to', symbolCache);
+
+                            if (fromId !== undefined && toId !== undefined) {
+                                this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
+                                affectedNodeIds.add(fromId);
+                                affectedNodeIds.add(toId);
+                            }
+                        }
                     }
                     console.log(`Successfully processed ${res.event.file_path}`);
                 }
+            }
+
+            // 3. Batch Metric Updates (Once per transaction)
+            console.log(`Updating metrics for ${affectedNodeIds.size} nodes...`);
+            for (const id of affectedNodeIds) {
+                const fanIn = this.edgeRepo.getIncomingEdges(id, 'calls').length;
+                const fanOut = this.edgeRepo.getOutgoingEdges(id, 'calls').length;
+                this.nodeRepo.updateMetrics(id, { fan_in: fanIn, fan_out: fanOut });
             }
 
             this.db.prepare('COMMIT').run();
@@ -316,25 +342,33 @@ export class UpdatePipeline {
             return internalMap.get(qname);
         }
 
+        let resolvedId: number | undefined;
+
         // Check database with file hint if available
         if (fileHint) {
             const nodes = this.nodeRepo.getNodesByFilePath(fileHint);
             const targetNode = nodes.find(n => n.qualified_name === qname || n.qualified_name.endsWith(`.${qname}`));
-            if (targetNode) return targetNode.id;
+            if (targetNode) resolvedId = targetNode.id;
         }
 
         // Fallback to name-only lookup (Exact Match)
-        const existingNode = this.nodeRepo.getNodeByQualifiedName(qname);
-        if (existingNode) return existingNode.id;
+        if (resolvedId === undefined) {
+            const existingNode = this.nodeRepo.getNodeByQualifiedName(qname);
+            if (existingNode) resolvedId = existingNode.id;
+        }
 
         // Heuristic Suffix Match
-        if (side === 'to' && !qname.includes('#') && !qname.includes('/')) {
+        if (resolvedId === undefined && side === 'to' && !qname.includes('#') && !qname.includes('/')) {
             const candidates = this.nodeRepo.findNodesBySymbolName(qname);
             if (candidates.length > 0) {
-                return candidates[0].id;
+                resolvedId = candidates[0].id;
             }
         }
 
-        return undefined;
+        if (resolvedId !== undefined) {
+            internalMap.set(qname, resolvedId);
+        }
+
+        return resolvedId;
     }
 }

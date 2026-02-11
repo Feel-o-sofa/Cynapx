@@ -6,7 +6,7 @@ export class McpServer {
     constructor(
         private graphEngine: GraphEngine,
         private consistencyChecker?: ConsistencyChecker
-    ) {}
+    ) { }
 
     public setConsistencyChecker(checker: ConsistencyChecker) {
         this.consistencyChecker = checker;
@@ -52,18 +52,18 @@ export class McpServer {
 
         switch (method) {
             case 'initialize':
-                return { 
-                    jsonrpc: '2.0', 
-                    id, 
-                    result: { 
-                        protocolVersion: '2024-11-05', 
+                return {
+                    jsonrpc: '2.0',
+                    id,
+                    result: {
+                        protocolVersion: '2024-11-05',
                         capabilities: {
                             tools: {}
-                        }, 
-                        serverInfo: { name: 'cynapx', version: '1.0.0' } 
-                    } 
+                        },
+                        serverInfo: { name: 'cynapx', version: '1.0.0' }
+                    }
                 };
-            
+
             case 'tools/list':
                 return {
                     jsonrpc: '2.0',
@@ -88,22 +88,22 @@ export class McpServer {
                             {
                                 name: 'get_hotspots',
                                 description: 'Find code hotspots based on metrics like cyclomatic complexity or fan-in',
-                                inputSchema: { 
-                                    type: 'object', 
-                                    properties: { 
+                                inputSchema: {
+                                    type: 'object',
+                                    properties: {
                                         metric: { type: 'string', enum: ['cyclomatic', 'fan_in', 'fan_out', 'loc'] },
                                         threshold: { type: 'number' },
                                         symbol_type: { type: 'string' }
-                                    }, 
-                                    required: ['metric'] 
+                                    },
+                                    required: ['metric']
                                 }
                             },
                             {
                                 name: 'export_graph',
                                 description: 'Export a portion of the graph in Mermaid format for visualization',
-                                inputSchema: { 
-                                    type: 'object', 
-                                    properties: { 
+                                inputSchema: {
+                                    type: 'object',
+                                    properties: {
                                         root_qname: { type: 'string' },
                                         max_depth: { type: 'number' }
                                     }
@@ -126,6 +126,8 @@ export class McpServer {
                 return { jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found' } };
         }
     }
+
+    private isCheckingConsistency: boolean = false;
 
     private async callTool(name: string, args: any): Promise<any> {
         try {
@@ -151,7 +153,7 @@ export class McpServer {
                     const targetNode = this.graphEngine.getNodeByQualifiedName(args.qualified_name);
                     if (!targetNode || targetNode.id === undefined) return { isError: true, content: [{ type: 'text', text: 'Symbol not found' }] };
                     const results = this.graphEngine.traverse(targetNode.id, 'BFS', { direction: 'incoming', maxDepth: args.max_depth || 3 });
-                    
+
                     const formatted = results.map(r => {
                         const pathSteps = [...r.path].reverse();
                         const impactPath = pathSteps.map((step, index) => {
@@ -213,10 +215,18 @@ export class McpServer {
                     if (!this.consistencyChecker) {
                         return { isError: true, content: [{ type: 'text', text: 'Consistency checker not available in this session' }] };
                     }
-                    const results = await this.consistencyChecker.validate(args.repair || false);
-                    return {
-                        content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
-                    };
+                    if (this.isCheckingConsistency) {
+                        return { isError: true, content: [{ type: 'text', text: 'A consistency check is already in progress. Please wait.' }] };
+                    }
+                    this.isCheckingConsistency = true;
+                    try {
+                        const results = await this.consistencyChecker.validate(args.repair || false);
+                        return {
+                            content: [{ type: 'text', text: JSON.stringify(results, null, 2) }]
+                        };
+                    } finally {
+                        this.isCheckingConsistency = false;
+                    }
                 }
 
                 default:

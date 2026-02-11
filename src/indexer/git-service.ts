@@ -24,6 +24,19 @@ export class GitService {
     }
 
     /**
+     * Returns the author timestamp of a commit.
+     */
+    public async getCommitDate(hash: string): Promise<number> {
+        if (hash === 'unknown' || hash === 'not-in-git' || hash === 'deleted') return 0;
+        try {
+            const dateStr = await this.git.show(['-s', '--format=%at', hash]);
+            return parseInt(dateStr.trim()) * 1000; // Convert to ms
+        } catch {
+            return 0;
+        }
+    }
+
+    /**
      * Returns the current HEAD commit hash.
      */
     public async getCurrentHead(): Promise<string> {

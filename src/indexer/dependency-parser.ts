@@ -1,7 +1,7 @@
-
 import { CodeParser, DeltaGraph } from './types';
 import { CodeNode, CodeEdge } from '../types';
 import * as fs from 'fs';
+import { calculateChecksum } from '../utils/checksum';
 
 export class DependencyParser implements CodeParser {
     public supports(filePath: string): boolean {
@@ -25,6 +25,7 @@ export class DependencyParser implements CodeParser {
             is_generated: false,
             last_updated_commit: commit,
             version: version,
+            checksum: calculateChecksum(content),
             loc: content.split('\n').length
         });
 

@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import { CodeParser, DeltaGraph } from './types';
 import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
 import { MetricsCalculator } from './metrics-calculator';
+import { calculateChecksum } from '../utils/checksum';
 
 export class TypeScriptParser implements CodeParser {
     private program: ts.Program | null = null;
@@ -20,7 +21,11 @@ export class TypeScriptParser implements CodeParser {
             target: ts.ScriptTarget.Latest,
             module: ts.ModuleKind.CommonJS,
             esModuleInterop: true,
-            allowJs: true
+            allowJs: true,
+            skipLibCheck: true,
+            noEmit: true,
+            types: [],
+            lib: ['lib.esnext.d.ts']
         });
         this.typeChecker = this.program.getTypeChecker();
     }
@@ -187,7 +192,7 @@ export class TypeScriptParser implements CodeParser {
     }
 
     private calculateChecksum(content: string): string {
-        return content.length.toString();
+        return calculateChecksum(content);
     }
 }
 
