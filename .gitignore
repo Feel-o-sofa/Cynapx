@@ -6,6 +6,7 @@ knowledge.db
 knowledge.db-shm
 knowledge.db-wal
 .server-port
+.cynapx-config
 
 # Environment variables
 .env
