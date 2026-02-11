@@ -23,14 +23,15 @@ export class ConsistencyChecker {
     /**
      * Performs a full consistency check and returns the results.
      * If 'repair' is true, it triggers re-indexing for inconsistent files.
+     * If 'force' is true, it treats all files as outdated to trigger a full re-index.
      */
-    public async validate(repair: boolean = false): Promise<{
+    public async validate(repair: boolean = false, force: boolean = false): Promise<{
         totalFiles: number;
         missingFiles: string[];
         outdatedFiles: string[];
         orphanedNodes: string[];
     }> {
-        console.log('Starting Consistency Check...');
+        console.log(`Starting Consistency Check (Repair: ${repair}, Force: ${force})...`);
         
         const results = {
             totalFiles: 0,
@@ -43,36 +44,40 @@ export class ConsistencyChecker {
         const allPhysicalFiles = await this.getFiles(this.projectPath, true, fileFilter);
         results.totalFiles = allPhysicalFiles.length;
 
-        // 1. Check for Outdated or Missing files (Throttled Parallelization)
-        const CONCURRENCY_LIMIT = 10;
-        const chunks = [];
-        for (let i = 0; i < allPhysicalFiles.length; i += CONCURRENCY_LIMIT) {
-            chunks.push(allPhysicalFiles.slice(i, i + CONCURRENCY_LIMIT));
-        }
+        if (force) {
+            results.outdatedFiles = [...allPhysicalFiles];
+        } else {
+            // 1. Check for Outdated or Missing files (Throttled Parallelization)
+            const CONCURRENCY_LIMIT = 10;
+            const chunks = [];
+            for (let i = 0; i < allPhysicalFiles.length; i += CONCURRENCY_LIMIT) {
+                chunks.push(allPhysicalFiles.slice(i, i + CONCURRENCY_LIMIT));
+            }
 
-        for (const chunk of chunks) {
-            await Promise.all(chunk.map(async (fullPath) => {
-                const nodes = this.nodeRepo.getNodesByFilePath(fullPath);
-                const fileNode = nodes.find(n => n.symbol_type === 'file');
+            for (const chunk of chunks) {
+                await Promise.all(chunk.map(async (fullPath) => {
+                    const nodes = this.nodeRepo.getNodesByFilePath(fullPath);
+                    const fileNode = nodes.find(n => n.symbol_type === 'file');
 
-                if (!fileNode) {
-                    results.missingFiles.push(fullPath);
-                    return;
-                }
+                    if (!fileNode) {
+                        results.missingFiles.push(fullPath);
+                        return;
+                    }
 
-                const [currentGitCommit, currentChecksum] = await Promise.all([
-                    this.gitService.getLatestCommit(fullPath),
-                    Promise.resolve(calculateFileChecksum(fullPath))
-                ]);
+                    const [currentGitCommit, currentChecksum] = await Promise.all([
+                        this.gitService.getLatestCommit(fullPath),
+                        Promise.resolve(calculateFileChecksum(fullPath))
+                    ]);
 
-                const isOutdated = 
-                    fileNode.last_updated_commit !== currentGitCommit ||
-                    fileNode.checksum !== currentChecksum;
+                    const isOutdated = 
+                        fileNode.last_updated_commit !== currentGitCommit ||
+                        fileNode.checksum !== currentChecksum;
 
-                if (isOutdated) {
-                    results.outdatedFiles.push(fullPath);
-                }
-            }));
+                    if (isOutdated) {
+                        results.outdatedFiles.push(fullPath);
+                    }
+                }));
+            }
         }
 
         // 2. Check for Orphaned nodes in DB (Files that no longer exist on disk)

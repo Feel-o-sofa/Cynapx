@@ -331,10 +331,11 @@ export class McpServer {
             {
                 description: "Validate and optionally repair the integrity of the knowledge graph against the current state of the file system and Git history.",
                 inputSchema: z.object({
-                    repair: z.boolean().optional().default(false).describe("If true, attempts to re-index inconsistent files to fix the graph")
+                    repair: z.boolean().optional().default(false).describe("If true, attempts to re-index inconsistent files to fix the graph"),
+                    force: z.boolean().optional().default(false).describe("If true, forces a full re-index of all files in the project")
                 })
             },
-            async ({ repair }) => {
+            async ({ repair, force }) => {
                 await this.waitUntilReady();
                 if (!this.consistencyChecker) {
                     return {
@@ -350,7 +351,7 @@ export class McpServer {
                 }
                 this.isCheckingConsistency = true;
                 try {
-                    const results = await this.consistencyChecker.validate(repair || false);
+                    const results = await this.consistencyChecker.validate(repair || false, force || false);
                     return {
                         content: [{ type: "text", text: JSON.stringify(results, null, 2) }]
                     };
