@@ -6,20 +6,27 @@ tsconfig.json
 node_modules/
 .git/
 .gitignore
+.npmignore
 
-# Documentation & Agent files
+# Configuration & Agent files
 agent_docs/
+.gemini/
+.cynapx-config
 GEMINI.md
-README_KR.md (if any)
+switch-env.js
 
-# Tests
+# Artifacts
+*.tgz
+
+# Tests & Verification
 tests/
 *.test.ts
 *.spec.ts
-switch-env.js
-
-# Temporary files
-*.log
-.DS_Store
 mcp-test-client.js
 src/verify-mcp.ts
+recalculate-metrics.js
+
+# Logs & Temporary
+*.log
+.DS_Store
+.server-port
