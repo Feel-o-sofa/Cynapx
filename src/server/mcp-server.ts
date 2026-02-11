@@ -5,12 +5,16 @@ import { GraphEngine } from '../graph/graph-engine';
 import { ConsistencyChecker } from '../indexer/consistency-checker';
 import * as fs from 'fs';
 import * as path from 'path';
+import { ANCHOR_FILE, readRegistry, addToRegistry } from '../utils/paths';
 
 export class McpServer {
     private sdkServer: SdkMcpServer;
     private isCheckingConsistency: boolean = false;
     private readyPromise: Promise<void>;
     private resolveReady?: () => void;
+    private isInitialized: boolean = false;
+    private onInitializeCallback?: (newPath: string) => Promise<void>;
+    private onPurgeCallback?: () => Promise<void>;
 
     constructor(
         private graphEngine: GraphEngine,
@@ -30,15 +34,27 @@ export class McpServer {
         this.registerPrompts();
     }
 
-    public markReady() {
+    public markReady(initialized: boolean = true) {
+        this.isInitialized = initialized;
         if (this.resolveReady) {
             this.resolveReady();
-            console.error("Cynapx MCP Server marked as READY for requests");
+            console.error(`Cynapx MCP Server marked as READY (Initialized: ${initialized})`);
         }
+    }
+
+    public setOnInitialize(callback: (newPath: string) => Promise<void>) {
+        this.onInitializeCallback = callback;
+    }
+
+    public setOnPurge(callback: () => Promise<void>) {
+        this.onPurgeCallback = callback;
     }
 
     private async waitUntilReady() {
         await this.readyPromise;
+        if (!this.isInitialized) {
+            throw new Error("INITIALIZATION_REQUIRED: No .cynapx-config found. Please use 'get_setup_context' and 'initialize_project' to setup the project.");
+        }
     }
 
     private registerResources() {
@@ -49,30 +65,36 @@ export class McpServer {
                 description: "A summary of the current code knowledge graph"
             },
             async (uri) => {
-                await this.waitUntilReady();
+                try {
+                    await this.waitUntilReady();
+                } catch (e: any) {
+                    return {
+                        contents: [{
+                            uri: uri.href,
+                            mimeType: "application/json",
+                            text: JSON.stringify({ error: e.message, setup_required: true })
+                        }]
+                    };
+                }
+                const db = (this.graphEngine.nodeRepo as any).db;
+                const nodeCount = db.prepare("SELECT COUNT(*) as count FROM nodes").get().count;
+                const edgeCount = db.prepare("SELECT COUNT(*) as count FROM edges").get().count;
+                const fileCount = db.prepare("SELECT COUNT(DISTINCT file_path) as count FROM nodes").get().count;
+
                 return {
                     contents: [{
                         uri: uri.href,
                         mimeType: "application/json",
-                        text: await this.getSummaryText()
+                        text: JSON.stringify({
+                            nodes: nodeCount,
+                            edges: edgeCount,
+                            files: fileCount,
+                            last_updated: new Date().toISOString()
+                        }, null, 2)
                     }]
                 };
             }
         );
-    }
-
-    private async getSummaryText(): Promise<string> {
-        const db = (this.graphEngine.nodeRepo as any).db;
-        const nodeCount = db.prepare("SELECT COUNT(*) as count FROM nodes").get().count;
-        const edgeCount = db.prepare("SELECT COUNT(*) as count FROM edges").get().count;
-        const fileCount = db.prepare("SELECT COUNT(DISTINCT file_path) as count FROM nodes").get().count;
-
-        return JSON.stringify({
-            nodes: nodeCount,
-            edges: edgeCount,
-            files: fileCount,
-            last_updated: new Date().toISOString()
-        }, null, 2);
     }
 
     private registerPrompts() {
@@ -123,6 +145,73 @@ export class McpServer {
     }
 
     private registerTools() {
+        // get_setup_context
+        this.sdkServer.registerTool(
+            "get_setup_context",
+            {
+                description: "Get information needed to initialize a project when .cynapx-config is missing. Returns registry projects and current path.",
+                inputSchema: z.object({})
+            },
+            async () => {
+                const registry = readRegistry();
+                const currentPath = process.cwd();
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            status: this.isInitialized ? "ALREADY_INITIALIZED" : "INITIALIZATION_REQUIRED",
+                            current_directory: currentPath,
+                            registered_projects: registry,
+                            instructions: "Choose to (1) Load an existing project, (2) Initialize at current directory, or (3) Initialize at custom path."
+                        }, null, 2)
+                    }]
+                };
+            }
+        );
+
+        // initialize_project
+        this.sdkServer.registerTool(
+            "initialize_project",
+            {
+                description: "Initialize a project by creating a .cynapx-config file and registering it. This activates the analysis engine.",
+                inputSchema: z.object({
+                    mode: z.enum(['current', 'existing', 'custom']).describe("Setup mode"),
+                    path: z.string().optional().describe("Absolute path for 'existing' or 'custom' mode")
+                })
+            },
+            async ({ mode, path: targetPath }) => {
+                let projectPath = process.cwd();
+                if (mode === 'existing' || mode === 'custom') {
+                    if (!targetPath) return { isError: true, content: [{ type: "text", text: "Path is required for this mode." }] };
+                    projectPath = path.resolve(targetPath);
+                }
+
+                try {
+                    if (!fs.existsSync(projectPath)) {
+                        fs.mkdirSync(projectPath, { recursive: true });
+                    }
+                    const anchorPath = path.join(projectPath, ANCHOR_FILE);
+                    if (!fs.existsSync(anchorPath)) {
+                        fs.writeFileSync(anchorPath, JSON.stringify({ created_at: new Date().toISOString() }, null, 2));
+                    }
+                    
+                    addToRegistry(projectPath);
+
+                    if (this.onInitializeCallback) {
+                        await this.onInitializeCallback(projectPath);
+                    }
+
+                    this.markReady(true);
+
+                    return {
+                        content: [{ type: "text", text: `Successfully initialized project at ${projectPath}. Analysis engine is now active.` }]
+                    };
+                } catch (err) {
+                    return { isError: true, content: [{ type: "text", text: `Initialization failed: ${err}` }] };
+                }
+            }
+        );
+
         // search_symbols
         this.sdkServer.registerTool(
             "search_symbols",
@@ -357,6 +446,61 @@ export class McpServer {
                     };
                 } finally {
                     this.isCheckingConsistency = false;
+                }
+            }
+        );
+
+        // purge_index
+        this.sdkServer.registerTool(
+            "purge_index",
+            {
+                description: "Completely delete the local database index for the current project. Use this before uninstalling or when you want to start from scratch. WARNING: This action cannot be undone.",
+                inputSchema: z.object({
+                    confirm: z.boolean().optional().default(false).describe("Explicit confirmation to proceed with the deletion")
+                })
+            },
+            async ({ confirm }) => {
+                // Wait for readyPromise but don't strictly require isInitialized to allow purging broken setups
+                await this.readyPromise; 
+
+                if (!confirm) {
+                    return {
+                        content: [{ 
+                            type: "text", 
+                            text: "WARNING: You are about to completely delete the index for this project. This cannot be undone. To proceed, please call this tool again with 'confirm: true'." 
+                        }]
+                    };
+                }
+
+                const dbPath = (this.graphEngine.nodeRepo as any).db.name;
+                try {
+                    console.error(`Purging database: ${dbPath}`);
+                    
+                    if (this.onPurgeCallback) {
+                        await this.onPurgeCallback();
+                    }
+
+                    // Wait a moment for OS to release file handles
+                    await new Promise(resolve => setTimeout(resolve, 500));
+
+                    // Reset internal state
+                    this.isInitialized = false;
+                    this.consistencyChecker = undefined;
+                    // Re-create the promise for future initializations
+                    this.readyPromise = new Promise((resolve) => {
+                        this.resolveReady = resolve;
+                    });
+
+                    // Delete the physical file
+                    if (fs.existsSync(dbPath)) {
+                        fs.unlinkSync(dbPath);
+                    }
+
+                    return {
+                        content: [{ type: "text", text: `Successfully purged all index data. The database file at ${dbPath} has been deleted. Server is now in PENDING mode.` }]
+                    };
+                } catch (err) {
+                    return { isError: true, content: [{ type: "text", text: `Failed to purge index: ${err}` }] };
                 }
             }
         );

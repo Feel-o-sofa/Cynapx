@@ -1,4 +1,4 @@
-#!/usr/bin/env node
+
 import { DatabaseManager } from './db/database';
 import { NodeRepository } from './db/node-repository';
 import { EdgeRepository } from './db/edge-repository';
@@ -15,7 +15,7 @@ import { ConsistencyChecker } from './indexer/consistency-checker';
 import { ApiServer } from './server/api-server';
 import { McpServer } from './server/mcp-server';
 import { FileWatcher } from './watcher/file-watcher';
-import { getDatabasePath } from './utils/paths';
+import { getDatabasePath, findProjectAnchor } from './utils/paths';
 import { FileFilter } from './utils/file-filter';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -27,7 +27,6 @@ import * as os from 'os';
 async function bootstrap() {
     const isMcpMode = process.env.MCP_MODE === 'true';
     
-    // In MCP mode, ALL logs MUST go to stderr. stdout is for JSON-RPC only.
     if (isMcpMode) {
         console.log = console.error;
         console.info = console.error;
@@ -37,9 +36,7 @@ async function bootstrap() {
     
     const log = isMcpMode ? console.error : console.log;
 
-    // 0. Parse Arguments & Resolve Project Path
     const args = process.argv.slice(2);
-    
     if (args.includes('--help') || args.includes('-h')) {
         log(`
 Cynapx: High-Performance Isolated Code Knowledge Engine
@@ -59,97 +56,125 @@ Environment Variables:
     }
 
     const pathIndex = args.indexOf('--path');
-    const projectPath = pathIndex !== -1 && args[pathIndex + 1] 
+    const startPath = pathIndex !== -1 && args[pathIndex + 1] 
         ? path.resolve(args[pathIndex + 1]) 
         : process.cwd();
 
-    if (!fs.existsSync(projectPath) || !fs.statSync(projectPath).isDirectory()) {
-        console.error(`Error: Invalid project path: ${projectPath}`);
-        process.exit(1);
-    }
+    const anchorPath = findProjectAnchor(startPath);
+    const initialProjectPath = anchorPath || startPath;
 
     log(`--- Starting Cynapx (Parallel Mode) ---`);
-    log(`Target Project: ${projectPath}`);
+    log(`Start Directory: ${startPath}`);
+    if (anchorPath) log(`Detected Anchor at: ${anchorPath}`);
 
     try {
-        // 1. Initialize Database (Centralized & Isolated)
-        const dbPath = getDatabasePath(projectPath);
-        const dbManager = new DatabaseManager(dbPath);
-        const db = dbManager.getDb();
-        log(`Database initialized at: ${dbPath}`);
+        // Shared components
+        let dbManager: DatabaseManager | undefined;
+        let nodeRepo: NodeRepository | undefined;
+        let edgeRepo: EdgeRepository | undefined;
+        let metadataRepo: MetadataRepository | undefined;
+        let graphEngine: GraphEngine | undefined;
+        let updatePipeline: UpdatePipeline | undefined;
+        let consistencyChecker: ConsistencyChecker | undefined;
+        let workerPool: WorkerPool | undefined;
+        let watcher: FileWatcher | undefined;
 
-        // 2. Setup Repositories
-        const nodeRepo = new NodeRepository(db);
-        const edgeRepo = new EdgeRepository(db);
-        const metadataRepo = new MetadataRepository(db);
+        // Initialize core engine functionality
+        const initializeEngine = async (projectPath: string) => {
+            log(`Initializing Engine for: ${projectPath}`);
+            const dbPath = getDatabasePath(projectPath);
+            dbManager = new DatabaseManager(dbPath);
+            const db = dbManager.getDb();
+            nodeRepo = new NodeRepository(db);
+            edgeRepo = new EdgeRepository(db);
+            metadataRepo = new MetadataRepository(db);
+            graphEngine = new GraphEngine(nodeRepo, edgeRepo);
 
-        // 3. Initialize Graph Engine
-        const graphEngine = new GraphEngine(nodeRepo, edgeRepo);
-        log('Graph Engine initialized.');
+            const gitService = new GitService(projectPath);
+            const tsParser = new TypeScriptParser();
+            const treeSitterParser = new TreeSitterParser();
+            const depParser = new DependencyParser();
+            const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
 
-        // 8. Start MCP Server early if in MCP mode (to prevent discovery timeout)
+            const workerPoolSize = Math.min(os.cpus().length, 4);
+            workerPool = new WorkerPool(workerPoolSize);
+            updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool);
+            consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
+
+            log('Synchronizing index with Project state...');
+            await consistencyChecker.validate(true);
+            log('Synchronization Complete.');
+
+            watcher = new FileWatcher(updatePipeline, projectPath);
+            watcher.start(projectPath);
+            
+            return { graphEngine, consistencyChecker };
+        };
+
+        let currentGraphEngine: GraphEngine | undefined;
+        let currentConsistencyChecker: ConsistencyChecker | undefined;
+
+        if (anchorPath) {
+            const result = await initializeEngine(anchorPath);
+            currentGraphEngine = result.graphEngine;
+            currentConsistencyChecker = result.consistencyChecker;
+        } else {
+            // Placeholder graph engine if not initialized
+            const dbPath = getDatabasePath(startPath); // Temporary or default
+            const tempDb = new DatabaseManager(dbPath).getDb();
+            currentGraphEngine = new GraphEngine(new NodeRepository(tempDb), new EdgeRepository(tempDb));
+        }
+
+        // Start MCP Server
         let mcpServer: McpServer | undefined;
         if (isMcpMode) {
-            mcpServer = new McpServer(graphEngine);
+            mcpServer = new McpServer(currentGraphEngine!, currentConsistencyChecker);
+            
+            // Handle deferred initialization
+            mcpServer.setOnInitialize(async (newPath) => {
+                const result = await initializeEngine(newPath);
+                // Dynamically update MCP server's references
+                (mcpServer as any).graphEngine = result.graphEngine;
+                mcpServer!.setConsistencyChecker(result.consistencyChecker);
+            });
+
+            // Handle index purging
+            mcpServer.setOnPurge(async () => {
+                log('Purging engine resources...');
+                if (watcher) watcher.stop();
+                if (workerPool) workerPool.shutdown();
+                if (dbManager) dbManager.close();
+                
+                // Clear local references
+                watcher = undefined;
+                workerPool = undefined;
+                dbManager = undefined;
+                updatePipeline = undefined;
+                consistencyChecker = undefined;
+            });
+
             await mcpServer.start();
             log('MCP Server handshake active on stdio.');
-        }
-
-        // 4. Setup Git Service
-        const gitService = new GitService(projectPath);
-        log('Git Service initialized.');
-
-        // 5. Setup Indexing Pipeline
-        const tsParser = new TypeScriptParser();
-        const treeSitterParser = new TreeSitterParser();
-        const depParser = new DependencyParser();
-        const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
-
-        const workerPoolSize = Math.min(os.cpus().length, 4);
-        const workerPool = new WorkerPool(workerPoolSize);
-        const updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool);
-        log(`Update Pipeline initialized with WorkerPool (${workerPoolSize} cores).`);
-
-        // 6. Setup Consistency Checker early (Phase 5.1)
-        const consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
-        if (mcpServer) {
-            mcpServer.setConsistencyChecker(consistencyChecker);
-        }
-
-        // 7. Sync / Initial Scan (Hybrid: Git + File System)
-        const lastCommit = metadataRepo.getLastIndexedCommit();
-        const currentHead = await gitService.getCurrentHead();
-        
-        if (!lastCommit) {
-            log('No previous index found. Starting Full Initial Scan...');
-            const results = await consistencyChecker.validate(true);
-            metadataRepo.setLastIndexedCommit(currentHead);
-            log(`Full Initial Scan Complete. Indexed ${results.totalFiles} files.`);
-        } else {
-            log('Synchronizing index with Project state...');
-            // This captures BOTH Git changes and uncommitted local changes via checksums
-            await consistencyChecker.validate(true);
-            metadataRepo.setLastIndexedCommit(currentHead);
-            log('Synchronization Complete.');
-        }
-
-        // 8. Start File Watcher (Phase 5.2)
-        const watcher = new FileWatcher(updatePipeline, projectPath);
-        watcher.start(projectPath);
-
-        // 9. Start API Server (if not in MCP mode)
-        if (!isMcpMode) {
-            const apiServer = new ApiServer(graphEngine);
+            
+            if (anchorPath) {
+                mcpServer.markReady(true);
+            } else {
+                log('!!! NO .cynapx-config FOUND !!!');
+                log('Server is in PENDING mode. Please initialize via MCP tool.');
+                mcpServer.markReady(false);
+            }
+        } else if (anchorPath) {
+            // CLI/API Mode
+            const apiServer = new ApiServer(currentGraphEngine!);
             const port = parseInt(process.env.PORT || '3000', 10);
             apiServer.start(port);
             log(`Cynapx API listening on port ${port}`);
+        } else {
+            log('Error: .cynapx-config not found and not in MCP mode. Cannot start analysis.');
+            process.exit(1);
         }
 
         log('--- Startup Sequence Complete ---');
-
-        if (mcpServer) {
-            mcpServer.markReady();
-        }
 
         if (isMcpMode) {
             process.stdin.on('end', () => {
@@ -158,14 +183,11 @@ Environment Variables:
             });
         }
 
-        // Handle graceful shutdown
         process.on('SIGINT', async () => {
             log('Shutting down...');
-            if (mcpServer) {
-                await mcpServer.close();
-            }
-            workerPool.shutdown();
-            dbManager.close();
+            if (mcpServer) await mcpServer.close();
+            if (workerPool) workerPool.shutdown();
+            if (dbManager) dbManager.close();
             process.exit(0);
         });
 
@@ -175,41 +197,4 @@ Environment Variables:
     }
 }
 
-/**
- * Recursively collects supported files from a directory.
- */
-async function getFiles(directory: string, recursive: boolean, filter?: FileFilter): Promise<string[]> {
-    const results: string[] = [];
-    if (!fs.existsSync(directory)) return results;
-    
-    const files = fs.readdirSync(directory);
-
-    for (const file of files) {
-        const fullPath = path.resolve(directory, file);
-        
-        if (filter && filter.isIgnored(fullPath)) {
-            continue;
-        }
-
-        const stat = fs.statSync(fullPath);
-
-        if (stat.isDirectory()) {
-            if (recursive) {
-                const subFiles = await getFiles(fullPath, true, filter);
-                results.push(...subFiles);
-            }
-        } else if (
-            file.endsWith('.ts') || 
-            file.endsWith('.js') || 
-            file.endsWith('.py') ||
-            file === 'package.json' ||
-            file === 'requirements.txt'
-        ) {
-            results.push(fullPath);
-        }
-    }
-    return results;
-}
-
-// Execute the bootstrap sequence
 bootstrap();

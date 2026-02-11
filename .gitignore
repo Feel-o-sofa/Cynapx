@@ -35,6 +35,7 @@ verify_*
 *.spec.*
 tests/
 __tests__/
+switch-env.js
 
 # Agent files
 GEMINI.md

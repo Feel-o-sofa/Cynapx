@@ -108,6 +108,17 @@ npx cynapx --path "./my-project" --port 3000
 
 ---
 
+## Uninstallation
+
+To completely remove Cynapx from your system and Gemini CLI:
+
+1. **Purge Data**: Inside Gemini CLI, run the `purge_index` tool to wipe the database for the current project.
+2. **Remove Registration**: Run `gemini mcp remove cynapx` to delete the server from Gemini's configuration.
+3. **Delete Package**: If installed globally, run `npm uninstall -g cynapx`.
+4. **Clean Global Data**: Manually delete the `~/.cynapx` directory to remove all remaining index files.
+
+---
+
 ## License
 
 Internal proprietary software. All rights reserved.

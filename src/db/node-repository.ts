@@ -5,7 +5,7 @@ import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
  * NodeRepository handles CRUD operations for the 'nodes' table.
  */
 export class NodeRepository {
-    constructor(private db: Database) { }
+    constructor(public db: Database) { }
 
     public createNode(node: CodeNode): number {
         const stmt = this.db.prepare(`

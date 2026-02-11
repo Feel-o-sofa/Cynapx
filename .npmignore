@@ -16,6 +16,7 @@ README_KR.md (if any)
 tests/
 *.test.ts
 *.spec.ts
+switch-env.js
 
 # Temporary files
 *.log
