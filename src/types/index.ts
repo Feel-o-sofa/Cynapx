@@ -38,6 +38,9 @@ export interface CodeNode {
     fan_out?: number;
     fan_in_dynamic?: number;
     fan_out_dynamic?: number;
+
+    // Semantic Clustering (Task 24)
+    cluster_id?: number;
 }
 
 /**

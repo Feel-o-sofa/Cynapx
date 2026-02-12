@@ -23,16 +23,17 @@
 *   **Task 22: 검색 및 필터링 고도화**: FTS5 최적화(Prefix 검색) 및 `search_symbols` 고급 필터링(SymbolType, Language, Visibility) 구현 완료.
 *   **Task 22.5: AI 에이전트 인터페이스 고도화**: 파서 메타데이터(Signature, Modifiers) 추출, 관계 탐색 전용 도구(callers/callees) 추가 및 Zero-Pollution 리팩토링 완료.
 *   **Task 23: 성능 및 확장성 최적화**: DB PRAGMA 튜닝, 배치 ID 사전 조회(Pre-fetching) 및 샘플링 기반 정합성 체크 도입 완료.
+*   **Task 24: 코드 의미론적 클러스터링 및 관계 추론**: Jaccard 유사도 기반 논리적 모듈 구조 자동 파악 및 Core/Utility 분류 시스템 구축 완료.
 
 ---
 
 ## 2. 현재 상태 (Current Status)
 *   **브랜드**: **Cynapx (시냅스엑스)** - 코드의 신경망을 잇는 지능형 인덱스.
 *   **통합**: 공식 MCP SDK를 통해 Gemini CLI와 안정적으로 연결됨.
-*   **리소스**: `graph://summary`, `graph://ledger`, `graph://hotspots` 제공 중.
-*   **탐색 도구**: `get_callers`, `get_callees`, `get_related_tests` 등 관계 중심 탐색 지원.
-*   **정합성**: `HealthMonitor`를 통한 실시간 정합성 자가 진단 및 자동 복구 지원.
-*   **성능**: 대용량 프로젝트 대응을 위한 메모리 맵핑(MMAP) 및 지능형 배치 처리 적용.
+*   **지능형 분석**: 의미론적 클러스터링을 통한 시스템 '심장부(Core)' 및 '유틸리티' 자동 식별 지원.
+*   **탐색 도구**: `get_callers`, `get_callees`, `perform_clustering` 등 고차원 관계 탐색 지원.
+*   **정합성**: `HealthMonitor` 및 `watcher-change` 대응 로직이 강화된 `ConsistencyChecker` 지원.
+*   **성능**: 대용량 프로젝트 대응을 위한 메모리 맵핑 및 플러그인 기반 파서 아키텍처 적용.
 
 ---
 
@@ -41,15 +42,6 @@
 ### Phase 8: Advanced Reasoning & Multilingual Expansion (지능형 추론 및 다국어 확장)
 
 시스템 언어부터 게임 스크립트까지 아우르는 지능형 코드 지식 생태계 구축을 목표로 합니다.
-
-*   **Task 23.5: Refactoring for Scale (아키텍처 고도화)**:
-    *   **LanguageProvider 아키텍처**: `TreeSitterParser`에서 언어별 로직을 독립 모듈로 분리하여 플러그인 기반 마련.
-    *   **Lazy Loading**: 분석 대상 파일 발견 시에만 해당 언어 문법을 동적 로드하여 메모리 점유율 최적화.
-    *   **EdgeType 확장**: GDScript의 Signal, Rust의 Macro/Trait 등 특수 관계 지원을 위한 엣지 스키마 확장.
-
-*   **Task 24: 코드 의미론적 클러스터링 및 관계 추론**:
-    *   물리적 파일 구조를 넘어선 **논리적 모듈 구조 자동 파악**.
-    *   함수 간 복잡한 호출 패턴 분석을 통한 '핵심 로직' 추출 가중치 시스템 도입.
 
 *   **Task 25: 대규모 다국어 지원 확장 (Multilingual Waves)**:
     *   **Wave 1 (Systems)**: C, C++, Rust, Go 지원. 시스템 언어 특유의 선언 구조 및 매크로/패키지 분석.
@@ -62,5 +54,5 @@
     *   **Plugin System**: 사용자 정의 Tree-sitter 문법 및 S-query 추가를 위한 플러그인 인터페이스 개방.
 
 ---
-**Status**: Phase 7 Integration - **COMPLETED**
-**Context**: Phase 8 planning finalized. Ready to conduct pre-requisite analysis for massive multilingual expansion.
+**Status**: Phase 8 - **Multilingual Expansion**
+**Context**: Refactoring for Scale and Semantic Clustering are finalized. Starting Task 25 Wave 1 to support systems programming languages.

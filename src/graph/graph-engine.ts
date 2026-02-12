@@ -65,6 +65,146 @@ export class GraphEngine {
     }
 
     /**
+     * Executes the semantic clustering algorithm.
+     * Groups symbols into logical clusters based on affinity and saves results to DB.
+     */
+    public async performClustering(): Promise<{ clusterCount: number, nodesClustered: number }> {
+        const nodes = this.nodeRepo.getAllNodes();
+        const edges = this.edgeRepo.getAllEdges();
+        if (nodes.length === 0) return { clusterCount: 0, nodesClustered: 0 };
+
+        // 1. Build Adjacency List for fast neighbor lookup
+        const adjacency = new Map<number, Set<number>>();
+        for (const edge of edges) {
+            if (!adjacency.has(edge.from_id)) adjacency.set(edge.from_id, new Set());
+            if (!adjacency.has(edge.to_id)) adjacency.set(edge.to_id, new Set());
+            adjacency.get(edge.from_id)!.add(edge.to_id);
+            adjacency.get(edge.to_id)!.add(edge.from_id); // Undirected for affinity
+        }
+
+        // 2. Simple Seed-based Community Detection
+        const clusters: number[][] = [];
+        const unvisited = new Set(nodes.filter(n => n.id !== undefined).map(n => n.id!));
+        const nodeMap = new Map(nodes.map(n => [n.id!, n]));
+
+        while (unvisited.size > 0) {
+            const seedId = unvisited.values().next().value as number;
+            unvisited.delete(seedId);
+
+            const currentCluster: number[] = [seedId];
+            const queue: number[] = [seedId];
+
+            while (queue.length > 0) {
+                const currentId = queue.shift()!;
+                const neighbors = adjacency.get(currentId) || new Set<number>();
+
+                for (const neighborId of neighbors) {
+                    if (unvisited.has(neighborId)) {
+                        // Calculate affinity to decide if neighbor belongs to this cluster
+                        const affinity = this.calculateAffinity(currentId, neighborId, adjacency, nodeMap);
+                        if (affinity > 0.3) { // Threshold for clustering
+                            unvisited.delete(neighborId);
+                            currentCluster.push(neighborId);
+                            queue.push(neighborId);
+                        }
+                    }
+                }
+            }
+            clusters.push(currentCluster);
+        }
+
+        // 3. Persist Clusters to Database
+        await this.persistClusters(clusters, nodeMap);
+
+        return {
+            clusterCount: clusters.length,
+            nodesClustered: nodes.length
+        };
+    }
+
+    /**
+     * Calculates logical affinity between two nodes.
+     * Uses Jaccard similarity of neighbors and file proximity.
+     */
+    private calculateAffinity(
+        idA: number,
+        idB: number,
+        adjacency: Map<number, Set<number>>,
+        nodeMap: Map<number, CodeNode>
+    ): number {
+        const neighborsA = adjacency.get(idA) || new Set();
+        const neighborsB = adjacency.get(idB) || new Set();
+
+        // Jaccard Similarity of neighbors
+        const intersection = new Set([...neighborsA].filter(x => neighborsB.has(x)));
+        const union = new Set([...neighborsA, ...neighborsB]);
+        const jaccard = union.size > 0 ? intersection.size / union.size : 0;
+
+        // File Proximity (Bonus)
+        const nodeA = nodeMap.get(idA);
+        const nodeB = nodeMap.get(idB);
+        const fileProximity = (nodeA && nodeB && nodeA.file_path === nodeB.file_path) ? 0.5 : 0;
+
+        return jaccard + fileProximity;
+    }
+
+    private async persistClusters(clusters: number[][], nodeMap: Map<number, CodeNode>): Promise<void> {
+        const db = (this.nodeRepo as any).db;
+        db.prepare('DELETE FROM logical_clusters').run();
+        db.prepare('UPDATE nodes SET cluster_id = NULL').run();
+
+        for (let i = 0; i < clusters.length; i++) {
+            const clusterNodes = clusters[i];
+            if (clusterNodes.length < 2) {
+                const node = nodeMap.get(clusterNodes[0]);
+                if (node?.symbol_type !== 'file') continue;
+            }
+
+            // Semantic Classification
+            let totalComplexity = 0;
+            let totalFanIn = 0;
+            let totalFanOut = 0;
+            let maxCoreness = -1;
+            let centralSymbol = '';
+
+            for (const id of clusterNodes) {
+                const node = nodeMap.get(id);
+                if (node) {
+                    const complexity = node.cyclomatic || 1;
+                    const fanIn = node.fan_in || 0;
+                    const fanOut = node.fan_out || 0;
+                    
+                    totalComplexity += complexity;
+                    totalFanIn += fanIn;
+                    totalFanOut += fanOut;
+
+                    const coreness = fanOut * complexity;
+                    if (coreness > maxCoreness) {
+                        maxCoreness = coreness;
+                        centralSymbol = node.qualified_name;
+                    }
+                }
+            }
+
+            const avgComplexity = totalComplexity / clusterNodes.length;
+            
+            // Classification heuristic
+            let type: 'core' | 'utility' | 'domain' = 'domain';
+            if (totalFanIn > totalFanOut * 2) type = 'utility';
+            else if (totalFanOut > 5 && avgComplexity > 5) type = 'core';
+
+            const name = `cluster_${i + 1}_${type}`;
+            const stmt = db.prepare('INSERT INTO logical_clusters (name, cluster_type, avg_complexity, central_symbol_qname) VALUES (?, ?, ?, ?)');
+            const result = stmt.run(name, type, avgComplexity, centralSymbol);
+            const clusterId = result.lastInsertRowid as number;
+
+            for (const nodeId of clusterNodes) {
+                this.nodeRepo.updateCluster(nodeId, clusterId);
+            }
+        }
+    }
+
+    /**
      * Traverses the graph starting from a specific node using the given strategy.
      * Includes a hard limit on recursion/iteration depth to preserve invariants.
      */

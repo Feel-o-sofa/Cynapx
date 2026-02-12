@@ -13,12 +13,14 @@ export class NodeRepository {
         qualified_name, symbol_type, language, file_path, start_line, end_line,
         visibility, is_generated, last_updated_commit, version,
         checksum, modifiers, signature, return_type, field_type,
-        loc, cyclomatic, fan_in, fan_out, fan_in_dynamic, fan_out_dynamic
+        loc, cyclomatic, fan_in, fan_out, fan_in_dynamic, fan_out_dynamic,
+        cluster_id
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?,
+        ?
       )
     `);
 
@@ -43,7 +45,8 @@ export class NodeRepository {
             node.fan_in || 0,
             node.fan_out || 0,
             node.fan_in_dynamic || 0,
-            node.fan_out_dynamic || 0
+            node.fan_out_dynamic || 0,
+            node.cluster_id || null
         );
 
         return result.lastInsertRowid as number;
@@ -76,6 +79,17 @@ export class NodeRepository {
         const stmt = this.db.prepare('SELECT DISTINCT file_path FROM nodes');
         const rows = stmt.all() as { file_path: string }[];
         return rows.map(r => r.file_path);
+    }
+
+    public getAllNodes(): CodeNode[] {
+        const stmt = this.db.prepare('SELECT * FROM nodes');
+        const rows = stmt.all() as any[];
+        return rows.map(row => this.mapRowToNode(row));
+    }
+
+    public updateCluster(id: number, clusterId: number | null): void {
+        const stmt = this.db.prepare('UPDATE nodes SET cluster_id = ? WHERE id = ?');
+        stmt.run(clusterId, id);
     }
 
     public updateMetrics(id: number, metrics: { loc?: number, cyclomatic?: number, fan_in?: number, fan_out?: number, fan_in_dynamic?: number, fan_out_dynamic?: number }): void {
@@ -191,7 +205,8 @@ export class NodeRepository {
             fan_in: row.fan_in,
             fan_out: row.fan_out,
             fan_in_dynamic: row.fan_in_dynamic,
-            fan_out_dynamic: row.fan_out_dynamic
+            fan_out_dynamic: row.fan_out_dynamic,
+            cluster_id: row.cluster_id
         };
     }
 }

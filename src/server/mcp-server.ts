@@ -223,6 +223,42 @@ export class McpServer {
                 };
             }
         );
+
+        this.sdkServer.registerResource(
+            "Logical Clusters",
+            "graph://clusters",
+            {
+                description: "Semantic groupings of symbols into logical modules (Core, Utility, Domain)"
+            },
+            async (uri) => {
+                try {
+                    await this.waitUntilReady();
+                } catch (e: any) {
+                    return {
+                        contents: [{
+                            uri: uri.href,
+                            mimeType: "application/json",
+                            text: JSON.stringify({ error: e.message, setup_required: true })
+                        }]
+                    };
+                }
+
+                const db = (this.graphEngine.nodeRepo as any).db;
+                const clusters = db.prepare("SELECT * FROM logical_clusters").all();
+                const result = clusters.map((c: any) => {
+                    const nodeCount = db.prepare("SELECT COUNT(*) as count FROM nodes WHERE cluster_id = ?").get(c.id).count;
+                    return { ...c, node_count: nodeCount };
+                });
+
+                return {
+                    contents: [{
+                        uri: uri.href,
+                        mimeType: "application/json",
+                        text: JSON.stringify(result, null, 2)
+                    }]
+                };
+            }
+        );
     }
 
     private registerPrompts() {
@@ -499,6 +535,25 @@ Please follow this safety protocol:
                 }).filter(n => n.qname !== undefined);
 
                 return { content: [{ type: "text", text: JSON.stringify(testNodes, null, 2) }] };
+            }
+        );
+
+        // perform_clustering
+        this.sdkServer.registerTool(
+            "perform_clustering",
+            {
+                description: "Execute the semantic clustering algorithm to group symbols into logical modules (Core, Utility, Domain).",
+                inputSchema: z.object({})
+            },
+            async () => {
+                await this.waitUntilReady();
+                const result = await this.graphEngine.performClustering();
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(result, null, 2)
+                    }]
+                };
             }
         );
 

@@ -74,9 +74,17 @@ export class ConsistencyChecker {
                         Promise.resolve(calculateFileChecksum(fullPath))
                     ]);
 
-                    const isOutdated = 
-                        fileNode.last_updated_commit !== currentGitCommit ||
-                        fileNode.checksum !== currentChecksum;
+                    // Advanced Consistency Logic:
+                    // 1. If checksum differs, it's definitely outdated.
+                    // 2. If checksum matches, but DB has a placeholder 'watcher-change', it's considered consistent with disk.
+                    // 3. If checksum matches, but DB has an old Git hash, it's outdated relative to Git (needs commit metadata update).
+                    const checksumMatches = fileNode.checksum === currentChecksum;
+                    const isWatcherChange = fileNode.last_updated_commit === 'watcher-change';
+                    
+                    let isOutdated = !checksumMatches;
+                    if (checksumMatches && !isWatcherChange && fileNode.last_updated_commit !== currentGitCommit) {
+                        isOutdated = true;
+                    }
 
                     if (isOutdated) {
                         results.outdatedFiles.push(fullPath);

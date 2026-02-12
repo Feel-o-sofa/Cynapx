@@ -28,19 +28,21 @@ CREATE TABLE IF NOT EXISTS nodes (
     fan_in INTEGER DEFAULT 0,
     fan_out INTEGER DEFAULT 0,
     fan_in_dynamic INTEGER DEFAULT 0,
-    fan_out_dynamic INTEGER DEFAULT 0
+    fan_out_dynamic INTEGER DEFAULT 0,
+
+    -- Semantic Clustering (Task 24)
+    cluster_id INTEGER,
+    FOREIGN KEY (cluster_id) REFERENCES logical_clusters(id) ON DELETE SET NULL
 );
 
--- Edge table: Stores relationships between symbols
-CREATE TABLE IF NOT EXISTS edges (
-    from_id INTEGER NOT NULL,
-    to_id INTEGER NOT NULL,
-    edge_type TEXT NOT NULL, -- defines, contains, namespace_of, inherits, implements, calls, dynamic_calls, overrides, reads, writes, tests, depends_on
-    dynamic INTEGER NOT NULL DEFAULT 0, -- boolean (0 or 1)
-    call_site_line INTEGER,
-    
-    FOREIGN KEY (from_id) REFERENCES nodes(id) ON DELETE CASCADE,
-    FOREIGN KEY (to_id) REFERENCES nodes(id) ON DELETE CASCADE
+-- Cluster table: Stores logically grouped symbols (Task 24)
+CREATE TABLE IF NOT EXISTS logical_clusters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL UNIQUE,
+    description TEXT,
+    cluster_type TEXT, -- core, utility, domain, infrastructure
+    avg_complexity REAL,
+    central_symbol_qname TEXT
 );
 
 -- Mandatory Indexes (logical_scheme_and_indexing_strat.md Section 5.1)
@@ -48,6 +50,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_qualified_name ON nodes (qualified_name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_symbol_type_qualified_name ON nodes (symbol_type, qualified_name);
 CREATE INDEX IF NOT EXISTS idx_nodes_file_path ON nodes (file_path);
 CREATE INDEX IF NOT EXISTS idx_nodes_version ON nodes (version);
+CREATE INDEX IF NOT EXISTS idx_nodes_cluster_id ON nodes (cluster_id);
 
 -- Optimization Indexes (logical_scheme_and_indexing_strat.md Section 5.2)
 CREATE INDEX IF NOT EXISTS idx_edges_from_id ON edges (from_id);

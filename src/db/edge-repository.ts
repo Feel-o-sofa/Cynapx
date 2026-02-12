@@ -22,6 +22,12 @@ export class EdgeRepository {
         );
     }
 
+    public getAllEdges(): CodeEdge[] {
+        const stmt = this.db.prepare('SELECT * FROM edges');
+        const rows = stmt.all() as any[];
+        return rows.map(row => this.mapRowToEdge(row));
+    }
+
     public getOutgoingEdges(nodeId: number, edgeType?: EdgeType): CodeEdge[] {
         let query = 'SELECT * FROM edges WHERE from_id = ?';
         const params: any[] = [nodeId];
