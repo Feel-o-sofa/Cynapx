@@ -42,6 +42,11 @@
 
 시스템 언어부터 게임 스크립트까지 아우르는 지능형 코드 지식 생태계 구축을 목표로 합니다.
 
+*   **Task 23.5: Refactoring for Scale (아키텍처 고도화)**:
+    *   **LanguageProvider 아키텍처**: `TreeSitterParser`에서 언어별 로직을 독립 모듈로 분리하여 플러그인 기반 마련.
+    *   **Lazy Loading**: 분석 대상 파일 발견 시에만 해당 언어 문법을 동적 로드하여 메모리 점유율 최적화.
+    *   **EdgeType 확장**: GDScript의 Signal, Rust의 Macro/Trait 등 특수 관계 지원을 위한 엣지 스키마 확장.
+
 *   **Task 24: 코드 의미론적 클러스터링 및 관계 추론**:
     *   물리적 파일 구조를 넘어선 **논리적 모듈 구조 자동 파악**.
     *   함수 간 복잡한 호출 패턴 분석을 통한 '핵심 로직' 추출 가중치 시스템 도입.
@@ -52,7 +57,7 @@
     *   **Wave 3 (Scripting & Game)**: Ruby, PHP, Lua, Perl, **GDScript** 지원.
     *   **GDScript 특화**: Godot 엔진의 Node 경로, Signal 연결 및 `extends` 기반 구조 분석 지원.
 
-*   **Task 26: 인덱싱 가속화 및 가용성 극대화**:
+*   **Task 26: 인덱싱 가속화 및 생태계 개방**:
     *   **Rust 기반 Core Indexer**: 대규모 멀티 언어 처리를 위한 인덱서 코어의 Rust 전환 검토.
     *   **Plugin System**: 사용자 정의 Tree-sitter 문법 및 S-query 추가를 위한 플러그인 인터페이스 개방.
 
