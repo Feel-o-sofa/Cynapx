@@ -3,6 +3,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { GraphEngine } from '../graph/graph-engine';
 import { ConsistencyChecker } from '../indexer/consistency-checker';
+import { MetadataRepository } from '../db/metadata-repository';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ANCHOR_FILE, readRegistry, addToRegistry } from '../utils/paths';
@@ -18,6 +19,7 @@ export class McpServer {
 
     constructor(
         private graphEngine: GraphEngine,
+        private metadataRepo: MetadataRepository,
         private consistencyChecker?: ConsistencyChecker
     ) {
         this.sdkServer = new SdkMcpServer({
@@ -89,6 +91,48 @@ export class McpServer {
                             nodes: nodeCount,
                             edges: edgeCount,
                             files: fileCount,
+                            last_updated: new Date().toISOString()
+                        }, null, 2)
+                    }]
+                };
+            }
+        );
+
+        this.sdkServer.registerResource(
+            "Graph Ledger",
+            "graph://ledger",
+            {
+                description: "Global call ledger and consistency metrics (Conservation Law)"
+            },
+            async (uri) => {
+                try {
+                    await this.waitUntilReady();
+                } catch (e: any) {
+                    return {
+                        contents: [{
+                            uri: uri.href,
+                            mimeType: "application/json",
+                            text: JSON.stringify({ error: e.message, setup_required: true })
+                        }]
+                    };
+                }
+
+                const stats = this.metadataRepo.getLedgerStats();
+                const isConsistent = 
+                    stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
+                    stats.metadata.total_calls_count === stats.actual.sum_fan_out &&
+                    stats.metadata.total_dynamic_calls_count === stats.actual.sum_fan_in_dynamic &&
+                    stats.metadata.total_dynamic_calls_count === stats.actual.sum_fan_out_dynamic;
+
+                return {
+                    contents: [{
+                        uri: uri.href,
+                        mimeType: "application/json",
+                        text: JSON.stringify({
+                            ledger: stats.metadata,
+                            actual_sums: stats.actual,
+                            is_consistent: isConsistent,
+                            conservation_law: "SUM(fan_in) == SUM(fan_out) == total_calls_count",
                             last_updated: new Date().toISOString()
                         }, null, 2)
                     }]

@@ -136,21 +136,33 @@ export class UpdatePipeline {
 
     /**
      * Verifies that the global ledger (metadata) matches the sum of individual node metrics.
-     * This ensures 'Conservation of Call Edges'.
+     * This ensures 'Conservation of Call Edges' for both static and dynamic calls.
      */
     private verifyLedger(): void {
         if (!this.metadataRepo) return;
         
+        // 1. Static Calls Ledger
         const totalCalls = this.metadataRepo.getTotalCallsCount();
         const sumFanIn = (this.db.prepare('SELECT SUM(fan_in) as s FROM nodes').get() as any).s || 0;
         const sumFanOut = (this.db.prepare('SELECT SUM(fan_out) as s FROM nodes').get() as any).s || 0;
 
-        console.log(`[Ledger Check] Global: ${totalCalls}, Sum(In): ${sumFanIn}, Sum(Out): ${sumFanOut}`);
+        console.log(`[Ledger Check: Static] Global: ${totalCalls}, Sum(In): ${sumFanIn}, Sum(Out): ${sumFanOut}`);
 
         if (totalCalls !== sumFanIn || totalCalls !== sumFanOut) {
-            console.error(`!!! LEDGER INCONSISTENCY DETECTED !!!`);
+            console.error(`!!! STATIC LEDGER INCONSISTENCY DETECTED !!!`);
             console.error(`Difference: In: ${sumFanIn - totalCalls}, Out: ${sumFanOut - totalCalls}`);
-            // In a production system, we might trigger a full repair here.
+        }
+
+        // 2. Dynamic Calls Ledger
+        const totalDynamicCalls = this.metadataRepo.getTotalDynamicCallsCount();
+        const sumFanInDynamic = (this.db.prepare('SELECT SUM(fan_in_dynamic) as s FROM nodes').get() as any).s || 0;
+        const sumFanOutDynamic = (this.db.prepare('SELECT SUM(fan_out_dynamic) as s FROM nodes').get() as any).s || 0;
+
+        console.log(`[Ledger Check: Dynamic] Global: ${totalDynamicCalls}, Sum(In): ${sumFanInDynamic}, Sum(Out): ${sumFanOutDynamic}`);
+
+        if (totalDynamicCalls !== sumFanInDynamic || totalDynamicCalls !== sumFanOutDynamic) {
+            console.error(`!!! DYNAMIC LEDGER INCONSISTENCY DETECTED !!!`);
+            console.error(`Difference: In: ${sumFanInDynamic - totalDynamicCalls}, Out: ${sumFanOutDynamic - totalDynamicCalls}`);
         }
     }
 

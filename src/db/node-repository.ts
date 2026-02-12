@@ -13,12 +13,12 @@ export class NodeRepository {
         qualified_name, symbol_type, language, file_path, start_line, end_line,
         visibility, is_generated, last_updated_commit, version,
         checksum, modifiers, signature, return_type, field_type,
-        loc, cyclomatic, fan_in, fan_out
+        loc, cyclomatic, fan_in, fan_out, fan_in_dynamic, fan_out_dynamic
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?
       )
     `);
 
@@ -41,7 +41,9 @@ export class NodeRepository {
             node.loc || 0,
             node.cyclomatic || 0,
             node.fan_in || 0,
-            node.fan_out || 0
+            node.fan_out || 0,
+            node.fan_in_dynamic || 0,
+            node.fan_out_dynamic || 0
         );
 
         return result.lastInsertRowid as number;
@@ -76,7 +78,7 @@ export class NodeRepository {
         return rows.map(r => r.file_path);
     }
 
-    public updateMetrics(id: number, metrics: { loc?: number, cyclomatic?: number, fan_in?: number, fan_out?: number }): void {
+    public updateMetrics(id: number, metrics: { loc?: number, cyclomatic?: number, fan_in?: number, fan_out?: number, fan_in_dynamic?: number, fan_out_dynamic?: number }): void {
         const sets: string[] = [];
         const values: any[] = [];
 
@@ -84,6 +86,8 @@ export class NodeRepository {
         if (metrics.cyclomatic !== undefined) { sets.push('cyclomatic = ?'); values.push(metrics.cyclomatic); }
         if (metrics.fan_in !== undefined) { sets.push('fan_in = ?'); values.push(metrics.fan_in); }
         if (metrics.fan_out !== undefined) { sets.push('fan_out = ?'); values.push(metrics.fan_out); }
+        if (metrics.fan_in_dynamic !== undefined) { sets.push('fan_in_dynamic = ?'); values.push(metrics.fan_in_dynamic); }
+        if (metrics.fan_out_dynamic !== undefined) { sets.push('fan_out_dynamic = ?'); values.push(metrics.fan_out_dynamic); }
 
         if (sets.length === 0) return;
 
@@ -141,7 +145,9 @@ export class NodeRepository {
             loc: row.loc,
             cyclomatic: row.cyclomatic,
             fan_in: row.fan_in,
-            fan_out: row.fan_out
+            fan_out: row.fan_out,
+            fan_in_dynamic: row.fan_in_dynamic,
+            fan_out_dynamic: row.fan_out_dynamic
         };
     }
 }

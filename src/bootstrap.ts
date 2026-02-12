@@ -121,20 +121,25 @@ Environment Variables:
         } else {
             // Placeholder graph engine if not initialized
             const dbPath = getDatabasePath(startPath); // Temporary or default
-            const tempDb = new DatabaseManager(dbPath).getDb();
-            currentGraphEngine = new GraphEngine(new NodeRepository(tempDb), new EdgeRepository(tempDb));
+            const tempDbManager = new DatabaseManager(dbPath);
+            const tempDb = tempDbManager.getDb();
+            nodeRepo = new NodeRepository(tempDb);
+            edgeRepo = new EdgeRepository(tempDb);
+            metadataRepo = new MetadataRepository(tempDb);
+            currentGraphEngine = new GraphEngine(nodeRepo, edgeRepo);
         }
 
         // Start MCP Server
         let mcpServer: McpServer | undefined;
         if (isMcpMode) {
-            mcpServer = new McpServer(currentGraphEngine!, currentConsistencyChecker);
+            mcpServer = new McpServer(currentGraphEngine!, metadataRepo!, currentConsistencyChecker);
             
             // Handle deferred initialization
             mcpServer.setOnInitialize(async (newPath) => {
                 const result = await initializeEngine(newPath);
                 // Dynamically update MCP server's references
                 (mcpServer as any).graphEngine = result.graphEngine;
+                (mcpServer as any).metadataRepo = (metadataRepo as any); // Assuming metadataRepo is updated in initializeEngine scope
                 mcpServer!.setConsistencyChecker(result.consistencyChecker);
             });
 

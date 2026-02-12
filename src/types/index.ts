@@ -36,6 +36,8 @@ export interface CodeNode {
     cyclomatic?: number;
     fan_in?: number;
     fan_out?: number;
+    fan_in_dynamic?: number;
+    fan_out_dynamic?: number;
 }
 
 /**
@@ -44,7 +46,7 @@ export interface CodeNode {
 export type EdgeType =
     | 'defines' | 'contains' | 'namespace_of'
     | 'inherits' | 'implements'
-    | 'calls' | 'overrides' | 'reads' | 'writes'
+    | 'calls' | 'dynamic_calls' | 'overrides' | 'reads' | 'writes'
     | 'tests' | 'depends_on';
 
 /**

@@ -24,4 +24,40 @@ export class MetadataRepository {
         const val = this.getValue('total_calls_count');
         return val ? parseInt(val, 10) : 0;
     }
+
+    public getTotalDynamicCallsCount(): number {
+        const val = this.getValue('total_dynamic_calls_count');
+        return val ? parseInt(val, 10) : 0;
+    }
+
+    public getLedgerStats() {
+        const metadata = {
+            total_calls_count: this.getTotalCallsCount(),
+            total_dynamic_calls_count: this.getTotalDynamicCallsCount()
+        };
+
+        const actual = this.db.prepare(`
+            SELECT 
+                SUM(fan_in) as sum_fan_in, 
+                SUM(fan_out) as sum_fan_out,
+                SUM(fan_in_dynamic) as sum_fan_in_dynamic,
+                SUM(fan_out_dynamic) as sum_fan_out_dynamic
+            FROM nodes
+        `).get() as { 
+            sum_fan_in: number, 
+            sum_fan_out: number, 
+            sum_fan_in_dynamic: number, 
+            sum_fan_out_dynamic: number 
+        };
+
+        return {
+            metadata,
+            actual: {
+                sum_fan_in: actual.sum_fan_in || 0,
+                sum_fan_out: actual.sum_fan_out || 0,
+                sum_fan_in_dynamic: actual.sum_fan_in_dynamic || 0,
+                sum_fan_out_dynamic: actual.sum_fan_out_dynamic || 0
+            }
+        };
+    }
 }

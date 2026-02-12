@@ -26,14 +26,16 @@ CREATE TABLE IF NOT EXISTS nodes (
     loc INTEGER DEFAULT 0,
     cyclomatic INTEGER DEFAULT 0,
     fan_in INTEGER DEFAULT 0,
-    fan_out INTEGER DEFAULT 0
+    fan_out INTEGER DEFAULT 0,
+    fan_in_dynamic INTEGER DEFAULT 0,
+    fan_out_dynamic INTEGER DEFAULT 0
 );
 
 -- Edge table: Stores relationships between symbols
 CREATE TABLE IF NOT EXISTS edges (
     from_id INTEGER NOT NULL,
     to_id INTEGER NOT NULL,
-    edge_type TEXT NOT NULL, -- defines, contains, namespace_of, inherits, implements, calls, overrides, reads, writes, tests, depends_on
+    edge_type TEXT NOT NULL, -- defines, contains, namespace_of, inherits, implements, calls, dynamic_calls, overrides, reads, writes, tests, depends_on
     dynamic INTEGER NOT NULL DEFAULT 0, -- boolean (0 or 1)
     call_site_line INTEGER,
     
@@ -86,35 +88,56 @@ CREATE TABLE IF NOT EXISTS index_metadata (
 
 -- Initialize global counters
 INSERT OR IGNORE INTO index_metadata (key, value) VALUES ('total_calls_count', '0');
+INSERT OR IGNORE INTO index_metadata (key, value) VALUES ('total_dynamic_calls_count', '0');
 
 -- Trigger to auto-update fan_in/out metrics on nodes AND global counter when an edge is inserted
 CREATE TRIGGER IF NOT EXISTS edges_ai_metrics AFTER INSERT ON edges
-WHEN new.edge_type = 'calls'
 BEGIN
-  UPDATE nodes SET fan_out = fan_out + 1 WHERE id = new.from_id;
-  UPDATE nodes SET fan_in = fan_in + 1 WHERE id = new.to_id;
-  UPDATE index_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'total_calls_count';
+  -- Handle Static Calls
+  UPDATE nodes SET fan_out = fan_out + 1 WHERE id = new.from_id AND new.edge_type = 'calls';
+  UPDATE nodes SET fan_in = fan_in + 1 WHERE id = new.to_id AND new.edge_type = 'calls';
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'total_calls_count' AND new.edge_type = 'calls';
+
+  -- Handle Dynamic Calls
+  UPDATE nodes SET fan_out_dynamic = fan_out_dynamic + 1 WHERE id = new.from_id AND new.edge_type = 'dynamic_calls';
+  UPDATE nodes SET fan_in_dynamic = fan_in_dynamic + 1 WHERE id = new.to_id AND new.edge_type = 'dynamic_calls';
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'total_dynamic_calls_count' AND new.edge_type = 'dynamic_calls';
 END;
 
 -- Trigger to auto-update fan_in/out metrics on nodes AND global counter when an edge is deleted
 CREATE TRIGGER IF NOT EXISTS edges_ad_metrics AFTER DELETE ON edges
-WHEN old.edge_type = 'calls'
 BEGIN
-  UPDATE nodes SET fan_out = fan_out - 1 WHERE id = old.from_id;
-  UPDATE nodes SET fan_in = fan_in - 1 WHERE id = old.to_id;
-  UPDATE index_metadata SET value = CAST(value AS INTEGER) - 1 WHERE key = 'total_calls_count';
+  -- Handle Static Calls
+  UPDATE nodes SET fan_out = fan_out - 1 WHERE id = old.from_id AND old.edge_type = 'calls';
+  UPDATE nodes SET fan_in = fan_in - 1 WHERE id = old.to_id AND old.edge_type = 'calls';
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) - 1 WHERE key = 'total_calls_count' AND old.edge_type = 'calls';
+
+  -- Handle Dynamic Calls
+  UPDATE nodes SET fan_out_dynamic = fan_out_dynamic - 1 WHERE id = old.from_id AND old.edge_type = 'dynamic_calls';
+  UPDATE nodes SET fan_in_dynamic = fan_in_dynamic - 1 WHERE id = old.to_id AND old.edge_type = 'dynamic_calls';
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) - 1 WHERE key = 'total_dynamic_calls_count' AND old.edge_type = 'dynamic_calls';
 END;
 
--- Handle edge type updates (rare but possible)
+-- Handle edge type updates
 CREATE TRIGGER IF NOT EXISTS edges_au_metrics AFTER UPDATE ON edges
 BEGIN
-  -- If type changed from non-calls to calls
+  -- 1. Static Calls Transition
+  -- Non-calls -> calls
   UPDATE nodes SET fan_out = fan_out + 1 WHERE id = new.from_id AND old.edge_type != 'calls' AND new.edge_type = 'calls';
   UPDATE nodes SET fan_in = fan_in + 1 WHERE id = new.to_id AND old.edge_type != 'calls' AND new.edge_type = 'calls';
   UPDATE index_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'total_calls_count' AND old.edge_type != 'calls' AND new.edge_type = 'calls';
-  
-  -- If type changed from calls to non-calls
+  -- Calls -> non-calls
   UPDATE nodes SET fan_out = fan_out - 1 WHERE id = old.from_id AND old.edge_type = 'calls' AND new.edge_type != 'calls';
   UPDATE nodes SET fan_in = fan_in - 1 WHERE id = old.to_id AND old.edge_type = 'calls' AND new.edge_type != 'calls';
   UPDATE index_metadata SET value = CAST(value AS INTEGER) - 1 WHERE key = 'total_calls_count' AND old.edge_type = 'calls' AND new.edge_type != 'calls';
+
+  -- 2. Dynamic Calls Transition
+  -- Non-dynamic -> dynamic_calls
+  UPDATE nodes SET fan_out_dynamic = fan_out_dynamic + 1 WHERE id = new.from_id AND old.edge_type != 'dynamic_calls' AND new.edge_type = 'dynamic_calls';
+  UPDATE nodes SET fan_in_dynamic = fan_in_dynamic + 1 WHERE id = new.to_id AND old.edge_type != 'dynamic_calls' AND new.edge_type = 'dynamic_calls';
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) + 1 WHERE key = 'total_dynamic_calls_count' AND old.edge_type != 'dynamic_calls' AND new.edge_type = 'dynamic_calls';
+  -- Dynamic_calls -> non-dynamic
+  UPDATE nodes SET fan_out_dynamic = fan_out_dynamic - 1 WHERE id = old.from_id AND old.edge_type = 'dynamic_calls' AND new.edge_type != 'dynamic_calls';
+  UPDATE nodes SET fan_in_dynamic = fan_in_dynamic - 1 WHERE id = old.to_id AND old.edge_type = 'dynamic_calls' AND new.edge_type != 'dynamic_calls';
+  UPDATE index_metadata SET value = CAST(value AS INTEGER) - 1 WHERE key = 'total_dynamic_calls_count' AND old.edge_type = 'dynamic_calls' AND new.edge_type != 'dynamic_calls';
 END;
