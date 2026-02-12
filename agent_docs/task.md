@@ -18,6 +18,8 @@
 *   **Task 17: Capabilities 확장**: `graph://ledger`, `graph://hotspots` 리소스 및 `/refactor-safety` 프롬프트 구축 완료.
 *   **Task 18: 응답 고도화 (Rich Content)**: Mermaid 스타일링 적용 및 `get_symbol_details` 가독성 개선 완료.
 *   **Task 19: 도구 스키마 및 설명 정교화 (1차)**: 모든 도구에 Zod 스키마 및 상세 Docstring 적용 완료.
+*   **Task 20: 수명 주기 및 안정성 고도화**: Resource Cleanup, Lifecycle Manager, 구조화된 Error Reporting 도입 완료.
+*   **Task 21: 보안 및 환경 최적화**: SecurityProvider를 통한 Sandbox Policy 수립 및 Project Registry 메타데이터 확장 완료.
 
 ---
 
@@ -36,17 +38,13 @@
 
 시스템의 **안정성(Stability) -> 보안(Security) -> 성능(Performance)** 순으로 우선순위를 재정렬하여 진행합니다.
 
-*   **Task 20: 수명 주기 및 안정성 고도화 (완료)**:
-    *   **Resource Cleanup**: 프로젝트 전환 시 SQLite 연결, WorkerPool, FileWatcher의 완벽한 자원 해제 보장. (완료)
-    *   **Lifecycle Manager**: 모든 핵심 컴포넌트의 시작과 종료를 관리하는 통합 관리자 도입. (완료)
-    *   **Error Reporting**: AI 에이전트가 이해하기 쉬운 구조화된 에러 응답(`error_code`) 도입. (완료)
-*   **Task 21: 보안 및 환경 최적화 (우선순위: 2)**:
-    *   **Sandbox Policy**: 레지스트리와 앵커 경로를 기반으로 한 중앙 집중식 파일 접근 권한 검증(`SecurityProvider`). (대기)
-    *   **Project Registry**: 여러 프로젝트의 메타데이터 관리 및 환경별 격리 수준 강화. (진행 중)
-*   **Task 22: 검색 및 필터링 고도화 (우선순위: 3)**:
-    *   **FTS5 최적화**: 심볼 검색 시 접두사 인덱싱 및 가중치 부여를 통한 성능 개선. (대기)
-    *   **Advanced Filtering**: `search_symbols`에 언어, 가시성, 심볼 타입 기반의 고급 필터 옵션 추가. (대기)
+*   **Task 22: 검색 및 필터링 고도화 (우선순위: 1)**:
+    *   **FTS5 최적화**: SQLite FTS5 도입을 통한 접두사(Prefix) 검색 지원 및 검색어 매칭도 기반 가중치 랭킹 시스템 구축.
+    *   **Advanced Filtering**: `search_symbols` 도구에 Symbol Type, Language, Visibility 기반의 고급 필터 옵션 추가하여 검색 노이즈 최소화.
+    *   **Context Efficiency**: 정교한 검색을 통해 AI 에이전트의 불필요한 파일 접근을 줄이고 토큰 사용 효율성 극대화.
+*   **Task 23: 성능 및 확장성 최적화 (우선순위: 2)**:
+    *   대규모 프로젝트를 위한 워커 풀 성능 튜닝 및 DB 인덱스 최적화.
 
 ---
-**Status**: Phase 7 Integration - Stabilization Phase
-**Context**: Re-prioritized tasks based on architectural analysis. Focus shifted to Lifecycle management and Security boundaries.
+**Status**: Phase 7 Integration - Performance Phase
+**Context**: Task 21 completed. Starting Task 22 to enhance search intelligence and filtering capabilities.

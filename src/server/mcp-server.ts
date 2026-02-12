@@ -8,6 +8,7 @@ import { CynapxErrorCode } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ANCHOR_FILE, readRegistry, addToRegistry } from '../utils/paths';
+import { SecurityProvider } from '../utils/security';
 
 export class McpServer {
     private sdkServer: SdkMcpServer;
@@ -17,6 +18,7 @@ export class McpServer {
     private isInitialized: boolean = false;
     private onInitializeCallback?: (newPath: string) => Promise<void>;
     private onPurgeCallback?: () => Promise<void>;
+    private securityProvider?: SecurityProvider;
 
     constructor(
         private graphEngine: GraphEngine,
@@ -259,6 +261,10 @@ Please follow this safety protocol:
         this.consistencyChecker = checker;
     }
 
+    public setSecurityProvider(provider: SecurityProvider) {
+        this.securityProvider = provider;
+    }
+
     private registerTools() {
         // get_setup_context
         this.sdkServer.registerTool(
@@ -397,12 +403,11 @@ Please follow this safety protocol:
 
                 // Read source code from file with Path Traversal Protection
                 try {
-                    const projectPath = (this.consistencyChecker as any)?.projectPath;
-                    const absolutePath = path.resolve(node.file_path);
+                    if (this.securityProvider) {
+                        this.securityProvider.validatePath(node.file_path);
+                    }
                     
-                    if (projectPath && !absolutePath.toLowerCase().startsWith(path.resolve(projectPath).toLowerCase())) {
-                        text += `\n> [!CAUTION]\n> **Security Warning**: Access to file outside project directory denied. (ErrorCode: ${CynapxErrorCode.PATH_TRAVERSAL_DENIED})\n`;
-                    } else if (fs.existsSync(node.file_path)) {
+                    if (fs.existsSync(node.file_path)) {
                         const content = fs.readFileSync(node.file_path, 'utf8');
                         const lines = content.split('\n');
                         const sourceCode = lines.slice(node.start_line - 1, node.end_line).join('\n');
@@ -411,8 +416,12 @@ Please follow this safety protocol:
                                      (node.file_path.endsWith('.ts') || node.file_path.endsWith('.tsx')) ? 'typescript' : 'javascript';
                         text += `\n#### Source Code Snippet:\n\`\`\`${lang}\n${sourceCode}\n\`\`\`\n`;
                     }
-                } catch (err) {
-                    text += `\n> [!WARNING]\n> Could not read source code: ${err}\n`;
+                } catch (err: any) {
+                    if (err.code === CynapxErrorCode.PATH_TRAVERSAL_DENIED) {
+                        text += `\n> [!CAUTION]\n> **Security Warning**: Access to file outside project directory denied. (ErrorCode: ${CynapxErrorCode.PATH_TRAVERSAL_DENIED})\n`;
+                    } else {
+                        text += `\n> [!WARNING]\n> Could not read source code: ${err}\n`;
+                    }
                 }
 
                 return {

@@ -16,6 +16,7 @@ import { ApiServer } from './server/api-server';
 import { McpServer } from './server/mcp-server';
 import { FileWatcher } from './watcher/file-watcher';
 import { LifecycleManager } from './utils/lifecycle-manager';
+import { SecurityProvider } from './utils/security';
 import { getDatabasePath, findProjectAnchor } from './utils/paths';
 import { FileFilter } from './utils/file-filter';
 import * as fs from 'fs';
@@ -111,16 +112,20 @@ Environment Variables:
             watcher = lifecycle.track(new FileWatcher(updatePipeline, projectPath));
             watcher.start(projectPath);
             
-            return { graphEngine, consistencyChecker, metadataRepo };
+            const securityProvider = new SecurityProvider(projectPath);
+            
+            return { graphEngine, consistencyChecker, metadataRepo, securityProvider };
         };
 
         let currentGraphEngine: GraphEngine | undefined;
         let currentConsistencyChecker: ConsistencyChecker | undefined;
+        let currentSecurityProvider: SecurityProvider | undefined;
 
         if (anchorPath) {
             const result = await initializeEngine(anchorPath);
             currentGraphEngine = result.graphEngine;
             currentConsistencyChecker = result.consistencyChecker;
+            currentSecurityProvider = result.securityProvider;
         } else {
             // Placeholder graph engine if not initialized
             const dbPath = getDatabasePath(startPath); // Temporary or default
@@ -136,6 +141,9 @@ Environment Variables:
         let mcpServer: McpServer | undefined;
         if (isMcpMode) {
             mcpServer = new McpServer(currentGraphEngine!, metadataRepo!, currentConsistencyChecker);
+            if (currentSecurityProvider) {
+                mcpServer.setSecurityProvider(currentSecurityProvider);
+            }
             
             // Handle deferred initialization
             mcpServer.setOnInitialize(async (newPath) => {
@@ -146,6 +154,7 @@ Environment Variables:
                 (mcpServer as any).graphEngine = result.graphEngine;
                 (mcpServer as any).metadataRepo = result.metadataRepo;
                 mcpServer!.setConsistencyChecker(result.consistencyChecker);
+                mcpServer!.setSecurityProvider(result.securityProvider);
             });
 
             // Handle index purging

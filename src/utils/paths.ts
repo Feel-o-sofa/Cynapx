@@ -20,8 +20,15 @@ export function getRegistryPath(): string {
 }
 
 export interface ProjectEntry {
+    name: string;
     path: string;
-    last_accessed: string;
+    db_path: string;
+    last_indexed_at?: string;
+    last_accessed_at: string;
+}
+
+export function getProjectName(projectPath: string): string {
+    return path.basename(projectPath);
 }
 
 export function readRegistry(): ProjectEntry[] {
@@ -36,13 +43,31 @@ export function readRegistry(): ProjectEntry[] {
 
 export function addToRegistry(projectPath: string): void {
     const absolutePath = path.resolve(projectPath);
+    const projectName = getProjectName(absolutePath);
+    const dbPath = getDatabasePath(absolutePath);
+    
     let registry = readRegistry();
     const index = registry.findIndex(p => p.path.toLowerCase() === absolutePath.toLowerCase());
     
+    const now = new Date().toISOString();
+    
     if (index !== -1) {
-        registry[index].last_accessed = new Date().toISOString();
+        // Update existing entry and clean up old fields
+        const oldEntry = registry[index];
+        registry[index] = { 
+            name: projectName,
+            path: absolutePath, 
+            db_path: dbPath,
+            last_indexed_at: oldEntry.last_indexed_at,
+            last_accessed_at: now 
+        };
     } else {
-        registry.push({ path: absolutePath, last_accessed: new Date().toISOString() });
+        registry.push({ 
+            name: projectName,
+            path: absolutePath, 
+            db_path: dbPath,
+            last_accessed_at: now 
+        });
     }
     
     fs.writeFileSync(getRegistryPath(), JSON.stringify(registry, null, 2), 'utf8');

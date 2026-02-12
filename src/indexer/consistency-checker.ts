@@ -5,6 +5,7 @@ import { GitService } from './git-service';
 import { UpdatePipeline } from './update-pipeline';
 import { FileFilter } from '../utils/file-filter';
 import { calculateFileChecksum } from '../utils/checksum';
+import { SecurityProvider } from '../utils/security';
 import { FileChangeEvent } from './types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -13,12 +14,16 @@ import * as path from 'path';
  * ConsistencyChecker validates the integrity of the knowledge graph against the file system and Git.
  */
 export class ConsistencyChecker {
+    private securityProvider: SecurityProvider;
+
     constructor(
         private nodeRepo: NodeRepository,
         private gitService: GitService,
         private pipeline: UpdatePipeline,
         private projectPath: string
-    ) { }
+    ) { 
+        this.securityProvider = new SecurityProvider(projectPath);
+    }
 
     /**
      * Performs a full consistency check and returns the results.
@@ -130,6 +135,8 @@ export class ConsistencyChecker {
 
     private async getFiles(directory: string, recursive: boolean, filter?: FileFilter): Promise<string[]> {
         const results: string[] = [];
+        this.securityProvider.validatePath(directory);
+        
         if (!fs.existsSync(directory)) return results;
         
         const files = fs.readdirSync(directory);
