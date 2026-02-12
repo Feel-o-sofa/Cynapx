@@ -33,3 +33,6 @@ recalculate-metrics.js
 *.log
 .DS_Store
 .server-port
+
+# Reports
+reports/

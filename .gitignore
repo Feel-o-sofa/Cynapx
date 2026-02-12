@@ -44,3 +44,6 @@ switch-env.js
 GEMINI.md
 agent_docs/
 .gemini/
+
+# Reports
+reports/
