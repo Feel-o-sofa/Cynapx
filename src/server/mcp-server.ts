@@ -45,6 +45,36 @@ export class McpServer {
             this.resolveReady();
             console.error(`Cynapx MCP Server marked as READY (Initialized: ${initialized})`);
         }
+        if (initialized) {
+            this.startHealthMonitor();
+        }
+    }
+
+    private startHealthMonitor() {
+        // Run health check every 5 minutes
+        setInterval(async () => {
+            if (this.isCheckingConsistency || !this.consistencyChecker) return;
+
+            const stats = this.metadataRepo.getLedgerStats();
+            const isConsistent = 
+                stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
+                stats.metadata.total_calls_count === stats.actual.sum_fan_out &&
+                stats.metadata.total_dynamic_calls_count === stats.actual.sum_fan_in_dynamic &&
+                stats.metadata.total_dynamic_calls_count === stats.actual.sum_fan_out_dynamic;
+
+            if (!isConsistent) {
+                console.error("HealthMonitor: Ledger inconsistency detected! Triggering auto-repair...");
+                this.isCheckingConsistency = true;
+                try {
+                    await this.consistencyChecker.validate(true, false);
+                    console.error("HealthMonitor: Auto-repair completed successfully.");
+                } catch (err) {
+                    console.error(`HealthMonitor: Auto-repair failed: ${err}`);
+                } finally {
+                    this.isCheckingConsistency = false;
+                }
+            }
+        }, 5 * 60 * 1000);
     }
 
     public setOnInitialize(callback: (newPath: string) => Promise<void>) {
@@ -58,10 +88,18 @@ export class McpServer {
     private async waitUntilReady() {
         await this.readyPromise;
         if (!this.isInitialized) {
-            throw {
-                error_code: CynapxErrorCode.INITIALIZATION_REQUIRED,
-                message: "No .cynapx-config found. Please use 'initialize_project' to setup the project."
-            };
+            // Check registry as a fallback for Zero-Pollution mode
+            const currentPath = process.cwd();
+            const registry = readRegistry();
+            const isRegistered = registry.some(p => currentPath.toLowerCase().startsWith(p.path.toLowerCase()));
+            
+            if (!isRegistered) {
+                throw {
+                    error_code: CynapxErrorCode.INITIALIZATION_REQUIRED,
+                    message: "No .cynapx-config found and project not in registry. Please use 'initialize_project' to setup the project."
+                };
+            }
+            this.isInitialized = true;
         }
     }
 
@@ -297,10 +335,11 @@ Please follow this safety protocol:
                 description: "Initialize a project by creating a .cynapx-config file and registering it. This activates the analysis engine.",
                 inputSchema: z.object({
                     mode: z.enum(['current', 'existing', 'custom']).describe("Setup mode"),
-                    path: z.string().optional().describe("Absolute path for 'existing' or 'custom' mode")
+                    path: z.string().optional().describe("Absolute path for 'existing' or 'custom' mode"),
+                    zero_pollution: z.boolean().optional().default(false).describe("If true, do NOT create .cynapx-config file in the project directory (Zero-Pollution mode)")
                 })
             },
-            async ({ mode, path: targetPath }) => {
+            async ({ mode, path: targetPath, zero_pollution }) => {
                 let projectPath = process.cwd();
                 if (mode === 'existing' || mode === 'custom') {
                     if (!targetPath) return { isError: true, content: [{ type: "text", text: "Path is required for this mode." }] };
@@ -311,9 +350,12 @@ Please follow this safety protocol:
                     if (!fs.existsSync(projectPath)) {
                         fs.mkdirSync(projectPath, { recursive: true });
                     }
-                    const anchorPath = path.join(projectPath, ANCHOR_FILE);
-                    if (!fs.existsSync(anchorPath)) {
-                        fs.writeFileSync(anchorPath, JSON.stringify({ created_at: new Date().toISOString() }, null, 2));
+
+                    if (!zero_pollution) {
+                        const anchorPath = path.join(projectPath, ANCHOR_FILE);
+                        if (!fs.existsSync(anchorPath)) {
+                            fs.writeFileSync(anchorPath, JSON.stringify({ created_at: new Date().toISOString() }, null, 2));
+                        }
                     }
                     
                     addToRegistry(projectPath);
@@ -325,7 +367,7 @@ Please follow this safety protocol:
                     this.markReady(true);
 
                     return {
-                        content: [{ type: "text", text: `Successfully initialized project at ${projectPath}. Analysis engine is now active.` }]
+                        content: [{ type: "text", text: `Successfully initialized project at ${projectPath}${zero_pollution ? ' (Zero-Pollution Mode)' : ''}. Analysis engine is now active.` }]
                     };
                 } catch (err) {
                     return { isError: true, content: [{ type: "text", text: `Initialization failed: ${err}` }] };
@@ -361,10 +403,102 @@ Please follow this safety protocol:
                             type: n.symbol_type,
                             file: n.file_path,
                             language: n.language,
-                            visibility: n.visibility
+                            visibility: n.visibility,
+                            signature: n.signature,
+                            return_type: n.return_type
                         })), null, 2)
                     }]
                 };
+            }
+        );
+
+        // get_callers
+        this.sdkServer.registerTool(
+            "get_callers",
+            {
+                description: "Get all direct callers of a specific symbol.",
+                inputSchema: z.object({
+                    qualified_name: z.string().describe("The qualified name of the symbol to find callers for")
+                })
+            },
+            async ({ qualified_name }) => {
+                await this.waitUntilReady();
+                const node = this.graphEngine.getNodeByQualifiedName(qualified_name);
+                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                
+                const edges = this.graphEngine.getIncomingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
+                const callers = edges.map(e => {
+                    const callerNode = this.graphEngine.getNodeById(e.from_id);
+                    return {
+                        qname: callerNode?.qualified_name,
+                        type: callerNode?.symbol_type,
+                        file: callerNode?.file_path,
+                        line: e.call_site_line,
+                        dynamic: e.dynamic
+                    };
+                });
+                return { content: [{ type: "text", text: JSON.stringify(callers, null, 2) }] };
+            }
+        );
+
+        // get_callees
+        this.sdkServer.registerTool(
+            "get_callees",
+            {
+                description: "Get all symbols directly called by a specific symbol.",
+                inputSchema: z.object({
+                    qualified_name: z.string().describe("The qualified name of the symbol to find callees for")
+                })
+            },
+            async ({ qualified_name }) => {
+                await this.waitUntilReady();
+                const node = this.graphEngine.getNodeByQualifiedName(qualified_name);
+                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                
+                const edges = this.graphEngine.getOutgoingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
+                const callees = edges.map(e => {
+                    const calleeNode = this.graphEngine.getNodeById(e.to_id);
+                    return {
+                        qname: calleeNode?.qualified_name,
+                        type: calleeNode?.symbol_type,
+                        file: calleeNode?.file_path,
+                        line: e.call_site_line,
+                        dynamic: e.dynamic
+                    };
+                });
+                return { content: [{ type: "text", text: JSON.stringify(callees, null, 2) }] };
+            }
+        );
+
+        // get_related_tests
+        this.sdkServer.registerTool(
+            "get_related_tests",
+            {
+                description: "Get all test symbols associated with a specific production symbol.",
+                inputSchema: z.object({
+                    qualified_name: z.string().describe("The qualified name of the production symbol")
+                })
+            },
+            async ({ qualified_name }) => {
+                await this.waitUntilReady();
+                const node = this.graphEngine.getNodeByQualifiedName(qualified_name);
+                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                
+                // Find edges where edge_type is 'tests'
+                const incomingTests = this.graphEngine.getIncomingEdges(node.id).filter(e => e.edge_type === 'tests');
+                const outgoingTests = this.graphEngine.getOutgoingEdges(node.id).filter(e => e.edge_type === 'tests');
+                
+                const testNodes = [...incomingTests, ...outgoingTests].map(e => {
+                    const testId = e.edge_type === 'tests' ? (incomingTests.includes(e) ? e.from_id : e.to_id) : -1;
+                    const testNode = this.graphEngine.getNodeById(testId);
+                    return {
+                        qname: testNode?.qualified_name,
+                        file: testNode?.file_path,
+                        type: testNode?.symbol_type
+                    };
+                }).filter(n => n.qname !== undefined);
+
+                return { content: [{ type: "text", text: JSON.stringify(testNodes, null, 2) }] };
             }
         );
 
@@ -398,6 +532,10 @@ Please follow this safety protocol:
 
                 let text = `### Symbol: ${node.qualified_name}\n`;
                 text += `- **Type**: \`${node.symbol_type}\`\n`;
+                if (node.modifiers && node.modifiers.length > 0) text += `- **Modifiers**: \`${node.modifiers.join(', ')}\`\n`;
+                if (node.signature) text += `- **Signature**: \`${node.signature}\`\n`;
+                if (node.return_type) text += `- **Return Type**: \`${node.return_type}\`\n`;
+                if (node.field_type) text += `- **Field Type**: \`${node.field_type}\`\n`;
                 text += `- **File**: \`${node.file_path}\` (line ${node.start_line}-${node.end_line})\n`;
                 
                 text += `\n#### Metrics:\n`;

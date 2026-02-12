@@ -75,6 +75,13 @@ export function addToRegistry(projectPath: string): void {
 
 export function findProjectAnchor(startPath: string): string | null {
     let current = path.resolve(startPath);
+    
+    // First, check central registry (Zero-Pollution Mode)
+    const registry = readRegistry();
+    const registeredProject = registry.find(p => current.toLowerCase().startsWith(p.path.toLowerCase()));
+    if (registeredProject) return registeredProject.path;
+
+    // Second, look for anchor file upwards
     while (true) {
         const anchorPath = path.join(current, ANCHOR_FILE);
         if (fs.existsSync(anchorPath)) {

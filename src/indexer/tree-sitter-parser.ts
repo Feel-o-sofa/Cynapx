@@ -30,16 +30,29 @@ export class TreeSitterParser implements CodeParser {
     private getQuery(extension: string, language: any): Parser.Query {
         const queryStrings: Record<string, string> = {
             py: `
-                (function_definition name: (identifier) @function.name) @function.def
+                (function_definition 
+                    name: (identifier) @function.name 
+                    parameters: (parameters) @function.params
+                    return_type: (type)? @function.return) @function.def
                 (class_definition name: (identifier) @class.name) @class.def
                 (call function: (identifier) @call.name) @call.expr
                 (import_statement) @import.stmt
                 (import_from_statement) @import.from_stmt
             `,
             ts: `
-                (class_declaration name: (identifier) @class.name) @class.def
-                (method_definition name: (property_identifier) @method.name) @method.def
-                (function_declaration name: (identifier) @function.name) @function.def
+                (class_declaration 
+                    name: (identifier) @class.name
+                    (modifiers)? @class.modifiers) @class.def
+                (method_definition 
+                    name: (property_identifier) @method.name
+                    parameters: (formal_parameters) @method.params
+                    return_type: (type_annotation)? @method.return
+                    (modifiers)? @method.modifiers) @method.def
+                (function_declaration 
+                    name: (identifier) @function.name
+                    parameters: (formal_parameters) @function.params
+                    return_type: (type_annotation)? @function.return
+                    (modifiers)? @function.modifiers) @function.def
                 (call_expression function: (identifier) @call.name) @call.expr
                 (import_statement source: (string) @import.name)
             `,
@@ -90,8 +103,7 @@ export class TreeSitterParser implements CodeParser {
         });
 
         // 2. Extract Symbols and Calls using Matches
-        // Map to find current function context for 'from_qname'
-        const rangeToSymbolMap = new Map<string, string>(); // 'startLine-endLine' -> qname
+        const rangeToSymbolMap = new Map<string, string>(); 
 
         // First pass: Definitions
         for (const match of matches) {
@@ -105,6 +117,15 @@ export class TreeSitterParser implements CodeParser {
                 const type = this.c_to_symbol_type(defCapture.name);
                 const qname = `${filePath}#${name}`;
 
+                // Extract Metadata
+                const paramsCapture = captures.find(c => c.name.endsWith('.params'));
+                const returnCapture = captures.find(c => c.name.endsWith('.return'));
+                const modifiersCapture = captures.find(c => c.name.endsWith('.modifiers'));
+
+                const signature = paramsCapture ? `${name}${paramsCapture.node.text}` : undefined;
+                const returnType = returnCapture ? returnCapture.node.text.replace(/^[:\s->]+/, '') : undefined;
+                const modifiers = modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : undefined;
+
                 nodes.push({
                     qualified_name: qname,
                     symbol_type: type,
@@ -117,7 +138,10 @@ export class TreeSitterParser implements CodeParser {
                     last_updated_commit: commit,
                     version: version,
                     loc: node.endPosition.row - node.startPosition.row + 1,
-                    cyclomatic: this.calculateCC(node)
+                    cyclomatic: this.calculateCC(node),
+                    signature,
+                    return_type: returnType,
+                    modifiers
                 });
 
                 edges.push({
@@ -127,10 +151,7 @@ export class TreeSitterParser implements CodeParser {
                     dynamic: false
                 } as any);
 
-                // Index range for context lookup (1-based to match callLine)
-                const startLine1 = node.startPosition.row + 1;
-                const endLine1 = node.endPosition.row + 1;
-                const rangeKey = `${startLine1}-${endLine1}`;
+                const rangeKey = `${node.startPosition.row + 1}-${node.endPosition.row + 1}`;
                 rangeToSymbolMap.set(rangeKey, qname);
             }
         }

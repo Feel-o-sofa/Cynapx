@@ -166,6 +166,26 @@ export class TypeScriptParser implements CodeParser {
         const { line: startLine } = sourceFile.getLineAndCharacterOfPosition(node.getStart());
         const { line: endLine } = sourceFile.getLineAndCharacterOfPosition(node.getEnd());
 
+        let signature: string | undefined;
+        let returnType: string | undefined;
+        let fieldType: string | undefined;
+        const modifiers = ts.getModifiers(node as any)?.map(m => m.getText());
+
+        if (this.typeChecker) {
+            if (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node) || ts.isMethodSignature(node)) {
+                const tsSymbol = this.typeChecker.getSymbolAtLocation((node as any).name);
+                const tsType = this.typeChecker.getTypeOfSymbolAtLocation(tsSymbol!, (node as any).name);
+                const signatures = tsType.getCallSignatures();
+                if (signatures.length > 0) {
+                    signature = this.typeChecker.signatureToString(signatures[0]);
+                    returnType = this.typeChecker.typeToString(signatures[0].getReturnType());
+                }
+            } else if (ts.isPropertyDeclaration(node) || ts.isPropertySignature(node) || ts.isVariableDeclaration(node)) {
+                const tsType = this.typeChecker.getTypeAtLocation(node);
+                fieldType = this.typeChecker.typeToString(tsType);
+            }
+        }
+
         return {
             qualified_name: qname,
             symbol_type: type,
@@ -178,7 +198,11 @@ export class TypeScriptParser implements CodeParser {
             last_updated_commit: commit,
             version: version,
             loc: endLine - startLine + 1,
-            cyclomatic: MetricsCalculator.calculateCyclomaticComplexity(node)
+            cyclomatic: MetricsCalculator.calculateCyclomaticComplexity(node),
+            signature,
+            return_type: returnType,
+            field_type: fieldType,
+            modifiers
         };
     }
 
