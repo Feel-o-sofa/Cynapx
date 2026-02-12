@@ -139,6 +139,46 @@ export class McpServer {
                 };
             }
         );
+
+        this.sdkServer.registerResource(
+            "Graph Hotspots",
+            "graph://hotspots",
+            {
+                description: "Top technical debt hotspots (High complexity and coupling)"
+            },
+            async (uri) => {
+                try {
+                    await this.waitUntilReady();
+                } catch (e: any) {
+                    return {
+                        contents: [{
+                            uri: uri.href,
+                            mimeType: "application/json",
+                            text: JSON.stringify({ error: e.message, setup_required: true })
+                        }]
+                    };
+                }
+
+                const db = (this.graphEngine.nodeRepo as any).db;
+                
+                const topComplexity = db.prepare("SELECT qualified_name, symbol_type, cyclomatic FROM nodes ORDER BY cyclomatic DESC LIMIT 10").all();
+                const topFanIn = db.prepare("SELECT qualified_name, symbol_type, fan_in FROM nodes ORDER BY fan_in DESC LIMIT 10").all();
+                const topFanOut = db.prepare("SELECT qualified_name, symbol_type, fan_out FROM nodes ORDER BY fan_out DESC LIMIT 10").all();
+
+                return {
+                    contents: [{
+                        uri: uri.href,
+                        mimeType: "application/json",
+                        text: JSON.stringify({
+                            by_complexity: topComplexity,
+                            by_fan_in: topFanIn,
+                            by_fan_out: topFanOut,
+                            last_updated: new Date().toISOString()
+                        }, null, 2)
+                    }]
+                };
+            }
+        );
     }
 
     private registerPrompts() {
@@ -177,6 +217,33 @@ export class McpServer {
                         content: {
                             type: "text",
                             text: "Please run a consistency check on the knowledge graph using the 'check_consistency' tool and report any issues found."
+                        }
+                    }]
+                };
+            }
+        );
+
+        this.sdkServer.registerPrompt(
+            "refactor-safety",
+            {
+                description: "Perform a comprehensive safety check before refactoring a symbol",
+                argsSchema: {
+                    qualified_name: z.string().describe("The qualified name of the symbol to be refactored")
+                }
+            },
+            async ({ qualified_name }) => {
+                await this.waitUntilReady();
+                return {
+                    messages: [{
+                        role: "user",
+                        content: {
+                            type: "text",
+                            text: `I am planning to refactor the symbol '${qualified_name}'. 
+Please follow this safety protocol:
+1. Read 'graph://ledger' to verify the current index integrity.
+2. Use 'analyze_impact' with 'qualified_name: ${qualified_name}' to identify all incoming dependencies.
+3. Use 'get_symbol_details' to check the complexity and metrics of '${qualified_name}'.
+4. Provide a risk assessment summary: (Low/Medium/High risk) based on the number of dependencies and complexity.`
                         }
                     }]
                 };
