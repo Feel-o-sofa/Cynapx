@@ -1,11 +1,12 @@
 import * as chokidar from 'chokidar';
 import { UpdatePipeline } from '../indexer/update-pipeline';
 import { ChangeType } from '../indexer/types';
+import { Disposable } from '../types';
 
 /**
  * FileWatcher monitors the file system for changes and triggers the update pipeline.
  */
-export class FileWatcher {
+export class FileWatcher implements Disposable {
     private watcher: chokidar.FSWatcher | null = null;
     private queue: { event: ChangeType, path: string }[] = [];
     private timer: NodeJS.Timeout | null = null;
@@ -86,7 +87,7 @@ export class FileWatcher {
     /**
      * Stops the watcher.
      */
-    public stop(): void {
+    public dispose(): void {
         if (this.watcher) {
             this.watcher.close();
             this.watcher = null;

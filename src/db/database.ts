@@ -2,10 +2,12 @@ import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
 
+import { Disposable } from '../types';
+
 /**
  * DatabaseManager handles SQLite connection and schema initialization.
  */
-export class DatabaseManager {
+export class DatabaseManager implements Disposable {
     private db: Database.Database;
 
     constructor(dbPath: string) {
@@ -48,7 +50,7 @@ export class DatabaseManager {
     /**
      * Closes the database connection.
      */
-    public close(): void {
+    public dispose(): void {
         this.db.close();
     }
 }

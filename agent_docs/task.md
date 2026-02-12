@@ -12,11 +12,12 @@
 *   **정합성 보존**: DB 트리거 기반 `fan_in/out` 자동 갱신 및 전역 호출 장부(Ledger) 시스템 구축 완료.
 *   **시각화 및 배포**: Mermaid 그래프 익스포트(`export_graph`) 및 전역 CLI 패키징 완료.
 
-### Phase 7: Full Gemini MCP Integration (진행 중)
-*   **Task 16: MCP SDK 마이그레이션 (완료)**: `@modelcontextprotocol/sdk` 기반 리팩토링 및 Stdio 전송 계층 안정화.
-*   **Task 17-0: 동적 호출 분석 기초 설계 (완료)**: `dynamic_calls` 타입 추가 및 전용 트리거/메트릭 컬럼(`fan_in_dynamic` 등) 구축 완료.
-*   **Task 17: Capabilities 확장 (완료)**: `graph://ledger`, `graph://hotspots` 리소스 및 `/refactor-safety` 프롬프트 구축 완료.
-*   **Task 19: 도구 스키마 및 설명 정교화 (1차 완료)**: 모든 도구에 Zod 스키마 및 상세 Docstring 적용 완료.
+### Phase 7: Full Gemini MCP Integration (통합 및 고도화)
+*   **Task 16: MCP SDK 마이그레이션**: `@modelcontextprotocol/sdk` 기반 리팩토링 및 Stdio 전송 계층 안정화 완료.
+*   **Task 17-0: 동적 호출 분석 기초 설계**: `dynamic_calls` 타입 추가 및 전용 트리거/메트릭 컬럼 구축 완료.
+*   **Task 17: Capabilities 확장**: `graph://ledger`, `graph://hotspots` 리소스 및 `/refactor-safety` 프롬프트 구축 완료.
+*   **Task 18: 응답 고도화 (Rich Content)**: Mermaid 스타일링 적용 및 `get_symbol_details` 가독성 개선 완료.
+*   **Task 19: 도구 스키마 및 설명 정교화 (1차)**: 모든 도구에 Zod 스키마 및 상세 Docstring 적용 완료.
 
 ---
 
@@ -31,18 +32,21 @@
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 7: Full Gemini MCP Integration (고도화)
+### Phase 7: Full Gemini MCP Integration (최적화 로드맵)
 
-*   **Task 18: 응답 고도화 (Rich Content)**:
-    *   **Mermaid Visualization**: `export_graph` 호출 시 텍스트 외에 구조화된 시각화 블록 반환. (완료)
-    *   **Source Snippets**: `get_symbol_details`에서 반환하는 코드 블록에 메타데이터 및 가독성 최적화. (완료)
-*   **Task 20: 수명 주기 및 안정성**:
-    *   **Resource Cleanup**: 프로세스 종료 시 SQLite WAL 파일 정리 및 DB Lock 해제 로직 강화. (진행 중)
-    *   **Error Reporting**: AI 에이전트가 이해하기 쉬운 구조화된 에러 응답(`error_code`) 도입. (대기)
-*   **Task 21: 보안 및 환경 최적화**:
-    *   **Sandbox Policy**: 샌드박스 환경에서의 파일 읽기 권한 검증 로직 고도화. (대기)
-    *   **Project Registry**: 여러 프로젝트를 쉽게 전환하며 분석할 수 있는 레지스트리 관리 도구 강화. (진행 중)
+시스템의 **안정성(Stability) -> 보안(Security) -> 성능(Performance)** 순으로 우선순위를 재정렬하여 진행합니다.
+
+*   **Task 20: 수명 주기 및 안정성 고도화 (완료)**:
+    *   **Resource Cleanup**: 프로젝트 전환 시 SQLite 연결, WorkerPool, FileWatcher의 완벽한 자원 해제 보장. (완료)
+    *   **Lifecycle Manager**: 모든 핵심 컴포넌트의 시작과 종료를 관리하는 통합 관리자 도입. (완료)
+    *   **Error Reporting**: AI 에이전트가 이해하기 쉬운 구조화된 에러 응답(`error_code`) 도입. (완료)
+*   **Task 21: 보안 및 환경 최적화 (우선순위: 2)**:
+    *   **Sandbox Policy**: 레지스트리와 앵커 경로를 기반으로 한 중앙 집중식 파일 접근 권한 검증(`SecurityProvider`). (대기)
+    *   **Project Registry**: 여러 프로젝트의 메타데이터 관리 및 환경별 격리 수준 강화. (진행 중)
+*   **Task 22: 검색 및 필터링 고도화 (우선순위: 3)**:
+    *   **FTS5 최적화**: 심볼 검색 시 접두사 인덱싱 및 가중치 부여를 통한 성능 개선. (대기)
+    *   **Advanced Filtering**: `search_symbols`에 언어, 가시성, 심볼 타입 기반의 고급 필터 옵션 추가. (대기)
 
 ---
-**Status**: Phase 7 Integration - Enhancing Capabilities
-**Context**: Ledger and Hotspots are fully operational. Moving towards "Rich Feedback" and UX optimization.
+**Status**: Phase 7 Integration - Stabilization Phase
+**Context**: Re-prioritized tasks based on architectural analysis. Focus shifted to Lifecycle management and Security boundaries.

@@ -2,8 +2,9 @@
 import { Worker } from 'worker_threads';
 import * as path from 'path';
 import * as os from 'os';
+import { Disposable } from '../types';
 
-export class WorkerPool {
+export class WorkerPool implements Disposable {
     private workers: Worker[] = [];
     private freeWorkers: Worker[] = [];
     private queue: { task: any, resolve: Function, reject: Function }[] = [];
@@ -51,7 +52,7 @@ export class WorkerPool {
         worker.postMessage(task);
     }
 
-    public shutdown() {
+    public dispose() {
         this.workers.forEach(w => w.terminate());
     }
 }

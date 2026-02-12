@@ -4,6 +4,7 @@ import { z } from "zod";
 import { GraphEngine } from '../graph/graph-engine';
 import { ConsistencyChecker } from '../indexer/consistency-checker';
 import { MetadataRepository } from '../db/metadata-repository';
+import { CynapxErrorCode } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ANCHOR_FILE, readRegistry, addToRegistry } from '../utils/paths';
@@ -55,7 +56,10 @@ export class McpServer {
     private async waitUntilReady() {
         await this.readyPromise;
         if (!this.isInitialized) {
-            throw new Error("INITIALIZATION_REQUIRED: No .cynapx-config found. Please use 'get_setup_context' and 'initialize_project' to setup the project.");
+            throw {
+                error_code: CynapxErrorCode.INITIALIZATION_REQUIRED,
+                message: "No .cynapx-config found. Please use 'initialize_project' to setup the project."
+            };
         }
     }
 
@@ -364,7 +368,14 @@ Please follow this safety protocol:
                 if (!node || node.id === undefined) {
                     return {
                         isError: true,
-                        content: [{ type: "text", text: "Symbol not found" }]
+                        content: [{
+                            type: "text",
+                            text: JSON.stringify({
+                                error_code: CynapxErrorCode.SYMBOL_NOT_FOUND,
+                                message: `Symbol '${qualified_name}' not found.`,
+                                qualified_name
+                            }, null, 2)
+                        }]
                     };
                 }
                 const outgoing = this.graphEngine.getOutgoingEdges(node.id);
@@ -390,7 +401,7 @@ Please follow this safety protocol:
                     const absolutePath = path.resolve(node.file_path);
                     
                     if (projectPath && !absolutePath.toLowerCase().startsWith(path.resolve(projectPath).toLowerCase())) {
-                        text += `\n> [!CAUTION]\n> **Security Warning**: Access to file outside project directory denied.\n`;
+                        text += `\n> [!CAUTION]\n> **Security Warning**: Access to file outside project directory denied. (ErrorCode: ${CynapxErrorCode.PATH_TRAVERSAL_DENIED})\n`;
                     } else if (fs.existsSync(node.file_path)) {
                         const content = fs.readFileSync(node.file_path, 'utf8');
                         const lines = content.split('\n');

@@ -59,3 +59,29 @@ export interface CodeEdge {
     dynamic: boolean;
     call_site_line?: number;
 }
+
+/**
+ * Represents a resource that can be disposed of (e.g., DB connection, worker pool).
+ */
+export interface Disposable {
+    dispose(): Promise<void> | void;
+}
+
+/**
+ * Structured error codes for AI agents.
+ */
+export enum CynapxErrorCode {
+    INITIALIZATION_REQUIRED = 'INITIALIZATION_REQUIRED',
+    SYMBOL_NOT_FOUND = 'SYMBOL_NOT_FOUND',
+    PATH_TRAVERSAL_DENIED = 'PATH_TRAVERSAL_DENIED',
+    CONSISTENCY_CHECK_IN_PROGRESS = 'CONSISTENCY_CHECK_IN_PROGRESS',
+    INTERNAL_ERROR = 'INTERNAL_ERROR',
+    INVALID_PARAMETER = 'INVALID_PARAMETER'
+}
+
+export class CynapxError extends Error {
+    constructor(public code: CynapxErrorCode, message: string) {
+        super(message);
+        this.name = 'CynapxError';
+    }
+}

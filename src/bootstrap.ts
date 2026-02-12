@@ -15,6 +15,7 @@ import { ConsistencyChecker } from './indexer/consistency-checker';
 import { ApiServer } from './server/api-server';
 import { McpServer } from './server/mcp-server';
 import { FileWatcher } from './watcher/file-watcher';
+import { LifecycleManager } from './utils/lifecycle-manager';
 import { getDatabasePath, findProjectAnchor } from './utils/paths';
 import { FileFilter } from './utils/file-filter';
 import * as fs from 'fs';
@@ -67,6 +68,8 @@ Environment Variables:
     log(`Start Directory: ${startPath}`);
     if (anchorPath) log(`Detected Anchor at: ${anchorPath}`);
 
+    const lifecycle = new LifecycleManager();
+
     try {
         // Shared components
         let dbManager: DatabaseManager | undefined;
@@ -83,7 +86,7 @@ Environment Variables:
         const initializeEngine = async (projectPath: string) => {
             log(`Initializing Engine for: ${projectPath}`);
             const dbPath = getDatabasePath(projectPath);
-            dbManager = new DatabaseManager(dbPath);
+            dbManager = lifecycle.track(new DatabaseManager(dbPath));
             const db = dbManager.getDb();
             nodeRepo = new NodeRepository(db);
             edgeRepo = new EdgeRepository(db);
@@ -97,7 +100,7 @@ Environment Variables:
             const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
 
             const workerPoolSize = Math.min(os.cpus().length, 4);
-            workerPool = new WorkerPool(workerPoolSize);
+            workerPool = lifecycle.track(new WorkerPool(workerPoolSize));
             updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool);
             consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
 
@@ -105,10 +108,10 @@ Environment Variables:
             await consistencyChecker.validate(true);
             log('Synchronization Complete.');
 
-            watcher = new FileWatcher(updatePipeline, projectPath);
+            watcher = lifecycle.track(new FileWatcher(updatePipeline, projectPath));
             watcher.start(projectPath);
             
-            return { graphEngine, consistencyChecker };
+            return { graphEngine, consistencyChecker, metadataRepo };
         };
 
         let currentGraphEngine: GraphEngine | undefined;
@@ -136,23 +139,21 @@ Environment Variables:
             
             // Handle deferred initialization
             mcpServer.setOnInitialize(async (newPath) => {
+                // Clear old resources before switching
+                await lifecycle.disposeAll();
                 const result = await initializeEngine(newPath);
                 // Dynamically update MCP server's references
                 (mcpServer as any).graphEngine = result.graphEngine;
-                (mcpServer as any).metadataRepo = (metadataRepo as any); // Assuming metadataRepo is updated in initializeEngine scope
+                (mcpServer as any).metadataRepo = result.metadataRepo;
                 mcpServer!.setConsistencyChecker(result.consistencyChecker);
             });
 
             // Handle index purging
             mcpServer.setOnPurge(async () => {
                 log('Purging engine resources...');
-                if (watcher) watcher.stop();
-                if (workerPool) workerPool.shutdown();
-                if (dbManager) dbManager.close();
+                await lifecycle.disposeAll();
                 
-                // Clear local references
-                watcher = undefined;
-                workerPool = undefined;
+                // Reset local references (they will be re-initialized if needed)
                 dbManager = undefined;
                 updatePipeline = undefined;
                 consistencyChecker = undefined;
@@ -191,8 +192,7 @@ Environment Variables:
         process.on('SIGINT', async () => {
             log('Shutting down...');
             if (mcpServer) await mcpServer.close();
-            if (workerPool) workerPool.shutdown();
-            if (dbManager) dbManager.close();
+            await lifecycle.disposeAll();
             process.exit(0);
         });
 
