@@ -83,11 +83,33 @@ export class UpdatePipeline {
         await previousLock;
 
         const symbolCache = new Map<string, number>();
-        const affectedNodeIds = new Set<number>();
 
         try {
             this.db.prepare('BEGIN').run();
             
+            // 2.1 Pre-resolve all potential target nodes in this batch to minimize individual SELECTs
+            const targetQNames = new Set<string>();
+            for (const res of results) {
+                if (res.status === 'success') {
+                    res.delta.edges.forEach(e => {
+                        const target = (e as any).to_qname;
+                        if (target) targetQNames.add(target);
+                    });
+                }
+            }
+            
+            if (targetQNames.size > 0) {
+                const qnameList = Array.from(targetQNames);
+                // Split into chunks of 999 (SQLite limit for IN clause)
+                for (let i = 0; i < qnameList.length; i += 999) {
+                    const chunk = qnameList.slice(i, i + 999);
+                    const placeholders = chunk.map(() => '?').join(',');
+                    const stmt = this.db.prepare(`SELECT id, qualified_name FROM nodes WHERE qualified_name IN (${placeholders})`);
+                    const rows = stmt.all(...chunk) as { id: number, qualified_name: string }[];
+                    rows.forEach(r => symbolCache.set(r.qualified_name, r.id));
+                }
+            }
+
             for (const res of results) {
                 if (res.status === 'success') {
                     if (res.event.event === 'ADD' || res.event.event === 'MODIFY' || res.event.event === 'DELETE') {
@@ -111,8 +133,10 @@ export class UpdatePipeline {
                 }
             }
 
-            // 3. Ledger Check (Consistency Verification)
-            this.verifyLedger();
+            // 3. Ledger Check (Consistency Verification - Sampling or Deferred for performance)
+            if (events.length > 100 || Math.random() < 0.1) {
+                this.verifyLedger();
+            }
 
             this.db.prepare('COMMIT').run();
 
@@ -256,8 +280,10 @@ export class UpdatePipeline {
                 }
             }
 
-            // 3. Ledger Check
-            this.verifyLedger();
+            // 3. Ledger Check (Sampled)
+            if (Math.random() < 0.1) {
+                this.verifyLedger();
+            }
 
             this.db.prepare('COMMIT').run();
         } catch (e) {

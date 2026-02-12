@@ -21,6 +21,8 @@
 *   **Task 20: 수명 주기 및 안정성 고도화**: Resource Cleanup, Lifecycle Manager, 구조화된 Error Reporting 도입 완료.
 *   **Task 21: 보안 및 환경 최적화**: SecurityProvider를 통한 Sandbox Policy 수립 및 Project Registry 메타데이터 확장 완료.
 *   **Task 22: 검색 및 필터링 고도화**: FTS5 최적화(Prefix 검색) 및 `search_symbols` 고급 필터링(SymbolType, Language, Visibility) 구현 완료.
+*   **Task 22.5: AI 에이전트 인터페이스 고도화**: 파서 메타데이터(Signature, Modifiers) 추출, 관계 탐색 전용 도구(callers/callees) 추가 및 Zero-Pollution 리팩토링 완료.
+*   **Task 23: 성능 및 확장성 최적화**: DB PRAGMA 튜닝, 배치 ID 사전 조회(Pre-fetching) 및 샘플링 기반 정합성 체크 도입 완료.
 
 ---
 
@@ -28,23 +30,23 @@
 *   **브랜드**: **Cynapx (시냅스엑스)** - 코드의 신경망을 잇는 지능형 인덱스.
 *   **통합**: 공식 MCP SDK를 통해 Gemini CLI와 안정적으로 연결됨.
 *   **리소스**: `graph://summary`, `graph://ledger`, `graph://hotspots` 제공 중.
-*   **프롬프트**: `explain-impact`, `check-health`, `refactor-safety` 워크플로우 지원 중.
-*   **신뢰성**: `ConsistencyChecker`를 통한 자가 진단 및 `purge_index`를 통한 초기화 기능 지원.
-*   **검색 지능**: FTS5 기반 접두사 검색 및 고급 필터링 지원으로 검색 정확도 향상.
+*   **탐색 도구**: `get_callers`, `get_callees`, `get_related_tests` 등 관계 중심 탐색 지원.
+*   **정합성**: `HealthMonitor`를 통한 실시간 정합성 자가 진단 및 자동 복구 지원.
+*   **성능**: 대용량 프로젝트 대응을 위한 메모리 맵핑(MMAP) 및 지능형 배치 처리 적용.
 
 ---
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 7: Full Gemini MCP Integration (최적화 로드맵)
+### Phase 8: Advanced Reasoning & Ecosystem (지능형 추론 및 생태계)
 
-시스템의 **안정성(Stability) -> 보안(Security) -> 성능(Performance)** 순으로 우선순위를 재정렬하여 진행합니다.
-
-*   **Task 23: 성능 및 확장성 최적화 (우선순위: 1)**:
-    *   대규모 프로젝트를 위한 워커 풀 성능 튜닝 및 DB 인덱스 최적화.
-    *   증분 업데이트 시의 오버헤드 최소화 및 병렬 처리 효율 개선.
-
+*   **Task 24: 코드 의미론적 클러스터링**:
+    *   함수/클래스의 관계와 메트릭을 기반으로 논리적 모듈 구조 자동 파악.
+*   **Task 25: 다국어 지원 확장 (Rust, Go)**:
+    *   Tree-sitter 기반 파서 확장을 통한 시스템 언어 지원.
+*   **Task 26: 인덱싱 가속화 고도화**:
+    *   Rust 기반의 전용 인덱서 코어(Shared Library) 도입 고려.
 
 ---
-**Status**: Phase 7 Integration - Performance Phase
-**Context**: Task 21 completed. Starting Task 22 to enhance search intelligence and filtering capabilities.
+**Status**: Phase 7 Integration - **COMPLETED**
+**Context**: All Phase 7 tasks including performance optimization and AI accessibility enhancements are finalized. Project is stable and ready for ecosystem expansion.

@@ -18,10 +18,14 @@ export class DatabaseManager implements Disposable {
         }
 
         this.db = new Database(dbPath);
-        // Enable WAL mode for better concurrency
+        // Advanced Performance Tuning for Large Knowledge Graphs
         this.db.pragma('journal_mode = WAL');
-        // Enable foreign key constraints
         this.db.pragma('foreign_keys = ON');
+        this.db.pragma('synchronous = NORMAL');
+        this.db.pragma('cache_size = -2000000'); // ~2GB Cache
+        this.db.pragma('mmap_size = 30000000000'); // Up to 30GB Memory-mapped I/O
+        this.db.pragma('temp_store = MEMORY');
+        this.db.pragma('page_size = 4096');
 
         this.initializeSchema();
     }
