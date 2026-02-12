@@ -34,8 +34,8 @@
 ### Phase 7: Full Gemini MCP Integration (고도화)
 
 *   **Task 18: 응답 고도화 (Rich Content)**:
-    *   **Mermaid Visualization**: `export_graph` 호출 시 텍스트 외에 구조화된 시각화 블록 반환. (대기)
-    *   **Source Snippets**: `get_symbol_details`에서 반환하는 코드 블록에 메타데이터 및 가독성 최적화. (대기)
+    *   **Mermaid Visualization**: `export_graph` 호출 시 텍스트 외에 구조화된 시각화 블록 반환. (완료)
+    *   **Source Snippets**: `get_symbol_details`에서 반환하는 코드 블록에 메타데이터 및 가독성 최적화. (완료)
 *   **Task 20: 수명 주기 및 안정성**:
     *   **Resource Cleanup**: 프로세스 종료 시 SQLite WAL 파일 정리 및 DB Lock 해제 로직 강화. (진행 중)
     *   **Error Reporting**: AI 에이전트가 이해하기 쉬운 구조화된 에러 응답(`error_code`) 도입. (대기)

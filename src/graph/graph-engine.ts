@@ -140,13 +140,27 @@ export class GraphEngine {
         }
 
         let mermaid = 'graph TD\n';
+        
+        // Add styling definitions
+        mermaid += '  classDef file fill:#fff,stroke:#333,stroke-width:1px,stroke-dasharray: 5 5\n';
+        mermaid += '  classDef class fill:#f9f,stroke:#333,stroke-width:2px\n';
+        mermaid += '  classDef interface fill:#9ff,stroke:#333,stroke-width:2px\n';
+        mermaid += '  classDef method fill:#bbf,stroke:#333,stroke-width:1px\n';
+        mermaid += '  classDef function fill:#dfd,stroke:#333,stroke-width:1px\n';
+
         // Dedup nodes
         const uniqueNodes = Array.from(new Map(nodesToExport.map(n => [n.id, n])).values());
         
         for (const node of uniqueNodes) {
             const shortName = node.qualified_name.split(/[#.\/]/).pop();
             const label = `${node.symbol_type}: ${shortName}`;
-            mermaid += `  N${node.id}["${label}"]\n`;
+            const cssClass = node.symbol_type === 'file' ? ':::file' : 
+                           node.symbol_type === 'class' ? ':::class' :
+                           node.symbol_type === 'interface' ? ':::interface' :
+                           node.symbol_type === 'method' ? ':::method' :
+                           node.symbol_type === 'function' ? ':::function' : '';
+            
+            mermaid += `  N${node.id}["${label}"]${cssClass}\n`;
         }
         for (const edge of edgesToExport) {
             mermaid += `  N${edge.from_id} -- ${edge.edge_type} --> N${edge.to_id}\n`;

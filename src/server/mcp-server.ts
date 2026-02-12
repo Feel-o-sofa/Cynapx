@@ -371,14 +371,18 @@ Please follow this safety protocol:
                 const incoming = this.graphEngine.getIncomingEdges(node.id);
 
                 let text = `### Symbol: ${node.qualified_name}\n`;
-                text += `- **Type**: ${node.symbol_type}\n`;
-                text += `- **File**: ${node.file_path} (line ${node.start_line}-${node.end_line})\n`;
+                text += `- **Type**: \`${node.symbol_type}\`\n`;
+                text += `- **File**: \`${node.file_path}\` (line ${node.start_line}-${node.end_line})\n`;
+                
+                text += `\n#### Metrics:\n`;
+                if (node.loc !== undefined) text += `- **LOC**: ${node.loc}\n`;
+                if (node.cyclomatic !== undefined) text += `- **Cyclomatic Complexity**: ${node.cyclomatic}\n`;
+                text += `- **Static Coupling**: Fan-in: ${node.fan_in || 0}, Fan-out: ${node.fan_out || 0}\n`;
+                text += `- **Dynamic Coupling**: Fan-in: ${node.fan_in_dynamic || 0}, Fan-out: ${node.fan_out_dynamic || 0}\n`;
+                
+                text += `\n#### Relationships:\n`;
                 text += `- **Outgoing Edges**: ${outgoing.length}\n`;
                 text += `- **Incoming Edges**: ${incoming.length}\n`;
-                
-                if (node.cyclomatic !== undefined) text += `- **Cyclomatic Complexity**: ${node.cyclomatic}\n`;
-                if (node.fan_in !== undefined) text += `- **Fan-in**: ${node.fan_in}\n`;
-                if (node.fan_out !== undefined) text += `- **Fan-out**: ${node.fan_out}\n`;
 
                 // Read source code from file with Path Traversal Protection
                 try {
@@ -386,7 +390,7 @@ Please follow this safety protocol:
                     const absolutePath = path.resolve(node.file_path);
                     
                     if (projectPath && !absolutePath.toLowerCase().startsWith(path.resolve(projectPath).toLowerCase())) {
-                        text += `\n*(Security Warning: Access to file outside project directory denied.)*\n`;
+                        text += `\n> [!CAUTION]\n> **Security Warning**: Access to file outside project directory denied.\n`;
                     } else if (fs.existsSync(node.file_path)) {
                         const content = fs.readFileSync(node.file_path, 'utf8');
                         const lines = content.split('\n');
@@ -394,10 +398,10 @@ Please follow this safety protocol:
                         
                         const lang = node.file_path.endsWith('.py') ? 'python' : 
                                      (node.file_path.endsWith('.ts') || node.file_path.endsWith('.tsx')) ? 'typescript' : 'javascript';
-                        text += `\n#### Source Code:\n\`\`\`${lang}\n${sourceCode}\n\`\`\`\n`;
+                        text += `\n#### Source Code Snippet:\n\`\`\`${lang}\n${sourceCode}\n\`\`\`\n`;
                     }
                 } catch (err) {
-                    text += `\n*(Could not read source code: ${err})*\n`;
+                    text += `\n> [!WARNING]\n> Could not read source code: ${err}\n`;
                 }
 
                 return {
@@ -516,10 +520,18 @@ Please follow this safety protocol:
                     rootQName: root_qname,
                     maxDepth: max_depth
                 });
+
+                let text = `### Knowledge Graph Visualization\n`;
+                if (root_qname) {
+                    text += `- **Root**: \`${root_qname}\`\n`;
+                }
+                text += `- **Max Depth**: ${max_depth}\n\n`;
+                text += `\`\`\`mermaid\n${mermaid}\n\`\`\``;
+
                 return {
                     content: [{ 
                         type: "text", 
-                        text: `Here is the Mermaid graph definition:\n\n\`\`\`mermaid\n${mermaid}\n\`\`\`` 
+                        text: text
                     }]
                 };
             }
