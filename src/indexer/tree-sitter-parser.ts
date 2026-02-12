@@ -1,96 +1,45 @@
 import Parser from 'tree-sitter';
-// @ts-ignore
-import TypeScript from 'tree-sitter-typescript';
-// @ts-ignore
-import Python from 'tree-sitter-python';
-// @ts-ignore
-import JavaScript from 'tree-sitter-javascript';
-import { CodeParser, DeltaGraph } from './types';
-import { CodeNode, CodeEdge, SymbolType } from '../types';
+import { CodeParser, DeltaGraph, RawCodeEdge, LanguageProvider } from './types';
+import { CodeNode, SymbolType } from '../types';
 import * as fs from 'fs';
 import { calculateChecksum } from '../utils/checksum';
+import { LanguageRegistry } from './language-registry';
 
 /**
- * Advanced TreeSitterParser using Query API for precise multi-language extraction.
+ * Optimized Generic TreeSitterParser that delegates language-specific logic to LanguageProviders.
  */
 export class TreeSitterParser implements CodeParser {
     private parser: Parser;
+    private registry: LanguageRegistry;
 
     constructor() {
         this.parser = new Parser();
+        this.registry = LanguageRegistry.getInstance();
     }
 
     public supports(filePath: string): boolean {
-        return filePath.endsWith('.ts') || filePath.endsWith('.js') || filePath.endsWith('.py');
-    }
-
-    /**
-     * Define language-specific queries for symbol extraction.
-     */
-    private getQuery(extension: string, language: any): Parser.Query {
-        const queryStrings: Record<string, string> = {
-            py: `
-                (function_definition 
-                    name: (identifier) @function.name 
-                    parameters: (parameters) @function.params
-                    return_type: (type)? @function.return) @function.def
-                (class_definition name: (identifier) @class.name) @class.def
-                (call function: (identifier) @call.name) @call.expr
-                (import_statement) @import.stmt
-                (import_from_statement) @import.from_stmt
-            `,
-            ts: `
-                (class_declaration 
-                    name: (identifier) @class.name
-                    (modifiers)? @class.modifiers) @class.def
-                (method_definition 
-                    name: (property_identifier) @method.name
-                    parameters: (formal_parameters) @method.params
-                    return_type: (type_annotation)? @method.return
-                    (modifiers)? @method.modifiers) @method.def
-                (function_declaration 
-                    name: (identifier) @function.name
-                    parameters: (formal_parameters) @function.params
-                    return_type: (type_annotation)? @function.return
-                    (modifiers)? @function.modifiers) @function.def
-                (call_expression function: (identifier) @call.name) @call.expr
-                (import_statement source: (string) @import.name)
-            `,
-            js: `
-                (function_declaration name: (identifier) @function.name) @function.def
-                (class_declaration name: (identifier) @class.name) @class.def
-                (method_definition name: (property_identifier) @method.name) @method.def
-                (call_expression function: (identifier) @call.name) @call.expr
-                (import_statement source: (string) @import.name)
-            `
-        };
-        return new Parser.Query(language, queryStrings[extension] || '');
+        return this.registry.getProvider(filePath) !== undefined;
     }
 
     public async parse(filePath: string, commit: string, version: number): Promise<DeltaGraph> {
-        const extension = filePath.split('.').pop() || '';
-        let language;
+        const provider = this.registry.getProvider(filePath);
+        if (!provider) throw new Error(`Unsupported language for file: ${filePath}`);
 
-        if (extension === 'ts') language = TypeScript.typescript;
-        else if (extension === 'js') language = JavaScript;
-        else if (extension === 'py') language = Python;
-
-        if (!language) throw new Error(`Unsupported language: ${filePath}`);
-        this.parser.setLanguage(language as any);
+        this.parser.setLanguage(provider.getLanguage());
 
         const sourceCode = fs.readFileSync(filePath, 'utf8');
         const tree = this.parser.parse(sourceCode);
-        const query = this.getQuery(extension, language);
+        const query = new Parser.Query(provider.getLanguage(), provider.getQuery());
         const matches = query.matches(tree.rootNode);
 
         const nodes: CodeNode[] = [];
-        const edges: CodeEdge[] = [];
+        const edges: RawCodeEdge[] = [];
 
         // 1. File Node
         nodes.push({
             qualified_name: filePath,
             symbol_type: 'file',
-            language: extension === 'py' ? 'python' : 'typescript',
+            language: provider.languageName,
             file_path: filePath,
             start_line: 1,
             end_line: sourceCode.split('\n').length,
@@ -102,7 +51,7 @@ export class TreeSitterParser implements CodeParser {
             loc: sourceCode.split('\n').length
         });
 
-        // 2. Extract Symbols and Calls using Matches
+        // 2. Extract Symbols and Calls
         const rangeToSymbolMap = new Map<string, string>(); 
 
         // First pass: Definitions
@@ -114,7 +63,7 @@ export class TreeSitterParser implements CodeParser {
             if (defCapture && nameCapture && !captures.some(c => c.name.startsWith('call')) && !captures.some(c => c.name.startsWith('import'))) {
                 const node = defCapture.node;
                 const name = nameCapture.node.text;
-                const type = this.c_to_symbol_type(defCapture.name);
+                const type = provider.mapCaptureToSymbolType(defCapture.name);
                 const qname = `${filePath}#${name}`;
 
                 // Extract Metadata
@@ -129,7 +78,7 @@ export class TreeSitterParser implements CodeParser {
                 nodes.push({
                     qualified_name: qname,
                     symbol_type: type,
-                    language: extension === 'py' ? 'python' : 'typescript',
+                    language: provider.languageName,
                     file_path: filePath,
                     start_line: node.startPosition.row + 1,
                     end_line: node.endPosition.row + 1,
@@ -138,7 +87,7 @@ export class TreeSitterParser implements CodeParser {
                     last_updated_commit: commit,
                     version: version,
                     loc: node.endPosition.row - node.startPosition.row + 1,
-                    cyclomatic: this.calculateCC(node),
+                    cyclomatic: this.calculateCC(node, provider),
                     signature,
                     return_type: returnType,
                     modifiers
@@ -149,7 +98,7 @@ export class TreeSitterParser implements CodeParser {
                     to_qname: qname,
                     edge_type: 'defines',
                     dynamic: false
-                } as any);
+                });
 
                 const rangeKey = `${node.startPosition.row + 1}-${node.endPosition.row + 1}`;
                 rangeToSymbolMap.set(rangeKey, qname);
@@ -168,15 +117,15 @@ export class TreeSitterParser implements CodeParser {
                 const targetName = nameCapture.node.text;
                 const callLine = node.startPosition.row + 1;
 
-                // Find enclosing symbol (context)
-                let fromQName = filePath; // Default to file level
+                // Find enclosing symbol (tightest scope)
+                let fromQName = filePath;
                 let minRange = Number.MAX_SAFE_INTEGER;
 
                 for (const [range, qname] of rangeToSymbolMap) {
                     const [start, end] = range.split('-').map(Number);
-                    if (callLine >= start && callLine <= end) { // Inside function body (inclusive)
+                    if (callLine >= start && callLine <= end) {
                         const len = end - start;
-                        if (len < minRange) { // Get tightest scope
+                        if (len < minRange) {
                             minRange = len;
                             fromQName = qname;
                         }
@@ -184,90 +133,25 @@ export class TreeSitterParser implements CodeParser {
                 }
                 edges.push({
                     from_qname: fromQName,
-                    to_qname: targetName, // Just simple name, needs heuristic resolution
+                    to_qname: targetName,
                     edge_type: 'calls',
-                    dynamic: true, // Dynamic because we don't have type checker
-                    call_site_line: callLine,
-                    target_file_hint: undefined
-                } as any);
-            } else if (importCapture && !captures.some(c => c.name.startsWith('call'))) {
-                // Handle Imports (Task 4 & 7)
-                if (extension === 'py') {
-                    this.resolvePythonImport(importCapture.node, filePath, edges);
-                } else if (nameCapture) {
-                    let pkgName = nameCapture.node.text;
-                    
-                    // Cleanup JS/TS string literals (e.g. 'express' -> express)
-                    if ((extension === 'ts' || extension === 'js') && (pkgName.startsWith("'") || pkgName.startsWith('"'))) {
-                        pkgName = pkgName.substring(1, pkgName.length - 1);
-                    }
-
-                    // Skip relative imports
-                    if (!pkgName.startsWith('.')) {
-                        const prefix = extension === 'py' ? 'pypi' : 'package';
-                        const pkgNodeQName = `${prefix}:${pkgName.split('.')[0]}`; // Just the base package
-
-                        edges.push({
-                            from_qname: filePath,
-                            to_qname: pkgNodeQName,
-                            edge_type: 'depends_on',
-                            dynamic: false
-                        } as any);
-                    }
-                }
+                    dynamic: true,
+                    call_site_line: callLine
+                });
+            } else if (importCapture && provider.resolveImport) {
+                provider.resolveImport(importCapture.node, filePath, edges);
             }
         }
 
         return { nodes, edges };
     }
 
-    private resolvePythonImport(node: Parser.SyntaxNode, filePath: string, edges: CodeEdge[]) {
-        if (node.type === 'import_statement') {
-            // import os, sys as system
-            for (let i = 0; i < node.childCount; i++) {
-                const child = node.child(i)!;
-                if (child.type === 'aliased_import') {
-                    const nameNode = child.childForFieldName('name');
-                    if (nameNode) {
-                        const pkgName = nameNode.text.split('.')[0];
-                        edges.push({ from_qname: filePath, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false } as any);
-                    }
-                } else if (child.type === 'dotted_name') {
-                    // import requests
-                    const pkgName = child.text.split('.')[0];
-                    edges.push({ from_qname: filePath, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false } as any);
-                }
-            }
-        } else if (node.type === 'import_from_statement') {
-            // from math import sqrt
-            const moduleNode = node.childForFieldName('module_name');
-            if (moduleNode) {
-                const pkgName = moduleNode.text.split('.')[0];
-                let isRelative = false;
-                for (let i = 0; i < node.childCount; i++) {
-                    if (node.child(i)!.type === 'relative_import' || node.child(i)!.text.startsWith('.')) {
-                        isRelative = true;
-                        break;
-                    }
-                }
-
-                if (!isRelative) {
-                    edges.push({ from_qname: filePath, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false } as any);
-                }
-            }
-        }
-    }
-
     /**
-     * Language-agnostic Cyclomatic Complexity using Tree-sitter nodes.
+     * Language-aware Cyclomatic Complexity using Provider's decision points.
      */
-    private calculateCC(node: Parser.SyntaxNode): number {
+    private calculateCC(node: Parser.SyntaxNode, provider: LanguageProvider): number {
         let complexity = 1;
-        const decisionPoints = [
-            'if_statement', 'for_statement', 'while_statement', 'case_clause',
-            'catch_clause', 'conditional_expression', 'binary_expression',
-            'for_in_statement', 'if_expression'
-        ];
+        const decisionPoints = provider.getDecisionPoints();
 
         const walk = (n: Parser.SyntaxNode) => {
             if (decisionPoints.includes(n.type)) {
@@ -285,12 +169,5 @@ export class TreeSitterParser implements CodeParser {
 
         walk(node);
         return complexity;
-    }
-
-    private c_to_symbol_type(captureName: string): SymbolType {
-        if (captureName.startsWith('class')) return 'class';
-        if (captureName.startsWith('function')) return 'function';
-        if (captureName.startsWith('method')) return 'method';
-        return 'field';
     }
 }

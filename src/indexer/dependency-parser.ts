@@ -1,5 +1,5 @@
-import { CodeParser, DeltaGraph } from './types';
-import { CodeNode, CodeEdge } from '../types';
+import { CodeParser, DeltaGraph, RawCodeEdge } from './types';
+import { CodeNode } from '../types';
 import * as fs from 'fs';
 import { calculateChecksum } from '../utils/checksum';
 
@@ -10,7 +10,7 @@ export class DependencyParser implements CodeParser {
 
     public async parse(filePath: string, commit: string, version: number): Promise<DeltaGraph> {
         const nodes: CodeNode[] = [];
-        const edges: CodeEdge[] = [];
+        const edges: RawCodeEdge[] = [];
         const content = fs.readFileSync(filePath, 'utf8');
 
         // File Node
@@ -58,7 +58,7 @@ export class DependencyParser implements CodeParser {
                         to_qname: pkgNodeQName,
                         edge_type: 'depends_on',
                         dynamic: false
-                    } as any);
+                    });
                 }
             } catch (e) {
                 console.error(`Failed to parse package.json: ${e}`);
@@ -96,7 +96,7 @@ export class DependencyParser implements CodeParser {
                         to_qname: pkgNodeQName,
                         edge_type: 'depends_on',
                         dynamic: false
-                    } as any);
+                    });
                 }
             }
         }

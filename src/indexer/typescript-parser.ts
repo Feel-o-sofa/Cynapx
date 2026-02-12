@@ -1,7 +1,7 @@
 import * as ts from 'typescript';
 import * as fs from 'fs';
-import { CodeParser, DeltaGraph } from './types';
-import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
+import { CodeParser, DeltaGraph, RawCodeEdge } from './types';
+import { CodeNode, SymbolType, Visibility } from '../types';
 import { MetricsCalculator } from './metrics-calculator';
 import { calculateChecksum } from '../utils/checksum';
 
@@ -36,7 +36,7 @@ export class TypeScriptParser implements CodeParser {
         if (!sourceFile) throw new Error(`Source file not found: ${filePath}`);
 
         const nodes: CodeNode[] = [];
-        const edges: CodeEdge[] = [];
+        const edges: RawCodeEdge[] = [];
         const sourceCode = sourceFile.getFullText();
 
         // 1. File Node
@@ -66,7 +66,12 @@ export class TypeScriptParser implements CodeParser {
                     nodes.push(this.createNode(node, sourceFile, qname, type, filePath, commit, version));
 
                     // Edge: file -> symbol (defines)
-                    edges.push({ from_qname: filePath, to_qname: qname, edge_type: 'defines', dynamic: false } as any);
+                    edges.push({
+                        from_qname: filePath,
+                        to_qname: qname,
+                        edge_type: 'defines',
+                        dynamic: false
+                    });
                 }
             }
 
@@ -83,7 +88,7 @@ export class TypeScriptParser implements CodeParser {
                             to_qname: pkgNodeQName,
                             edge_type: 'depends_on',
                             dynamic: false
-                        } as any);
+                        });
                     }
                 }
             }
@@ -134,7 +139,7 @@ export class TypeScriptParser implements CodeParser {
         return 'field';
     }
 
-    private resolveCall(node: ts.CallExpression, sourceFile: ts.SourceFile, fromQName: string, edges: CodeEdge[]) {
+    private resolveCall(node: ts.CallExpression, sourceFile: ts.SourceFile, fromQName: string, edges: RawCodeEdge[]) {
         const symbol = this.typeChecker?.getSymbolAtLocation(node.expression);
         if (symbol) {
             const declaration = symbol.valueDeclaration || symbol.declarations?.[0];
@@ -149,7 +154,7 @@ export class TypeScriptParser implements CodeParser {
                     dynamic: false,
                     call_site_line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
                     target_file_hint: targetFile
-                } as any);
+                });
             }
         }
     }

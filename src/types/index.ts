@@ -45,9 +45,10 @@ export interface CodeNode {
  */
 export type EdgeType =
     | 'defines' | 'contains' | 'namespace_of'
-    | 'inherits' | 'implements'
+    | 'inherits' | 'implements' | 'implements_trait'
     | 'calls' | 'dynamic_calls' | 'overrides' | 'reads' | 'writes'
-    | 'tests' | 'depends_on';
+    | 'tests' | 'depends_on'
+    | 'emits' | 'connects_to';
 
 /**
  * Edge interface representing a relationship in the knowledge graph.
