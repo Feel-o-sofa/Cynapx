@@ -38,15 +38,24 @@
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 8: Advanced Reasoning & Ecosystem (지능형 추론 및 생태계)
+### Phase 8: Advanced Reasoning & Multilingual Expansion (지능형 추론 및 다국어 확장)
 
-*   **Task 24: 코드 의미론적 클러스터링**:
-    *   함수/클래스의 관계와 메트릭을 기반으로 논리적 모듈 구조 자동 파악.
-*   **Task 25: 다국어 지원 확장 (Rust, Go)**:
-    *   Tree-sitter 기반 파서 확장을 통한 시스템 언어 지원.
-*   **Task 26: 인덱싱 가속화 고도화**:
-    *   Rust 기반의 전용 인덱서 코어(Shared Library) 도입 고려.
+시스템 언어부터 게임 스크립트까지 아우르는 지능형 코드 지식 생태계 구축을 목표로 합니다.
+
+*   **Task 24: 코드 의미론적 클러스터링 및 관계 추론**:
+    *   물리적 파일 구조를 넘어선 **논리적 모듈 구조 자동 파악**.
+    *   함수 간 복잡한 호출 패턴 분석을 통한 '핵심 로직' 추출 가중치 시스템 도입.
+
+*   **Task 25: 대규모 다국어 지원 확장 (Multilingual Waves)**:
+    *   **Wave 1 (Systems)**: C, C++, Rust, Go 지원. 시스템 언어 특유의 선언 구조 및 매크로/패키지 분석.
+    *   **Wave 2 (Enterprise)**: Java, Kotlin, C# 지원. OOP(상속, 인터페이스, 추상화) 관계 정밀 맵핑.
+    *   **Wave 3 (Scripting & Game)**: Ruby, PHP, Lua, Perl, **GDScript** 지원.
+    *   **GDScript 특화**: Godot 엔진의 Node 경로, Signal 연결 및 `extends` 기반 구조 분석 지원.
+
+*   **Task 26: 인덱싱 가속화 및 가용성 극대화**:
+    *   **Rust 기반 Core Indexer**: 대규모 멀티 언어 처리를 위한 인덱서 코어의 Rust 전환 검토.
+    *   **Plugin System**: 사용자 정의 Tree-sitter 문법 및 S-query 추가를 위한 플러그인 인터페이스 개방.
 
 ---
 **Status**: Phase 7 Integration - **COMPLETED**
-**Context**: All Phase 7 tasks including performance optimization and AI accessibility enhancements are finalized. Project is stable and ready for ecosystem expansion.
+**Context**: Phase 8 planning finalized. Ready to conduct pre-requisite analysis for massive multilingual expansion.
