@@ -96,23 +96,67 @@ export class NodeRepository {
         stmt.run(...values);
     }
 
-    public searchSymbols(query: string, limit: number = 20): CodeNode[] {
-        const ftsQuery = `"${query}"* OR ${query}`;
+    public searchSymbols(
+        query: string, 
+        limit: number = 20, 
+        filters?: { 
+            symbol_type?: SymbolType, 
+            language?: string, 
+            visibility?: Visibility 
+        }
+    ): CodeNode[] {
+        // Sanitize and prepare FTS query for prefix matching
+        // Using "query*" enables prefix search in FTS5
+        const sanitizedQuery = query.replace(/[*"']/g, '').trim();
+        if (!sanitizedQuery) return [];
+
+        const ftsQuery = `${sanitizedQuery}*`;
+
+        const filterClauses: string[] = [];
+        const params: any[] = [ftsQuery];
+
+        if (filters?.symbol_type) {
+            filterClauses.push('n.symbol_type = ?');
+            params.push(filters.symbol_type);
+        }
+        if (filters?.language) {
+            filterClauses.push('n.language = ?');
+            params.push(filters.language);
+        }
+        if (filters?.visibility) {
+            filterClauses.push('n.visibility = ?');
+            params.push(filters.visibility);
+        }
+
+        const whereClause = filterClauses.length > 0 
+            ? `AND ${filterClauses.join(' AND ')}` 
+            : '';
+
+        params.push(limit);
+
         try {
             const stmt = this.db.prepare(`
                 SELECT n.* 
                 FROM fts_symbols f 
                 JOIN nodes n ON f.rowid = n.id 
                 WHERE fts_symbols MATCH ? 
+                ${whereClause}
                 ORDER BY rank 
                 LIMIT ?
             `);
-            const rows = stmt.all(ftsQuery, limit);
+            const rows = stmt.all(...params);
             return rows.map(row => this.mapRowToNode(row));
         } catch (error) {
-            // Fallback to LIKE if FTS fails
-            const stmt = this.db.prepare('SELECT * FROM nodes WHERE qualified_name LIKE ? LIMIT ?');
-            const rows = stmt.all(`%${query}%`, limit);
+            // Fallback to LIKE if FTS fails or if query is not FTS-friendly
+            const likeFilter = filterClauses.length > 0 ? `AND ${filterClauses.join(' AND ')}` : '';
+            const stmt = this.db.prepare(`
+                SELECT * FROM nodes n 
+                WHERE n.qualified_name LIKE ? 
+                ${likeFilter}
+                ORDER BY length(n.qualified_name) ASC
+                LIMIT ?
+            `);
+            const rows = stmt.all(`%${sanitizedQuery}%`, ...params.slice(1));
             return rows.map(row => this.mapRowToNode(row));
         }
     }

@@ -340,19 +340,28 @@ Please follow this safety protocol:
                 description: "Search for symbols (functions, classes, variables) in the code knowledge graph using a search query. Returns basic metadata for matching symbols.",
                 inputSchema: z.object({
                     query: z.string().describe("Search query for symbol names (supports partial matches)"),
-                    limit: z.number().optional().default(10).describe("Maximum number of results to return")
+                    limit: z.number().optional().default(10).describe("Maximum number of results to return"),
+                    symbol_type: z.enum(['file', 'module', 'class', 'interface', 'method', 'function', 'field', 'test', 'package']).optional().describe("Filter by symbol type"),
+                    language: z.string().optional().describe("Filter by programming language (e.g., 'typescript', 'python')"),
+                    visibility: z.enum(['public', 'protected', 'internal', 'private']).optional().describe("Filter by visibility")
                 })
             },
-            async ({ query, limit }) => {
+            async ({ query, limit, symbol_type, language, visibility }) => {
                 await this.waitUntilReady();
-                const nodes = this.graphEngine.nodeRepo.searchSymbols(query, limit || 10);
+                const nodes = this.graphEngine.nodeRepo.searchSymbols(query, limit || 10, {
+                    symbol_type: symbol_type as any,
+                    language,
+                    visibility: visibility as any
+                });
                 return {
                     content: [{
                         type: "text",
                         text: JSON.stringify(nodes.map(n => ({
                             qname: n.qualified_name,
                             type: n.symbol_type,
-                            file: n.file_path
+                            file: n.file_path,
+                            language: n.language,
+                            visibility: n.visibility
                         })), null, 2)
                     }]
                 };
