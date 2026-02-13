@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 Cynapx Contributors
+ * Licensed under the MIT License (MIT).
+ * See LICENSE in the project root for license information.
+ */
+/**
  * Common Symbol Types as defined in the logical scheme.
  */
 export type SymbolType = 'file' | 'module' | 'class' | 'interface' | 'method' | 'function' | 'field' | 'test' | 'package';

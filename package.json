@@ -6,10 +6,12 @@
   "bin": {
     "cynapx": "dist/bootstrap.js"
   },
+  "license": "MIT",
   "files": [
     "dist",
     "schema",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "start": "ts-node src/bootstrap.ts",

@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 Cynapx Contributors
+ * Licensed under the MIT License (MIT).
+ * See LICENSE in the project root for license information.
+ */
 import express, { Request, Response } from 'express';
 import * as fs from 'fs';
 import { GraphEngine, TraversalResult } from '../graph/graph-engine';

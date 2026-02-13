@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 Cynapx Contributors
+ * Licensed under the MIT License (MIT).
+ * See LICENSE in the project root for license information.
+ */
 
 import { Database } from 'better-sqlite3';
 import { NodeRepository } from '../db/node-repository';

@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 Cynapx Contributors
+ * Licensed under the MIT License (MIT).
+ * See LICENSE in the project root for license information.
+ */
 import { parentPort } from 'worker_threads';
 import { TypeScriptParser } from './typescript-parser';
 import { TreeSitterParser } from './tree-sitter-parser';
