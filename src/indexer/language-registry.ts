@@ -21,7 +21,8 @@ export class LanguageRegistry {
         ['java', './languages/java'],
         ['kt', './languages/kotlin'],
         ['kts', './languages/kotlin'],
-        ['cs', './languages/csharp']
+        ['cs', './languages/csharp'],
+        ['php', './languages/php']
     ]);
 
     private constructor() { }

@@ -25,13 +25,15 @@
 *   **Task 23: 성능 및 확장성 최적화**: DB PRAGMA 튜닝, 배치 ID 사전 조회(Pre-fetching) 및 샘플링 기반 정합성 체크 도입 완료.
 *   **Task 24: 코드 의미론적 클러스터링 및 관계 추론**: Jaccard 유사도 기반 논리적 모듈 구조 자동 파악 및 Core/Utility 분류 시스템 구축 완료.
 *   **Task 25: 다국어 확장 Wave 1, 2 & 3**: Java, Kotlin, C#, C, C++, Rust, Go 및 GDScript 정밀 분석 파서 구현 및 통합 완료. 2단계 배치 처리 및 Node-Object 매핑 기반 관계 추출 엔진 구축 완료.
+*   **Task 25.5: 상속 및 구현 관계(Inheritance) 추출 정교화**: Java/C#/Python/TS/CPP 상속 관계 엣지 누락 현상 해결 및 정밀도 개선 완료.
+*   **Task 26: Wave 3 확장 (PHP Integrated)**: PHP Trait 및 상속 관계 추출 엔진 구축 완료. (Lua 지원은 환경 호환성 문제로 철회)
 
 ---
 
 ## 2. 현재 상태 (Current Status)
 *   **브랜드**: **Cynapx (시냅스엑스)** - 코드의 신경망을 잇는 지능형 인덱스.
 *   **통합**: 공식 MCP SDK를 통해 Gemini CLI와 안정적으로 연결됨.
-*   **다국어 지원**: TS, JS, PY, C, CPP, RS, GO, GD, JAVA, KT, CS (총 11개 언어) 지원.
+*   **다국어 지원**: TS, JS, PY, C, CPP, RS, GO, GD, JAVA, KT, CS, PHP (총 12개 언어) 지원.
 *   **지능형 분석**: 의미론적 클러스터링을 통한 시스템 '심장부(Core)' 및 '유틸리티' 자동 식별 지원.
 *   **안정성**: Canonical Path Normalization 및 비차단 상태 체크가 적용된 견고한 아키텍처.
 
@@ -39,25 +41,12 @@
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 8: Advanced Reasoning & Multilingual Expansion (지능형 추론 및 다국어 확장)
+### Phase 8: Advanced Reasoning & Scalability (지능형 추론 및 확장성 고도화)
 
-*   **Task 25.5: 상속 및 구현 관계(Inheritance) 추출 정교화 (Completed)**:
-    *   Java/C# 상속 관계 엣지 누락 현상 해결 및 검증 완료.
-
-*   **Task 25.5.1: Scoped Inheritance Refinement (Completed)**:
-    *   Java `scoped_type_identifier` 및 C# `qualified_name` 지원 추가.
-    *   Python 상속 추출 엔진 신규 도입.
-
-*   **Task 25.5.2: TypeScript S-Query & Registry Recovery (Completed)**:
-    *   Persistent Query Error 해결 및 TS/CPP 관계 추출 정상화.
-    *   Lazy-loading 명명 규칙(`NameProvider`) 정규화 완료.
-    *   Full Phase 8 Regression Pass 달성 (11개 언어 검증 완료).
-
-*   **Task 25.6: Wave 3 확장 (Remaining)**: Ruby, PHP, Lua, Perl 지원 확장.
-
-*   **Task 26: 인덱싱 가속화 및 생태계 개방**:
+*   **Task 27: 대규모 분석 성능 고도화 및 플러그인 시스템**:
     *   **Rust 기반 Core Indexer**: 대규모 멀티 언어 처리를 위한 인덱서 코어의 Rust 전환 검토.
     *   **Plugin System**: 사용자 정의 Tree-sitter 문법 및 S-query 추가를 위한 플러그인 인터페이스 개방.
+    *   **Async Registry**: ESM/TLA 모듈 지원을 위한 비동기 로딩 아키텍처 전환 검토.
 
 ---
 **Status**: Phase 8 - **Multilingual Expansion (Optimization & Expansion)**
