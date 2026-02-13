@@ -41,9 +41,17 @@
 
 ### Phase 8: Advanced Reasoning & Multilingual Expansion (지능형 추론 및 다국어 확장)
 
-*   **Task 25.5: 상속 및 구현 관계(Inheritance) 추출 정교화 (High Priority)**:
-    *   Tree-sitter 쿼리의 캡처 타이밍 및 인프라의 매칭 정교성(Heuristic Matching) 조정.
-    *   Java/C# 상속 관계 엣지 누락 현상 해결 및 검증.
+*   **Task 25.5: 상속 및 구현 관계(Inheritance) 추출 정교화 (Completed)**:
+    *   Java/C# 상속 관계 엣지 누락 현상 해결 및 검증 완료.
+
+*   **Task 25.5.1: Scoped Inheritance Refinement (Completed)**:
+    *   Java `scoped_type_identifier` 및 C# `qualified_name` 지원 추가.
+    *   Python 상속 추출 엔진 신규 도입.
+
+*   **Task 25.5.2: TypeScript S-Query & Registry Recovery (Completed)**:
+    *   Persistent Query Error 해결 및 TS/CPP 관계 추출 정상화.
+    *   Lazy-loading 명명 규칙(`NameProvider`) 정규화 완료.
+    *   Full Phase 8 Regression Pass 달성 (11개 언어 검증 완료).
 
 *   **Task 25.6: Wave 3 확장 (Remaining)**: Ruby, PHP, Lua, Perl 지원 확장.
 

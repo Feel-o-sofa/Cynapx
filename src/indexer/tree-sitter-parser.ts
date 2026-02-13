@@ -157,10 +157,9 @@ export class TreeSitterParser implements CodeParser {
                         dynamic: true,
                         call_site_line: node.startPosition.row + 1
                     });
-                } else if (cName.includes('.relation') || cName.includes('.import')) {
+                } else if (cName.includes('relation') || cName.includes('import')) {
                     // Import or OOP Relation
                     if (provider.resolveImport) {
-                        console.error(`[RELATION-DEBUG] Processing ${cName} at line ${node.startPosition.row + 1}, fromQName: ${fromQName}`);
                         provider.resolveImport(node, fromQName, edges, cName);
                     }
                 }

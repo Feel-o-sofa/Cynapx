@@ -18,7 +18,9 @@ export class PythonProvider implements LanguageProvider {
                 name: (identifier) @function.name 
                 parameters: (parameters) @function.params
                 return_type: (type)? @function.return) @function.def
-            (class_definition name: (identifier) @class.name) @class.def
+            (class_definition 
+                name: (identifier) @class.name
+                (argument_list [(identifier) (attribute) (subscript)] @relation.inherits)?) @class.def
             (call function: (identifier) @call.name) @call.expr
             (import_statement) @import.stmt
             (import_from_statement) @import.from_stmt
@@ -33,6 +35,11 @@ export class PythonProvider implements LanguageProvider {
     }
 
     public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+        if (captureName === 'relation.inherits') {
+            edges.push({ from_qname: fromQName, to_qname: node.text, edge_type: 'inherits', dynamic: false });
+            return;
+        }
+
         if (node.type === 'import_statement') {
             for (let i = 0; i < node.childCount; i++) {
                 const child = node.child(i)!;

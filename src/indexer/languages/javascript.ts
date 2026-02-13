@@ -4,7 +4,7 @@ import { SymbolType } from '../../types';
 import JavaScript from 'tree-sitter-javascript';
 import Parser from 'tree-sitter';
 
-export class JavaScriptProvider implements LanguageProvider {
+export class JavascriptProvider implements LanguageProvider {
     public extensions = ['js'];
     public languageName = 'javascript';
 

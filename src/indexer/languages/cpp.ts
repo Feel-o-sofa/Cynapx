@@ -23,6 +23,9 @@ export class CppProvider implements LanguageProvider {
             ) @function.def
             (class_specifier name: (type_identifier) @class.name) @class.def
             (struct_specifier name: (type_identifier) @class.name) @class.def
+            
+            (base_class_clause [(type_identifier) (qualified_identifier)] @relation.inherits)
+
             (namespace_definition name: (_) @module.name) @module.def
             (call_expression function: (_) @call.name) @call.expr
             (preproc_include path: (_) @import.name) @import.def
@@ -37,6 +40,11 @@ export class CppProvider implements LanguageProvider {
     }
 
     public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+        if (captureName === 'relation.inherits') {
+            edges.push({ from_qname: fromQName, to_qname: node.text, edge_type: 'inherits', dynamic: false });
+            return;
+        }
+
         const pathNode = node.descendantsOfType('string_content')[0] || node;
         if (pathNode) {
             let headerPath = pathNode.text.replace(/[<">]/g, '');

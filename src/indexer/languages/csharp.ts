@@ -18,10 +18,10 @@ export class CsharpProvider implements LanguageProvider {
             (interface_declaration (identifier) @interface.name) @interface.def
             (method_declaration (identifier) @function.name parameters: (parameter_list) @function.params) @function.def
             
-            (base_list (identifier) @relation.inherits)
+            (base_list [(identifier) (qualified_name) (predefined_type) (generic_name)] @relation.inherits)
             
             (invocation_expression function: [(identifier) (member_access_expression name: (identifier))] @call.name) @call.expr
-            (using_directive (identifier) @import.name) @import.def
+            (using_directive [(identifier) (qualified_name)] @import.name) @import.def
         `;
     }
 
@@ -34,9 +34,9 @@ export class CsharpProvider implements LanguageProvider {
     public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
         const text = node.text;
         if (captureName === 'relation.inherits') {
-            edges.push({ from_qname: fromQName, to_qname: `type:${text}`, edge_type: 'inherits', dynamic: false });
+            edges.push({ from_qname: fromQName, to_qname: text, edge_type: 'inherits', dynamic: false });
         } else if (captureName?.includes('import')) {
-            edges.push({ from_qname: fromQName, to_qname: `namespace:${text}`, edge_type: 'depends_on', dynamic: false });
+            edges.push({ from_qname: fromQName, to_qname: text, edge_type: 'depends_on', dynamic: false });
         }
     }
 
