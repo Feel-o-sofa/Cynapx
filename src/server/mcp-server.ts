@@ -7,7 +7,7 @@ import { MetadataRepository } from '../db/metadata-repository';
 import { CynapxErrorCode } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
-import { ANCHOR_FILE, readRegistry, addToRegistry } from '../utils/paths';
+import { ANCHOR_FILE, readRegistry, addToRegistry, getDatabasePath } from '../utils/paths';
 import { SecurityProvider } from '../utils/security';
 
 export class McpServer {
@@ -86,9 +86,8 @@ export class McpServer {
     }
 
     private async waitUntilReady() {
-        await this.readyPromise;
+        // Only wait for the initial startup promise
         if (!this.isInitialized) {
-            // Check registry as a fallback for Zero-Pollution mode
             const currentPath = process.cwd();
             const registry = readRegistry();
             const isRegistered = registry.some(p => currentPath.toLowerCase().startsWith(p.path.toLowerCase()));
@@ -96,7 +95,7 @@ export class McpServer {
             if (!isRegistered) {
                 throw {
                     error_code: CynapxErrorCode.INITIALIZATION_REQUIRED,
-                    message: "No .cynapx-config found and project not in registry. Please use 'initialize_project' to setup the project."
+                    message: "Project not initialized. Please use 'initialize_project' first."
                 };
             }
             this.isInitialized = true;
@@ -368,11 +367,11 @@ Please follow this safety protocol:
         this.sdkServer.registerTool(
             "initialize_project",
             {
-                description: "Initialize a project by creating a .cynapx-config file and registering it. This activates the analysis engine.",
+                description: "Initialize a project and register it in the central registry. By default, it operates in Zero-Pollution mode.",
                 inputSchema: z.object({
                     mode: z.enum(['current', 'existing', 'custom']).describe("Setup mode"),
                     path: z.string().optional().describe("Absolute path for 'existing' or 'custom' mode"),
-                    zero_pollution: z.boolean().optional().default(false).describe("If true, do NOT create .cynapx-config file in the project directory (Zero-Pollution mode)")
+                    zero_pollution: z.boolean().optional().default(true).describe("If true (default), do NOT create .cynapx-config file in the project directory.")
                 })
             },
             async ({ mode, path: targetPath, zero_pollution }) => {
@@ -799,12 +798,13 @@ Please follow this safety protocol:
         this.sdkServer.registerTool(
             "purge_index",
             {
-                description: "Completely delete the local database index for the current project. Use this before uninstalling or when you want to start from scratch. WARNING: This action cannot be undone.",
+                description: "Completely delete the local database index for the current project. Optionally remove the project from the central registry.",
                 inputSchema: z.object({
-                    confirm: z.boolean().optional().default(false).describe("Explicit confirmation to proceed with the deletion")
+                    confirm: z.boolean().optional().default(false).describe("Explicit confirmation to proceed with the deletion"),
+                    unregister: z.boolean().optional().default(false).describe("If true, also remove the project from the central registry")
                 })
             },
-            async ({ confirm }) => {
+            async ({ confirm, unregister }) => {
                 // Wait for readyPromise but don't strictly require isInitialized to allow purging broken setups
                 await this.readyPromise; 
 
@@ -817,7 +817,10 @@ Please follow this safety protocol:
                     };
                 }
 
-                const dbPath = (this.graphEngine.nodeRepo as any).db.name;
+                // Get current project path before purging
+                const currentPath = process.cwd();
+                const dbPath = getDatabasePath(currentPath);
+
                 try {
                     console.error(`Purging database: ${dbPath}`);
                     
@@ -831,18 +834,22 @@ Please follow this safety protocol:
                     // Reset internal state
                     this.isInitialized = false;
                     this.consistencyChecker = undefined;
-                    // Re-create the promise for future initializations
-                    this.readyPromise = new Promise((resolve) => {
-                        this.resolveReady = resolve;
-                    });
 
-                    // Delete the physical file
-                    if (fs.existsSync(dbPath)) {
-                        fs.unlinkSync(dbPath);
+                    // Delete the physical files (Main DB + WAL + SHM)
+                    const filesToDelete = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
+                    for (const f of filesToDelete) {
+                        if (fs.existsSync(f)) {
+                            fs.unlinkSync(f);
+                        }
+                    }
+
+                    if (unregister) {
+                        const { removeFromRegistry } = require('../utils/paths');
+                        removeFromRegistry(currentPath);
                     }
 
                     return {
-                        content: [{ type: "text", text: `Successfully purged all index data. The database file at ${dbPath} has been deleted. Server is now in PENDING mode.` }]
+                        content: [{ type: "text", text: `Successfully purged all index data. The database file at ${dbPath} has been deleted.${unregister ? ' Project removed from registry.' : ''} Server is now in PENDING mode.` }]
                     };
                 } catch (err) {
                     return { isError: true, content: [{ type: "text", text: `Failed to purge index: ${err}` }] };

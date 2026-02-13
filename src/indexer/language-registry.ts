@@ -9,7 +9,15 @@ export class LanguageRegistry {
     private extensionMap: Map<string, string> = new Map([
         ['py', './languages/python'],
         ['ts', './languages/typescript'],
-        ['js', './languages/javascript']
+        ['js', './languages/javascript'],
+        ['c', './languages/c'],
+        ['h', './languages/c'],
+        ['cpp', './languages/cpp'],
+        ['cc', './languages/cpp'],
+        ['hpp', './languages/cpp'],
+        ['rs', './languages/rust'],
+        ['go', './languages/go'],
+        ['gd', './languages/gdscript']
     ]);
 
     private constructor() { }

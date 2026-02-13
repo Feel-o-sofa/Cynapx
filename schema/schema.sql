@@ -35,6 +35,19 @@ CREATE TABLE IF NOT EXISTS nodes (
     FOREIGN KEY (cluster_id) REFERENCES logical_clusters(id) ON DELETE SET NULL
 );
 
+-- Edge table: Stores relationships between symbols
+CREATE TABLE IF NOT EXISTS edges (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    from_id INTEGER NOT NULL,
+    to_id INTEGER NOT NULL,
+    edge_type TEXT NOT NULL, -- contains, calls, inherits, implements, tests, depends_on, dynamic_calls
+    call_site_line INTEGER,
+    dynamic INTEGER NOT NULL DEFAULT 0, -- boolean (0 or 1)
+    
+    FOREIGN KEY (from_id) REFERENCES nodes (id) ON DELETE CASCADE,
+    FOREIGN KEY (to_id) REFERENCES nodes (id) ON DELETE CASCADE
+);
+
 -- Cluster table: Stores logically grouped symbols (Task 24)
 CREATE TABLE IF NOT EXISTS logical_clusters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,7 +60,6 @@ CREATE TABLE IF NOT EXISTS logical_clusters (
 
 -- Mandatory Indexes (logical_scheme_and_indexing_strat.md Section 5.1)
 CREATE INDEX IF NOT EXISTS idx_nodes_qualified_name ON nodes (qualified_name);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_nodes_symbol_type_qualified_name ON nodes (symbol_type, qualified_name);
 CREATE INDEX IF NOT EXISTS idx_nodes_file_path ON nodes (file_path);
 CREATE INDEX IF NOT EXISTS idx_nodes_version ON nodes (version);
 CREATE INDEX IF NOT EXISTS idx_nodes_cluster_id ON nodes (cluster_id);

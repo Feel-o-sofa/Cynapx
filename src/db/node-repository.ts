@@ -9,7 +9,7 @@ export class NodeRepository {
 
     public createNode(node: CodeNode): number {
         const stmt = this.db.prepare(`
-      INSERT INTO nodes (
+      INSERT OR REPLACE INTO nodes (
         qualified_name, symbol_type, language, file_path, start_line, end_line,
         visibility, is_generated, last_updated_commit, version,
         checksum, modifiers, signature, return_type, field_type,

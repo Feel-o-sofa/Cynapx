@@ -116,7 +116,13 @@ export class UpdatePipeline {
                         this.handleDelete(res.event.file_path);
                     }
                     if (res.event.event === 'ADD' || res.event.event === 'MODIFY') {
+                        // Pre-filter duplicates within the same batch to avoid UNIQUE constraint violations
+                        const batchNodes = new Map<string, typeof res.delta.nodes[0]>();
                         for (const node of res.delta.nodes) {
+                            batchNodes.set(node.qualified_name, node);
+                        }
+
+                        for (const node of batchNodes.values()) {
                             const nodeId = this.nodeRepo.createNode(node);
                             symbolCache.set(node.qualified_name, nodeId);
                         }

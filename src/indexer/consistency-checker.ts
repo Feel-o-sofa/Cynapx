@@ -5,6 +5,7 @@ import { GitService } from './git-service';
 import { UpdatePipeline } from './update-pipeline';
 import { FileFilter } from '../utils/file-filter';
 import { calculateFileChecksum } from '../utils/checksum';
+import { LanguageRegistry } from './language-registry';
 import { SecurityProvider } from '../utils/security';
 import { FileChangeEvent } from './types';
 import * as fs from 'fs';
@@ -147,6 +148,12 @@ export class ConsistencyChecker {
         
         if (!fs.existsSync(directory)) return results;
         
+        const extensions = LanguageRegistry.getInstance().getAllExtensions();
+        if (directory === this.projectPath) {
+            console.error(`Scanning directory: ${directory}`);
+            console.error(`Supported extensions: ${extensions.join(', ')}`);
+        }
+        
         const files = fs.readdirSync(directory);
         for (const file of files) {
             const fullPath = path.resolve(directory, file);
@@ -157,8 +164,11 @@ export class ConsistencyChecker {
                     const subFiles = await this.getFiles(fullPath, true, filter);
                     results.push(...subFiles);
                 }
-            } else if (file.endsWith('.ts') || file.endsWith('.js') || file.endsWith('.py')) {
-                results.push(fullPath);
+            } else {
+                const ext = file.split('.').pop()?.toLowerCase();
+                if (ext && LanguageRegistry.getInstance().getAllExtensions().includes(ext)) {
+                    results.push(fullPath);
+                }
             }
         }
         return results;

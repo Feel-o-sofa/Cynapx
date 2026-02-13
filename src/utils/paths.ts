@@ -73,6 +73,16 @@ export function addToRegistry(projectPath: string): void {
     fs.writeFileSync(getRegistryPath(), JSON.stringify(registry, null, 2), 'utf8');
 }
 
+export function removeFromRegistry(projectPath: string): void {
+    const absolutePath = path.resolve(projectPath);
+    let registry = readRegistry();
+    const newRegistry = registry.filter(p => p.path.toLowerCase() !== absolutePath.toLowerCase());
+    
+    if (registry.length !== newRegistry.length) {
+        fs.writeFileSync(getRegistryPath(), JSON.stringify(newRegistry, null, 2), 'utf8');
+    }
+}
+
 export function findProjectAnchor(startPath: string): string | null {
     let current = path.resolve(startPath);
     

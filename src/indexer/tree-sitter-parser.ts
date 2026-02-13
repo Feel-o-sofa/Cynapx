@@ -29,7 +29,14 @@ export class TreeSitterParser implements CodeParser {
 
         const sourceCode = fs.readFileSync(filePath, 'utf8');
         const tree = this.parser.parse(sourceCode);
-        const query = new Parser.Query(provider.getLanguage(), provider.getQuery());
+        
+        let query: Parser.Query;
+        try {
+            query = new Parser.Query(provider.getLanguage(), provider.getQuery());
+        } catch (err: any) {
+            throw new Error(`TreeSitterQueryError in ${filePath} (${provider.languageName}): ${err.message}\nQuery: ${provider.getQuery()}`);
+        }
+        
         const matches = query.matches(tree.rootNode);
 
         const nodes: CodeNode[] = [];
@@ -60,10 +67,19 @@ export class TreeSitterParser implements CodeParser {
             const defCapture = captures.find(c => c.name.endsWith('.def'));
             const nameCapture = captures.find(c => c.name.endsWith('.name'));
 
-            if (defCapture && nameCapture && !captures.some(c => c.name.startsWith('call')) && !captures.some(c => c.name.startsWith('import'))) {
+            if (defCapture && !captures.some(c => c.name.startsWith('call')) && !captures.some(c => c.name.startsWith('import'))) {
                 const node = defCapture.node;
-                const name = nameCapture.node.text;
                 const type = provider.mapCaptureToSymbolType(defCapture.name);
+                
+                // Intelligent Name Extraction
+                let name = nameCapture?.node.text;
+                if (!name) {
+                    // Try to find common identifier child nodes
+                    const idNode = node.childForFieldName('name') || 
+                                   node.children.find(c => c.type === 'identifier' || c.type === 'type_identifier' || c.type === 'field_identifier');
+                    name = idNode ? idNode.text : `unknown_${node.type}_${node.startPosition.row}`;
+                }
+
                 const qname = `${filePath}#${name}`;
 
                 // Extract Metadata
@@ -112,9 +128,19 @@ export class TreeSitterParser implements CodeParser {
             const importCapture = captures.find(c => c.name.startsWith('import'));
             const nameCapture = captures.find(c => c.name.endsWith('.name'));
 
-            if (callCapture && nameCapture && captures.some(c => c.name.startsWith('call'))) {
+            if (callCapture && captures.some(c => c.name.startsWith('call'))) {
                 const node = callCapture.node;
-                const targetName = nameCapture.node.text;
+                
+                // Intelligent Target Name Extraction
+                let targetName = nameCapture?.node.text;
+                if (!targetName) {
+                    const funcNode = node.childForFieldName('function') || node.childForFieldName('name') || node;
+                    const idNode = funcNode.descendantsOfType('identifier')[0] || 
+                                   funcNode.descendantsOfType('field_identifier')[0] ||
+                                   funcNode;
+                    targetName = idNode.text;
+                }
+
                 const callLine = node.startPosition.row + 1;
 
                 // Find enclosing symbol (tightest scope)
