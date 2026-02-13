@@ -149,14 +149,17 @@ Environment Variables:
             currentGraphEngine = new GraphEngine(nodeRepo, edgeRepo);
         }
 
-        // Start MCP Server
-        let mcpServer: McpServer | undefined;
+        // Initialize MCP Server (always needed for either Stdio or SSE mode)
+        const mcpServer = new McpServer(currentGraphEngine!, metadataRepo!, currentConsistencyChecker);
+        // Important: Register default handlers for Stdio/Single-mode
+        mcpServer.registerHandlers();
+        
+        if (currentSecurityProvider) {
+            mcpServer.setSecurityProvider(currentSecurityProvider);
+        }
+
+        // Start MCP Server (Stdio Mode)
         if (isMcpMode) {
-            mcpServer = new McpServer(currentGraphEngine!, metadataRepo!, currentConsistencyChecker);
-            if (currentSecurityProvider) {
-                mcpServer.setSecurityProvider(currentSecurityProvider);
-            }
-            
             // Handle deferred initialization
             mcpServer.setOnInitialize(async (newPath) => {
                 // Clear old resources before switching
@@ -215,6 +218,10 @@ Environment Variables:
             }
 
             const apiServer = new ApiServer(currentGraphEngine!, httpsOptions);
+            // Attach MCP Server for SSE support
+            apiServer.setMcpServer(mcpServer);
+            mcpServer.markReady(true); // Standalone server is ready if anchor exists
+
             const port = parseInt(process.env.PORT || '3000', 10);
             apiServer.start(port);
             log(`Cynapx API listening on port ${port}`);

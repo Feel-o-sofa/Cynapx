@@ -5,6 +5,7 @@
  */
 import { McpServer as SdkMcpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { z } from "zod";
 import { GraphEngine } from '../graph/graph-engine';
 import { ConsistencyChecker } from '../indexer/consistency-checker';
@@ -26,9 +27,9 @@ export class McpServer {
     private securityProvider?: SecurityProvider;
 
     constructor(
-        private graphEngine: GraphEngine,
-        private metadataRepo: MetadataRepository,
-        private consistencyChecker?: ConsistencyChecker
+        public graphEngine: GraphEngine,
+        public metadataRepo: MetadataRepository,
+        public consistencyChecker?: ConsistencyChecker
     ) {
         this.sdkServer = new SdkMcpServer({
             name: "cynapx",
@@ -38,7 +39,13 @@ export class McpServer {
         this.readyPromise = new Promise((resolve) => {
             this.resolveReady = resolve;
         });
+    }
 
+    /**
+     * Registers all standard Cynapx handlers (tools, resources, prompts) to the SDK server.
+     * This is public to allow registration on fresh server instances for new sessions.
+     */
+    public registerHandlers() {
         this.registerTools();
         this.registerResources();
         this.registerPrompts();
@@ -872,5 +879,13 @@ Please follow this safety protocol:
     public async close() {
         await this.sdkServer.close();
         console.error("Cynapx MCP Server closed");
+    }
+
+    /**
+     * Connects a new transport to the MCP server.
+     * Used for SSE or other multi-connection transports.
+     */
+    public async connectTransport(transport: any) {
+        await this.sdkServer.connect(transport);
     }
 }

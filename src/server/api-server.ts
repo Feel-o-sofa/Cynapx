@@ -7,11 +7,16 @@ import express, { Request, Response } from 'express';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as https from 'https';
+import * as crypto from 'crypto';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { GraphEngine, TraversalResult } from '../graph/graph-engine';
 import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
+import { McpServer } from './mcp-server';
 
 export class ApiServer {
     private app: express.Application;
+    private mcpServer?: McpServer;
+    private mcpTransports: Map<string, StreamableHTTPServerTransport> = new Map();
 
     constructor(private graphEngine: GraphEngine, private httpsOptions?: https.ServerOptions) {
         this.app = express();
@@ -61,8 +66,16 @@ export class ApiServer {
         });
     }
 
+    public setMcpServer(mcpServer: McpServer) {
+        this.mcpServer = mcpServer;
+    }
+
     private setupRoutes(): void {
         console.log('Setting up API routes...');
+        
+        // 3.9 Unified MCP-over-HTTP Endpoint (Streamable HTTP)
+        this.app.all('/mcp', this.handleMcp.bind(this));
+
         // 3.1 Get Symbol API
         this.app.post('/api/symbol/get', this.handleGetSymbol.bind(this));
 
@@ -86,6 +99,54 @@ export class ApiServer {
 
         // 3.8 Export API (Task 14)
         this.app.post('/api/graph/export', this.handleExportGraph.bind(this));
+    }
+
+    private async handleMcp(req: Request, res: Response) {
+        if (!this.mcpServer) {
+            return res.status(503).json({ error: "MCP Server not initialized" });
+        }
+
+        const querySid = req.query.sessionId as string;
+        const headerSid = req.headers['mcp-session-id'] as string;
+        const sessionId = querySid || headerSid;
+
+        console.log(`[MCP] Incoming request. QuerySID: ${querySid}, HeaderSID: ${headerSid}, Method: ${req.body?.method}`);
+
+        if (sessionId && this.mcpTransports.has(sessionId)) {
+            console.log(`[MCP] Routing to existing session: ${sessionId}`);
+            const transport = this.mcpTransports.get(sessionId)!;
+            await transport.handleRequest(req, res, req.body);
+            return;
+        }
+
+        // Create new transport for new session
+        const newSessionId = crypto.randomUUID();
+        const transport = new StreamableHTTPServerTransport({
+            sessionIdGenerator: () => newSessionId
+        });
+
+        // Register immediately to prevent race condition
+        this.mcpTransports.set(newSessionId, transport);
+        console.log(`[MCP] New session registered: ${newSessionId}`);
+
+        // Spawn a new MCP Server instance for this session
+        const sessionServer = new McpServer(
+            this.mcpServer.graphEngine, 
+            this.mcpServer.metadataRepo, 
+            this.mcpServer.consistencyChecker
+        );
+        sessionServer.registerHandlers();
+        sessionServer.markReady(true); 
+
+        await sessionServer.connectTransport(transport);
+        
+        transport.onclose = () => {
+            console.log(`[MCP] Session ${newSessionId} closed.`);
+            this.mcpTransports.delete(newSessionId);
+            sessionServer.close().catch(console.error);
+        };
+
+        await transport.handleRequest(req, res, req.body);
     }
 
     private async handleExportGraph(req: Request, res: Response) {
@@ -316,7 +377,7 @@ export class ApiServer {
             ? https.createServer(this.httpsOptions, this.app)
             : http.createServer(this.app);
 
-        server.listen(port, () => {
+        server.listen(port, '0.0.0.0', () => {
             const address = server.address();
             const assignedPort = typeof address === 'string' ? port : address?.port;
             const protocol = this.httpsOptions ? 'HTTPS' : 'HTTP';
