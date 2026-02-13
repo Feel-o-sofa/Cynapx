@@ -5,13 +5,15 @@
  */
 import express, { Request, Response } from 'express';
 import * as fs from 'fs';
+import * as http from 'http';
+import * as https from 'https';
 import { GraphEngine, TraversalResult } from '../graph/graph-engine';
 import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
 
 export class ApiServer {
     private app: express.Application;
 
-    constructor(private graphEngine: GraphEngine) {
+    constructor(private graphEngine: GraphEngine, private httpsOptions?: https.ServerOptions) {
         this.app = express();
         this.app.use(express.json());
         this.setupMiddleware();
@@ -20,6 +22,32 @@ export class ApiServer {
 
     private setupMiddleware(): void {
         const AUTH_TOKEN = process.env.KNOWLEDGE_TOOL_TOKEN || 'dev-token-1234';
+
+        // Request Logger Middleware
+        this.app.use((req, res, next) => {
+            const start = Date.now();
+            const { method, url, body } = req;
+            const remoteAddr = req.ip || req.socket.remoteAddress;
+            const remotePort = req.socket.remotePort;
+
+            res.on('finish', () => {
+                const duration = Date.now() - start;
+                const status = res.statusCode;
+                const logMsg = `[${new Date().toISOString()}] ${method} ${url} from ${remoteAddr}:${remotePort} - Status: ${status} (${duration}ms)`;
+                
+                if (status >= 400) {
+                    console.warn(logMsg);
+                } else {
+                    console.log(logMsg);
+                }
+
+                if (method === 'POST' && body && Object.keys(body).length > 0) {
+                    // Truncate large payloads in logs if necessary, but for now log fully
+                    console.log(`  Payload: ${JSON.stringify(body)}`);
+                }
+            });
+            next();
+        });
 
         this.app.use((req, res, next) => {
             const authHeader = req.headers.authorization;
@@ -34,6 +62,7 @@ export class ApiServer {
     }
 
     private setupRoutes(): void {
+        console.log('Setting up API routes...');
         // 3.1 Get Symbol API
         this.app.post('/api/symbol/get', this.handleGetSymbol.bind(this));
 
@@ -228,12 +257,14 @@ export class ApiServer {
     }
 
     private handleSymbolSearch(req: Request, res: Response) {
+        console.log('Handling symbol search request:', req.body);
         const { query, limit } = req.body;
         if (!query) {
             return res.status(400).json({ error_code: 'INVALID_QUERY', message: 'Query string is required' });
         }
 
         const nodes = this.graphEngine.nodeRepo.searchSymbols(query, limit || 20);
+        console.log(`Found ${nodes.length} matches for query: ${query}`);
         res.json({
             matches: nodes.map(node => ({
                 symbol: {
@@ -281,11 +312,16 @@ export class ApiServer {
     }
 
     public start(port: number = 3000): void {
-        const server = this.app.listen(port, () => {
+        const server = this.httpsOptions 
+            ? https.createServer(this.httpsOptions, this.app)
+            : http.createServer(this.app);
+
+        server.listen(port, () => {
             const address = server.address();
             const assignedPort = typeof address === 'string' ? port : address?.port;
+            const protocol = this.httpsOptions ? 'HTTPS' : 'HTTP';
 
-            console.log(`Knowledge Tool API listening on port ${assignedPort}`);
+            console.log(`Knowledge Tool API listening on port ${assignedPort} (${protocol})`);
 
             // Save port to file so test scripts can find it
             try {

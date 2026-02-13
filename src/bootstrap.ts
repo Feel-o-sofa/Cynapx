@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * Copyright (c) 2026 Cynapx Contributors
  * Licensed under the MIT License (MIT).
@@ -22,6 +23,7 @@ import { McpServer } from './server/mcp-server';
 import { FileWatcher } from './watcher/file-watcher';
 import { LifecycleManager } from './utils/lifecycle-manager';
 import { SecurityProvider } from './utils/security';
+import { CertificateGenerator } from './utils/certificate-generator';
 import { getDatabasePath, findProjectAnchor } from './utils/paths';
 import { FileFilter } from './utils/file-filter';
 import * as fs from 'fs';
@@ -53,11 +55,14 @@ Usage:
 
 Options:
   --path <dir>    Path to the project directory to analyze (default: current directory)
+  --https         Enable ephemeral HTTPS for the API server
   --help, -h      Show this help message
 
 Environment Variables:
   MCP_MODE=true   Start in MCP (Model Context Protocol) mode via stdio
   PORT=<number>   Port for the HTTP API server (default: 3000)
+  SSL_KEY_PATH    (Optional) Path to manual SSL key
+  SSL_CERT_PATH   (Optional) Path to manual SSL certificate
         `);
         process.exit(0);
     }
@@ -66,6 +71,8 @@ Environment Variables:
     const startPath = pathIndex !== -1 && args[pathIndex + 1] 
         ? path.resolve(args[pathIndex + 1]) 
         : process.cwd();
+
+    const useHttps = args.includes('--https');
 
     const anchorPath = findProjectAnchor(startPath);
     const initialProjectPath = anchorPath || startPath;
@@ -185,7 +192,29 @@ Environment Variables:
             }
         } else if (anchorPath) {
             // CLI/API Mode
-            const apiServer = new ApiServer(currentGraphEngine!);
+            let httpsOptions;
+            
+            if (useHttps) {
+                try {
+                    log('Generating ephemeral SSL certificates for purely volatile mode...');
+                    httpsOptions = CertificateGenerator.generate();
+                    log('Ephemeral SSL certificates generated and loaded into memory.');
+                } catch (err) {
+                    log(`Error generating ephemeral certificates: ${err}. Falling back to HTTP.`);
+                }
+            } else if (process.env.SSL_KEY_PATH && process.env.SSL_CERT_PATH) {
+                try {
+                    httpsOptions = {
+                        key: fs.readFileSync(process.env.SSL_KEY_PATH),
+                        cert: fs.readFileSync(process.env.SSL_CERT_PATH)
+                    };
+                    log('Manual SSL Certificates loaded successfully.');
+                } catch (err) {
+                    log(`Warning: Failed to load SSL certificates from ${process.env.SSL_KEY_PATH} or ${process.env.SSL_CERT_PATH}. Falling back to HTTP.`);
+                }
+            }
+
+            const apiServer = new ApiServer(currentGraphEngine!, httpsOptions);
             const port = parseInt(process.env.PORT || '3000', 10);
             apiServer.start(port);
             log(`Cynapx API listening on port ${port}`);

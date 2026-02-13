@@ -73,23 +73,57 @@ npm install ./cynapx-1.0.0.tgz
 
 ### 2. AI 에이전트 등록 (MCP Registration)
 
-에이전트에 등록할 때는 반드시 **절대 경로**를 사용해야 합니다. 각 운영체제별 터미널 환경에 맞는 명령어를 참조하세요.
+사용 중인 에이전트를 선택하여 등록 과정을 확인하세요. 명령 실행 전 프로젝트의 **절대 경로**를 준비해야 합니다.
 
-#### 💎 Gemini CLI에 등록하기
-| OS | 설치 유형 | 등록 명령어 |
-| :--- | :--- | :--- |
-| **Windows (PS)** | NPM 전역 | `gemini mcp add cynapx "npx" "--" "cynapx" "--path" "$PWD" -e MCP_MODE=true` |
-| | 로컬 소스 | `gemini mcp add cynapx "node" "--" "$((Resolve-Path ./dist/bootstrap.js).Path)" "--path" "$PWD" -e MCP_MODE=true` |
-| **Linux / Mac** | NPM 전역 | `gemini mcp add cynapx npx -- cynapx --path $(pwd) -e MCP_MODE=true` |
-| | 로컬 소스 | `gemini mcp add cynapx node -- $(pwd)/dist/bootstrap.js --path $(pwd) -e MCP_MODE=true` |
+<details>
+<summary><b>💎 Gemini CLI 등록 가이드 (클릭하여 펼치기)</b></summary>
 
-#### 💻 Codex CLI에 등록하기
-| OS | 설치 유형 | 등록 명령어 |
-| :--- | :--- | :--- |
-| **Windows (PS)** | NPM 전역 | `codex mcp add cynapx --env MCP_MODE=true -- npx cynapx --path "$PWD"` |
-| | 로컬 소스 | `codex mcp add cynapx --env MCP_MODE=true -- node "$((Resolve-Path ./dist/bootstrap.js).Path)" --path "$PWD"` |
-| **Linux / Mac** | NPM 전역 | `codex mcp add cynapx --env MCP_MODE=true -- npx cynapx --path "$(pwd)"` |
-| | 로컬 소스 | `codex mcp add cynapx --env MCP_MODE=true -- node "$(pwd)/dist/bootstrap.js" --path "$(pwd)"` |
+> **Tip:** Windows PowerShell에서는 `$PWD`를, Linux/Mac에서는 `$(pwd)`를 사용하여 현재 디렉토리 경로를 자동으로 입력할 수 있습니다.
+
+#### Windows (PowerShell)
+*   **NPM 전역 설치 시:**
+    ```powershell
+    gemini mcp add cynapx "npx" "--" "cynapx" "--path" "$PWD" -e MCP_MODE=true
+    ```
+*   **로컬 소스 실행 시:**
+    ```powershell
+    gemini mcp add cynapx "node" "--" "$((Resolve-Path ./dist/bootstrap.js).Path)" "--path" "$PWD" -e MCP_MODE=true
+    ```
+
+#### Linux / macOS
+*   **NPM 전역 설치 시:**
+    ```bash
+    gemini mcp add cynapx npx -- cynapx --path $(pwd) -e MCP_MODE=true
+    ```
+*   **로컬 소스 실행 시:**
+    ```bash
+    gemini mcp add cynapx node -- $(pwd)/dist/bootstrap.js --path $(pwd) -e MCP_MODE=true
+    ```
+</details>
+
+<details>
+<summary><b>💻 Codex CLI 등록 가이드 (클릭하여 펼치기)</b></summary>
+
+#### Windows (PowerShell)
+*   **NPM 전역 설치 시:**
+    ```powershell
+    codex mcp add cynapx --env MCP_MODE=true -- npx cynapx --path "$PWD"
+    ```
+*   **로컬 소스 실행 시:**
+    ```powershell
+    codex mcp add cynapx --env MCP_MODE=true -- node "$((Resolve-Path ./dist/bootstrap.js).Path)" --path "$PWD"
+    ```
+
+#### Linux / macOS
+*   **NPM 전역 설치 시:**
+    ```bash
+    codex mcp add cynapx --env MCP_MODE=true -- npx cynapx --path "$(pwd)"
+    ```
+*   **로컬 소스 실행 시:**
+    ```bash
+    codex mcp add cynapx --env MCP_MODE=true -- node "$(pwd)/dist/bootstrap.js" --path "$(pwd)"
+    ```
+</details>
 
 ---
 
