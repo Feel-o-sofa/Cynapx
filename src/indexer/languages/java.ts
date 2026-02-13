@@ -1,0 +1,71 @@
+import { LanguageProvider, RawCodeEdge } from '../types';
+import { SymbolType } from '../../types';
+// @ts-ignore
+import Java from 'tree-sitter-java';
+import Parser from 'tree-sitter';
+
+export class JavaProvider implements LanguageProvider {
+    public extensions = ['java'];
+    public languageName = 'java';
+
+    public getLanguage() {
+        return Java;
+    }
+
+    public getQuery(): string {
+        return `
+            (class_declaration 
+                name: (identifier) @class.name
+                (superclass (type_identifier) @relation.inherits)?
+                (super_interfaces (type_list (type_identifier) @relation.implements))?
+            ) @class.def
+            (interface_declaration 
+                name: (identifier) @interface.name
+                (extends_interfaces (type_list (type_identifier) @relation.inherits))?
+            ) @interface.def
+            (method_declaration 
+                name: (identifier) @function.name
+                parameters: (formal_parameters) @function.params
+            ) @function.def
+            (method_invocation name: (identifier) @call.name) @call.expr
+            (import_declaration [(scoped_identifier) (identifier)] @import.name) @import.def
+        `;
+    }
+
+    public mapCaptureToSymbolType(captureName: string): SymbolType {
+        if (captureName.startsWith('class')) return 'class';
+        if (captureName.startsWith('interface')) return 'interface';
+        return 'function';
+    }
+
+    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+        const text = node.text;
+
+        if (captureName === 'relation.inherits') {
+            edges.push({
+                from_qname: fromQName, 
+                to_qname: `class:${text}`,
+                edge_type: 'inherits',
+                dynamic: false
+            });
+        } else if (captureName === 'relation.implements') {
+            edges.push({
+                from_qname: fromQName,
+                to_qname: `interface:${text}`,
+                edge_type: 'implements',
+                dynamic: false
+            });
+        } else if (captureName === 'import.name') {
+            edges.push({
+                from_qname: fromQName,
+                to_qname: `package:${text}`,
+                edge_type: 'depends_on',
+                dynamic: false
+            });
+        }
+    }
+
+    public getDecisionPoints(): string[] {
+        return ['if_statement', 'for_statement', 'while_statement', 'catch_clause'];
+    }
+}

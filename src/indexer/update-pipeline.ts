@@ -1,4 +1,5 @@
 import { Database } from 'better-sqlite3';
+import * as path from 'path';
 import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
 import { MetadataRepository } from '../db/metadata-repository';
@@ -110,30 +111,36 @@ export class UpdatePipeline {
                 }
             }
 
+            // Pass 1: Handle Deletions and Create Nodes
             for (const res of results) {
                 if (res.status === 'success') {
                     if (res.event.event === 'ADD' || res.event.event === 'MODIFY' || res.event.event === 'DELETE') {
                         this.handleDelete(res.event.file_path);
                     }
                     if (res.event.event === 'ADD' || res.event.event === 'MODIFY') {
-                        // Pre-filter duplicates within the same batch to avoid UNIQUE constraint violations
-                        const batchNodes = new Map<string, typeof res.delta.nodes[0]>();
+                        // Pre-filter duplicates within the same file/batch
+                        const fileNodes = new Map<string, typeof res.delta.nodes[0]>();
                         for (const node of res.delta.nodes) {
-                            batchNodes.set(node.qualified_name, node);
+                            fileNodes.set(node.qualified_name, node);
                         }
 
-                        for (const node of batchNodes.values()) {
+                        for (const node of fileNodes.values()) {
                             const nodeId = this.nodeRepo.createNode(node);
                             symbolCache.set(node.qualified_name, nodeId);
                         }
+                    }
+                }
+            }
 
-                        for (const edge of res.delta.edges) {
-                            const fromId = this.resolveNodeId(edge, 'from', symbolCache);
-                            const toId = this.resolveNodeId(edge, 'to', symbolCache);
+            // Pass 2: Create Edges (Now that all nodes are in symbolCache and DB)
+            for (const res of results) {
+                if (res.status === 'success' && (res.event.event === 'ADD' || res.event.event === 'MODIFY')) {
+                    for (const edge of res.delta.edges) {
+                        const fromId = this.resolveNodeId(edge, 'from', symbolCache);
+                        const toId = this.resolveNodeId(edge, 'to', symbolCache);
 
-                            if (fromId !== undefined && toId !== undefined) {
-                                this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
-                            }
+                        if (fromId !== undefined && toId !== undefined) {
+                            this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
                         }
                     }
                 }
@@ -337,34 +344,65 @@ export class UpdatePipeline {
         side: 'from' | 'to',
         internalMap: Map<string, number>
     ): number | undefined {
-        const qname = side === 'from' ? edge.from_qname : edge.to_qname;
+        let qname = side === 'from' ? edge.from_qname : edge.to_qname;
         const fileHint = side === 'to' ? edge.target_file_hint : undefined;
 
-        // Check internal definitions first
-        if (internalMap.has(qname)) {
-            return internalMap.get(qname);
+        // Extract and strip type hints (e.g. 'class:MyBase')
+        let typeHint: string | undefined;
+        if (qname.includes(':')) {
+            const parts = qname.split(':');
+            typeHint = parts[0];
+            qname = parts.slice(1).join(':');
+        }
+
+        // Canonical Normalization for matching
+        const canonical = (s: string) => {
+            let res = s.replace(/\\/g, '/').toLowerCase();
+            if (res.startsWith('/') && !res.startsWith('//')) {
+                const drive = path.parse(process.cwd()).root.replace(/\\/g, '/').toLowerCase().replace(/\/$/, '');
+                res = drive + (res.startsWith('/') ? '' : '/') + res;
+                // Ensure no double slashes like c://
+                res = res.replace(/\/+/g, '/');
+            }
+            return res;
+        };
+        const canonicalQName = canonical(qname);
+
+        // Check internal definitions first (Linear search for safety, or wrap Map)
+        for (const [key, value] of internalMap.entries()) {
+            if (canonical(key) === canonicalQName) {
+                return value;
+            }
+        }
+
+        if (side === 'from' || side === 'to') {
+            console.error(`[DEBUG] No cache match for ${side}: ${qname} (Canonical: ${canonicalQName})`);
         }
 
         let resolvedId: number | undefined;
 
         // Check database with file hint if available
         if (fileHint) {
-            const nodes = this.nodeRepo.getNodesByFilePath(fileHint);
-            const targetNode = nodes.find(n => n.qualified_name === qname || n.qualified_name.endsWith(`.${qname}`));
+            const nodes = this.nodeRepo.getNodesByFilePath(path.normalize(fileHint));
+            const targetNode = nodes.find(n => canonical(n.qualified_name) === canonicalQName || canonical(n.qualified_name).endsWith(`#${canonicalQName}`));
             if (targetNode) resolvedId = targetNode.id;
         }
 
-        // Fallback to name-only lookup (Exact Match)
+        // Fallback to name-only lookup (Exact Match or Type Hinted)
         if (resolvedId === undefined) {
             const existingNode = this.nodeRepo.getNodeByQualifiedName(qname);
-            if (existingNode) resolvedId = existingNode.id;
-        }
-
-        // Heuristic Suffix Match
-        if (resolvedId === undefined && side === 'to' && !qname.includes('#') && !qname.includes('/')) {
-            const candidates = this.nodeRepo.findNodesBySymbolName(qname);
-            if (candidates.length > 0) {
-                resolvedId = candidates[0].id;
+            if (existingNode) {
+                resolvedId = existingNode.id;
+            } else {
+                // Try finding by symbol name if exact qname doesn't match
+                const candidates = this.nodeRepo.findNodesBySymbolName(qname);
+                if (candidates.length > 0) {
+                    // If we have a type hint, prioritize matching nodes
+                    const bestMatch = typeHint 
+                        ? candidates.find(c => c.symbol_type === typeHint) || candidates[0]
+                        : candidates[0];
+                    resolvedId = bestMatch.id;
+                }
             }
         }
 

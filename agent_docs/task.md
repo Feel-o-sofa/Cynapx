@@ -24,16 +24,16 @@
 *   **Task 22.5: AI 에이전트 인터페이스 고도화**: 파서 메타데이터(Signature, Modifiers) 추출, 관계 탐색 전용 도구(callers/callees) 추가 및 Zero-Pollution 리팩토링 완료.
 *   **Task 23: 성능 및 확장성 최적화**: DB PRAGMA 튜닝, 배치 ID 사전 조회(Pre-fetching) 및 샘플링 기반 정합성 체크 도입 완료.
 *   **Task 24: 코드 의미론적 클러스터링 및 관계 추론**: Jaccard 유사도 기반 논리적 모듈 구조 자동 파악 및 Core/Utility 분류 시스템 구축 완료.
+*   **Task 25: 다국어 확장 Wave 1, 2 & 3**: Java, Kotlin, C#, C, C++, Rust, Go 및 GDScript 정밀 분석 파서 구현 및 통합 완료. 2단계 배치 처리 및 Node-Object 매핑 기반 관계 추출 엔진 구축 완료.
 
 ---
 
 ## 2. 현재 상태 (Current Status)
 *   **브랜드**: **Cynapx (시냅스엑스)** - 코드의 신경망을 잇는 지능형 인덱스.
 *   **통합**: 공식 MCP SDK를 통해 Gemini CLI와 안정적으로 연결됨.
+*   **다국어 지원**: TS, JS, PY, C, CPP, RS, GO, GD, JAVA, KT, CS (총 11개 언어) 지원.
 *   **지능형 분석**: 의미론적 클러스터링을 통한 시스템 '심장부(Core)' 및 '유틸리티' 자동 식별 지원.
-*   **탐색 도구**: `get_callers`, `get_callees`, `perform_clustering` 등 고차원 관계 탐색 지원.
-*   **정합성**: `HealthMonitor` 및 `watcher-change` 대응 로직이 강화된 `ConsistencyChecker` 지원.
-*   **성능**: 대용량 프로젝트 대응을 위한 메모리 맵핑 및 플러그인 기반 파서 아키텍처 적용.
+*   **안정성**: Canonical Path Normalization 및 비차단 상태 체크가 적용된 견고한 아키텍처.
 
 ---
 
@@ -41,18 +41,17 @@
 
 ### Phase 8: Advanced Reasoning & Multilingual Expansion (지능형 추론 및 다국어 확장)
 
-시스템 언어부터 게임 스크립트까지 아우르는 지능형 코드 지식 생태계 구축을 목표로 합니다.
+*   **Task 25.5: 상속 및 구현 관계(Inheritance) 추출 정교화 (High Priority)**:
+    *   Tree-sitter 쿼리의 캡처 타이밍 및 인프라의 매칭 정교성(Heuristic Matching) 조정.
+    *   Java/C# 상속 관계 엣지 누락 현상 해결 및 검증.
 
-*   **Task 25: 대규모 다국어 지원 확장 (Multilingual Waves)**:
-    *   **Wave 1 (Systems)**: C, C++, Rust, Go 지원. 시스템 언어 특유의 선언 구조 및 매크로/패키지 분석.
-    *   **Wave 2 (Enterprise)**: Java, Kotlin, C# 지원. OOP(상속, 인터페이스, 추상화) 관계 정밀 맵핑.
-    *   **Wave 3 (Scripting & Game)**: Ruby, PHP, Lua, Perl, **GDScript** 지원.
-    *   **GDScript 특화**: Godot 엔진의 Node 경로, Signal 연결 및 `extends` 기반 구조 분석 지원.
+*   **Task 25.6: Wave 3 확장 (Remaining)**: Ruby, PHP, Lua, Perl 지원 확장.
 
 *   **Task 26: 인덱싱 가속화 및 생태계 개방**:
     *   **Rust 기반 Core Indexer**: 대규모 멀티 언어 처리를 위한 인덱서 코어의 Rust 전환 검토.
     *   **Plugin System**: 사용자 정의 Tree-sitter 문법 및 S-query 추가를 위한 플러그인 인터페이스 개방.
 
 ---
-**Status**: Phase 8 - **Multilingual Expansion**
-**Context**: Refactoring for Scale and Semantic Clustering are finalized. Starting Task 25 Wave 1 to support systems programming languages.
+**Status**: Phase 8 - **Multilingual Expansion (Optimization & Expansion)**
+**Context**: Major systems and enterprise languages are integrated. Next focus is refining relationship extraction precision and further scripting language support.
+

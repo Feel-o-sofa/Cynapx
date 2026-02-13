@@ -28,11 +28,11 @@ export class GdscriptProvider implements LanguageProvider {
         return 'function';
     }
 
-    public resolveImport(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[]): void {
+    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
         const parentNode = node.descendantsOfType('identifier')[0];
         if (parentNode) {
             edges.push({
-                from_qname: filePath,
+                from_qname: fromQName,
                 to_qname: `class:${parentNode.text}`,
                 edge_type: 'inherits',
                 dynamic: false

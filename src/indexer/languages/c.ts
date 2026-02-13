@@ -33,12 +33,12 @@ export class CProvider implements LanguageProvider {
         return 'field';
     }
 
-    public resolveImport(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[]): void {
+    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
         const pathNode = node.descendantsOfType('string_content')[0] || node;
         if (pathNode) {
             let headerPath = pathNode.text.replace(/[<">]/g, '');
             edges.push({
-                from_qname: filePath,
+                from_qname: fromQName,
                 to_qname: `header:${headerPath}`,
                 edge_type: 'depends_on',
                 dynamic: false

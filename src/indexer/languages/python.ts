@@ -32,7 +32,7 @@ export class PythonProvider implements LanguageProvider {
         return 'field';
     }
 
-    public resolveImport(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[]): void {
+    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
         if (node.type === 'import_statement') {
             for (let i = 0; i < node.childCount; i++) {
                 const child = node.child(i)!;
@@ -40,11 +40,11 @@ export class PythonProvider implements LanguageProvider {
                     const nameNode = child.childForFieldName('name');
                     if (nameNode) {
                         const pkgName = nameNode.text.split('.')[0];
-                        edges.push({ from_qname: filePath, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
+                        edges.push({ from_qname: fromQName, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
                     }
                 } else if (child.type === 'dotted_name') {
                     const pkgName = child.text.split('.')[0];
-                    edges.push({ from_qname: filePath, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
+                    edges.push({ from_qname: fromQName, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
                 }
             }
         } else if (node.type === 'import_from_statement') {
@@ -59,7 +59,7 @@ export class PythonProvider implements LanguageProvider {
                     }
                 }
                 if (!isRelative) {
-                    edges.push({ from_qname: filePath, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
+                    edges.push({ from_qname: fromQName, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
                 }
             }
         }

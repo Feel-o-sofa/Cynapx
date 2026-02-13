@@ -39,7 +39,7 @@ export class TypeScriptProvider implements LanguageProvider {
         return 'field';
     }
 
-    public resolveImport(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[]): void {
+    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
         const nameCapture = node.children.find(c => c.type === 'string');
         if (nameCapture) {
             let pkgName = nameCapture.text;
@@ -48,7 +48,7 @@ export class TypeScriptProvider implements LanguageProvider {
             }
             if (!pkgName.startsWith('.')) {
                 edges.push({
-                    from_qname: filePath,
+                    from_qname: fromQName,
                     to_qname: `package:${pkgName.split('/')[0]}`,
                     edge_type: 'depends_on',
                     dynamic: false

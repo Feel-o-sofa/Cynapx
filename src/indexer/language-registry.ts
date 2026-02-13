@@ -17,7 +17,11 @@ export class LanguageRegistry {
         ['hpp', './languages/cpp'],
         ['rs', './languages/rust'],
         ['go', './languages/go'],
-        ['gd', './languages/gdscript']
+        ['gd', './languages/gdscript'],
+        ['java', './languages/java'],
+        ['kt', './languages/kotlin'],
+        ['kts', './languages/kotlin'],
+        ['cs', './languages/csharp']
     ]);
 
     private constructor() { }

@@ -36,11 +36,11 @@ export class RustProvider implements LanguageProvider {
         return 'field';
     }
 
-    public resolveImport(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[]): void {
+    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
         const pathNode = node.descendantsOfType('identifier').pop();
         if (pathNode) {
             edges.push({
-                from_qname: filePath,
+                from_qname: fromQName,
                 to_qname: `crate:${pathNode.text}`,
                 edge_type: 'depends_on',
                 dynamic: false

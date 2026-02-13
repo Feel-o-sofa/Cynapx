@@ -31,9 +31,9 @@ Thumbs.db
 .idea/
 
 # Test files
-test_*
-temp_*
-verify_*
+*test_*
+*temp_*
+*verify_*
 *.test.*
 *.spec.*
 tests/

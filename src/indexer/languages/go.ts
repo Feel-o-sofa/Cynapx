@@ -35,12 +35,12 @@ export class GoProvider implements LanguageProvider {
         return 'field';
     }
 
-    public resolveImport(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[]): void {
+    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
         const pathNode = node.descendantsOfType('interpreted_string_literal')[0];
         if (pathNode) {
             let pkgPath = pathNode.text.replace(/"/g, '');
             edges.push({
-                from_qname: filePath,
+                from_qname: fromQName,
                 to_qname: `package:${pkgPath}`,
                 edge_type: 'depends_on',
                 dynamic: false

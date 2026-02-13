@@ -43,6 +43,6 @@ export interface LanguageProvider {
     getLanguage(): any;
     getQuery(): string;
     mapCaptureToSymbolType(captureName: string): SymbolType;
-    resolveImport?(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[]): void;
+    resolveImport?(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[], captureName?: string): void;
     getDecisionPoints(): string[];
 }

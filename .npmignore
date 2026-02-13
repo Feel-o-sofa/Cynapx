@@ -20,9 +20,9 @@ switch-env.js
 
 # Tests & Verification
 tests/
-temp_*
-verify_*
-test_*
+*temp_*
+*verify_*
+*test_*
 *.test.ts
 *.spec.ts
 mcp-test-client.js
