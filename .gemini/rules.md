@@ -1,60 +1,68 @@
 # Agent Rules for Cynapx Project
 
-This project is integrated with the **Cynapx MCP Server**, a high-performance code knowledge graph. All AI agents MUST adhere to these rules to ensure architectural integrity and zero-defect delivery.
+This project is integrated with the **Cynapx MCP Server**, a high-performance code knowledge graph. All AI agents MUST adhere to these rules as their primary operating system.
 
-## 0. Session Initialization Protocol (Mandatory)
+## 0. Session Initialization & Core Mandate
 
-- **On Startup**: The agent MUST immediately read all markdown documents in `agent_docs/` (excluding the root `reports/` directory) to synchronize with the project's goals, current status, and working guidelines.
-- **Briefing**: After reading, the agent must provide a concise "ready" message to the user, indicating that the context is fully synchronized.
-- **Scope**: This protocol applies to every new session or when requested via the `/sync` command.
+- **Mandatory Synchronization**: On startup or `/sync`, the agent MUST read all markdown documents in `agent_docs/`.
+- **Protocol Internalization**: The agent MUST internalize the **Cynapx Development Protocol** (Investigation-Design-Implementation-Verification-Regression) as the only valid workflow. 
+- **Self-Reminder**: Before starting ANY task, the agent must mentally (or via internal reasoning) verify that it is following the 5-step protocol. Silence or skipping steps is a violation of these rules.
 
-## 1. Knowledge-Driven Analysis (Cynapx First)
+## 1. Cynapx Development Protocol (The 5-Step Workflow)
 
-Before performing any code modification or structural analysis, you MUST use the `cynapx` MCP tools(if available) to eliminate hallucinations:
-- **Structural Discovery**: Use `cynapx.search_symbols` to locate classes and methods.
-- **Dependency Mapping**: Use `cynapx.analyze_impact` and `cynapx.export_graph` to understand the ripple effect of any change.
-- **Metric-Driven Review**: Use `cynapx.get_hotspots` to identify complex areas (Cyclomatic Complexity > 20) before refactoring.
-- **Context Gathering**: Use `cynapx.get_symbol_details` to read source code within its architectural context.
-- **Semantic Evidence**: When providing architectural guidance or warnings, always use **Logical Clusters (graph://clusters)** and **Metrics (Complexity, Fan-out)** as the objective basis for judgment.
+Every individual task, regardless of size, MUST follow this sequence:
 
-## 2. Cynapx Development Protocol (Advanced Iteration)
+### Step 1: Mastery (Investigation & Research)
+- **Tooling**: Use `cynapx` MCP tools (`search_symbols`, `analyze_impact`) to build an architectural map.
+- **Research**: Use `context7` to understand external libraries or language-specific nuances.
+- **Goal**: Zero assumptions. Complete understanding of the "As-Is" state.
 
-Follow this rigorous, iterative workflow for every task:
+### Step 2: Strategic Architectural Design
+- **Skill Activation**: You MUST activate the `cynapx-architect` skill.
+- **Planning**: Create a detailed plan including dependencies, schema changes, and risk mitigation.
+- **Verification Plan**: You MUST activate the `test-scenario-designer` skill to design both "Normal" and "Abnormal" test cases *before* writing a single line of implementation code.
 
-1. **Mastery (Investigation)**: 
-   - **Step-by-Step Decomposition**: Break down complex tasks (especially architectural refactors like Task 23.5) into smaller, manageable sub-tasks.
-   - **Architectural Discovery**: Activate the `cynapx-architect` skill before coding.
-   - **Token Efficiency**: When delegating to sub-agents (e.g., `codebase_investigator`), explicitly instruct them to use **`cynapx` tools** instead of broad text searches to minimize context usage.
-   - **Multilingual Research**: Use **`context7`** to research and understand new language grammars, Tree-sitter S-queries, or engine-specific structures (e.g., GDScript Signals) before implementation.
+### Step 3: Precise Implementation
+- **Adherence**: Follow project conventions, types, and architectural patterns.
+- **Sub-Agent Delegation**: When delegating to sub-agents (e.g., `codebase_investigator`):
+    - You MUST explicitly instruct them to activate relevant **Skills** and use **MCP Tools** (Cynapx, Context7).
+    - Instruct them to prioritize graph-based analysis over text-based `grep`.
 
-2. **Strategic Planning**: 
-   - Identify all prerequisites (dependencies, schema changes, types).
-   - **Architectural Design (Mandatory)**: Use the `cynapx-architect` guidelines to plan refactors or new features, ensuring they align with system invariants and graph-based metrics.
-   - **Test Scenario Design (Mandatory)**: Activate the `test-scenario-designer` skill to design comprehensive test scenarios (Normal & Abnormal) before implementation.
-   - Integrate these scenarios into a step-by-step implementation and verification plan.
+### Step 4: Zero-Defect Verification
+- **Execution**: Run the test scenarios designed in Step 2.
+- **Checklist**: (1) Build Check, (2) Integration Scripts (`scripts/verify_*.ts`), (3) Schema Alignment, (4) Artifact Cleanup.
+- **Mandatory Success**: A task is NOT complete until all verification steps pass with zero defects.
 
-3. **Sub-Agent Delegation**:
-   To prevent sub-agents (e.g., `codebase_investigator`) from providing incomplete or inaccurate summaries due to exploration limits:
-   - **Mandatory Tool Utilization**: The primary agent MUST explicitly instruct sub-agents to proactively activate and utilize any relevant **Skills** (e.g., `cynapx-architect`, `test-scenario-designer`, etc.) and **MCP Tools** (e.g., `context7`, `cynapx`, etc.) available in the project context.
-   - **Cynapx-Centric**: Sub-agents MUST prioritize `cynapx` MCP tools (`search_symbols`, `analyze_impact`, etc.) over broad text-based searches (`grep`) to minimize noise and build an accurate architectural map efficiently.
-   - **Micro-Delegation**: Do not delegate complex analysis in a single turn. Break investigations into iterative stages: 'High-level Structure -> Component Deep-Dive -> Transitive Impact Assessment'.
-   - **Evidence-Based Reporting**: Sub-agents MUST list the specific files and symbols they have directly inspected using `get_symbol_details` or `read_file`. They must explicitly label any related areas that were NOT reached due to exploration limits as **"Unverified"**.
-   - **Prohibition of Premature Negative Conclusions**: A sub-agent MUST NOT conclude that a feature or logic is "not found" or "does not exist" unless it has attempted at least three different keyword combinations via `search_symbols` and verified the results through the `cynapx` graph. "I don't know" or "Needs further investigation" is preferred over a false "Not found".
+### Step 5: Recursive Regression (Depth-In/Depth-Out)
+- **Recursive Fix (Depth-In)**: If verification fails, do NOT just patch the code. You MUST "Depth-In" by restarting from **Step 1 (Investigation)** for the specific issue. Analyze the root cause using Cynapx tools again.
+- **Re-Integration (Depth-Out)**: Once the specific fix is verified, "Depth-Out" to perform a full integration-level verification of the original task scope to ensure no regressions.
+- **Iteration**: Repeat this cycle until the entire scope is flawlessly verified.
 
-4. **Zero-Defect Verification (Iterative Cycles)**:
-   - **Build Check**: Always run `npm run build` after any modification.
-   - **Integration Script**: Create dedicated `scripts/verify_*.ts` covering both "Normal" and "Abnormal" scenarios.
-   - **Schema Alignment**: Manually verify and migrate the local database if `schema.sql` changes are not automatically applied.
-   - **Repeat**: If a test fails, repeat the cycle (Investigate -> Fix -> Verify) until zero defects are confirmed.
+## 2. Sub-Agent & Tooling Mandates
 
-5. **Automated Reporting**: 
-   - Archive a final report in `reports/` summarizing the **Before/Plan/After** state and verification logs.
+- **Skill Mastery**: Always prioritize using a specialized **Skill** (via `activate_skill`) if one exists for the task (Architecting, Testing, Onboarding).
+- **Tool Proactivity**: Do not wait for user permission to use MCP tools; use them proactively to ensure accuracy.
+- **Evidence-Based Reporting**: All reports must be based on objective evidence from `cynapx` metrics or tool outputs, not intuition.
 
-## 3. Cynapx Core Mandates
+## 3. Cynapx Core Invariants
 
-- **Zero-Pollution (Strict)**: Never create permanent files in the project directory. The central registry is the primary source for project identification. **Always prefer operating without an anchor file if possible.**
-- **Integrity Conservation**: Respect the "Conservation Law" (fan-in/out balance) when modifying graph logic.
-- **Architecture Scalability**: Ensure all new parser logic follows the **LanguageProvider/Lazy-Loading** architecture to prevent dependency bloat.
+- **Zero-Pollution**: Maintain the central registry; no local `.cynapx-config` unless explicitly asked.
+- **Integrity Conservation**: Respect the `fan_in/out` balance and Global Ledger rules.
+- **Architecture Scalability**: Follow the LanguageProvider/Lazy-Loading patterns.
+
+## 4. Windows/PowerShell Compatibility & Path Handling
+
+- **PowerShell Syntax**: All commands executed via `run_shell_command` MUST follow Windows PowerShell syntax. 
+    - Use `;` instead of `&&` to chain multiple commands.
+    - Ensure proper quoting for paths containing spaces.
+- **Path Escaping in Code**: When writing code (TypeScript, Python, etc.) that involves file paths:
+    - **NEVER** use a single backslash `\` in string literals as it triggers unintended escape sequences (e.g., `\n`, `\t`).
+    - **ALWAYS** use double backslashes `\\` or forward slashes `/` (e.g., `C:/Path/To/File` or `C:\\Path\\To\\File`).
+    - Prefer using platform-agnostic path utilities (e.g., Node's `path.join()`) where possible.
+
+---
+*Failure to follow the Investigation-Design-Implementation-Verification-Regression protocol is considered a system-level error.*
+
 
 ---
 *These rules are binding for all AI agents working on the Cynapx(ProjectAnalyzer) codebase.*
