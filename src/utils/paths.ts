@@ -1,4 +1,3 @@
-
 import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
@@ -48,11 +47,9 @@ export function addToRegistry(projectPath: string): void {
     
     let registry = readRegistry();
     const index = registry.findIndex(p => p.path.toLowerCase() === absolutePath.toLowerCase());
-    
     const now = new Date().toISOString();
     
     if (index !== -1) {
-        // Update existing entry and clean up old fields
         const oldEntry = registry[index];
         registry[index] = { 
             name: projectName,
@@ -62,14 +59,13 @@ export function addToRegistry(projectPath: string): void {
             last_accessed_at: now 
         };
     } else {
-        registry.push({ 
+        registry.push({
             name: projectName,
             path: absolutePath, 
             db_path: dbPath,
             last_accessed_at: now 
         });
     }
-    
     fs.writeFileSync(getRegistryPath(), JSON.stringify(registry, null, 2), 'utf8');
 }
 
@@ -77,7 +73,6 @@ export function removeFromRegistry(projectPath: string): void {
     const absolutePath = path.resolve(projectPath);
     let registry = readRegistry();
     const newRegistry = registry.filter(p => p.path.toLowerCase() !== absolutePath.toLowerCase());
-    
     if (registry.length !== newRegistry.length) {
         fs.writeFileSync(getRegistryPath(), JSON.stringify(newRegistry, null, 2), 'utf8');
     }
@@ -85,18 +80,13 @@ export function removeFromRegistry(projectPath: string): void {
 
 export function findProjectAnchor(startPath: string): string | null {
     let current = path.resolve(startPath);
-    
-    // First, check central registry (Zero-Pollution Mode)
     const registry = readRegistry();
     const registeredProject = registry.find(p => current.toLowerCase().startsWith(p.path.toLowerCase()));
     if (registeredProject) return registeredProject.path;
 
-    // Second, look for anchor file upwards
     while (true) {
         const anchorPath = path.join(current, ANCHOR_FILE);
-        if (fs.existsSync(anchorPath)) {
-            return current;
-        }
+        if (fs.existsSync(anchorPath)) return current;
         const parent = path.dirname(current);
         if (parent === current) break;
         current = parent;
@@ -105,7 +95,6 @@ export function findProjectAnchor(startPath: string): string | null {
 }
 
 export function getProjectHash(projectPath: string): string {
-    // Normalize path to avoid different hashes for same directory due to slashes
     const normalizedPath = path.resolve(projectPath).toLowerCase();
     return crypto.createHash('md5').update(normalizedPath).digest('hex');
 }
@@ -114,4 +103,16 @@ export function getDatabasePath(projectPath: string): string {
     const storageDir = getCentralStorageDir();
     const hash = getProjectHash(projectPath);
     return path.join(storageDir, `${hash}.db`);
+}
+
+export function toCanonical(s: string): string {
+    if (!s) return '';
+    let res = s.replace(/\\/g, '/');
+    if (/^[a-zA-Z]:/.test(res)) {
+        // Absolute
+    } else if (res.startsWith('/') && !res.startsWith('//')) {
+        const drive = path.parse(process.cwd()).root.replace(/\\/g, '/');
+        res = path.join(drive, res).replace(/\\/g, '/');
+    }
+    return res.toLowerCase().replace(/\/+/g, '/').replace(/\/$/, '');
 }

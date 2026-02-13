@@ -14,19 +14,14 @@ export class JavaProvider implements LanguageProvider {
 
     public getQuery(): string {
         return `
-            (class_declaration 
-                name: (identifier) @class.name
-                (superclass (type_identifier) @relation.inherits)?
-                (super_interfaces (type_list (type_identifier) @relation.implements))?
-            ) @class.def
-            (interface_declaration 
-                name: (identifier) @interface.name
-                (extends_interfaces (type_list (type_identifier) @relation.inherits))?
-            ) @interface.def
-            (method_declaration 
-                name: (identifier) @function.name
-                parameters: (formal_parameters) @function.params
-            ) @function.def
+            (class_declaration name: (identifier) @class.name) @class.def
+            (interface_declaration name: (identifier) @interface.name) @interface.def
+            (method_declaration name: (identifier) @function.name parameters: (formal_parameters) @function.params) @function.def
+            (constructor_declaration name: (identifier) @function.name parameters: (formal_parameters) @function.params) @function.def
+            
+            (superclass (type_identifier) @relation.inherits)
+            (super_interfaces (type_list (type_identifier) @relation.implements))
+            
             (method_invocation name: (identifier) @call.name) @call.expr
             (import_declaration [(scoped_identifier) (identifier)] @import.name) @import.def
         `;
@@ -40,28 +35,12 @@ export class JavaProvider implements LanguageProvider {
 
     public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
         const text = node.text;
-
         if (captureName === 'relation.inherits') {
-            edges.push({
-                from_qname: fromQName, 
-                to_qname: `class:${text}`,
-                edge_type: 'inherits',
-                dynamic: false
-            });
+            edges.push({ from_qname: fromQName, to_qname: `class:${text}`, edge_type: 'inherits', dynamic: false });
         } else if (captureName === 'relation.implements') {
-            edges.push({
-                from_qname: fromQName,
-                to_qname: `interface:${text}`,
-                edge_type: 'implements',
-                dynamic: false
-            });
-        } else if (captureName === 'import.name') {
-            edges.push({
-                from_qname: fromQName,
-                to_qname: `package:${text}`,
-                edge_type: 'depends_on',
-                dynamic: false
-            });
+            edges.push({ from_qname: fromQName, to_qname: `interface:${text}`, edge_type: 'implements', dynamic: false });
+        } else if (captureName?.includes('import')) {
+            edges.push({ from_qname: fromQName, to_qname: `package:${text}`, edge_type: 'depends_on', dynamic: false });
         }
     }
 

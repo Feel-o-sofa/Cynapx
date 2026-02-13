@@ -14,21 +14,13 @@ export class CsharpProvider implements LanguageProvider {
 
     public getQuery(): string {
         return `
-            (class_declaration 
-                (identifier) @class.name
-                (base_list (identifier) @relation.inherits)?
-            ) @class.def
-            (interface_declaration 
-                (identifier) @interface.name
-                (base_list (identifier) @relation.inherits)?
-            ) @interface.def
-            (method_declaration 
-                (identifier) @function.name
-                (parameter_list) @function.params
-            ) @function.def
-            (invocation_expression 
-                function: [(identifier) (member_access_expression name: (identifier))] @call.name
-            ) @call.expr
+            (class_declaration (identifier) @class.name) @class.def
+            (interface_declaration (identifier) @interface.name) @interface.def
+            (method_declaration (identifier) @function.name parameters: (parameter_list) @function.params) @function.def
+            
+            (base_list (identifier) @relation.inherits)
+            
+            (invocation_expression function: [(identifier) (member_access_expression name: (identifier))] @call.name) @call.expr
             (using_directive (identifier) @import.name) @import.def
         `;
     }
@@ -41,21 +33,10 @@ export class CsharpProvider implements LanguageProvider {
 
     public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
         const text = node.text;
-
         if (captureName === 'relation.inherits') {
-            edges.push({
-                from_qname: fromQName,
-                to_qname: `type:${text}`,
-                edge_type: 'inherits',
-                dynamic: false
-            });
-        } else if (captureName === 'import.name') {
-            edges.push({
-                from_qname: fromQName,
-                to_qname: `namespace:${text}`,
-                edge_type: 'depends_on',
-                dynamic: false
-            });
+            edges.push({ from_qname: fromQName, to_qname: `type:${text}`, edge_type: 'inherits', dynamic: false });
+        } else if (captureName?.includes('import')) {
+            edges.push({ from_qname: fromQName, to_qname: `namespace:${text}`, edge_type: 'depends_on', dynamic: false });
         }
     }
 
