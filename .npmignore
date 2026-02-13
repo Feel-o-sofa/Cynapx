@@ -1,38 +1,24 @@
-# Source code
+# Source
 src/
 tsconfig.json
 
-# Development tools
-node_modules/
-.git/
-.gitignore
-.npmignore
-
-# Configuration & Agent files
+# Development Artifacts
+scripts/
+tests/
+reports/
 agent_docs/
 .gemini/
-.cynapx-config
 GEMINI.md
 switch-env.js
 
-# Artifacts
-*.tgz
-
-# Tests & Verification
-tests/
-*temp_*
-*verify_*
-*test_*
-*.test.ts
-*.spec.ts
-mcp-test-client.js
-src/verify-mcp.ts
-recalculate-metrics.js
-
-# Logs & Temporary
-*.log
-.DS_Store
+# Local State
+*.db
+*.db-shm
+*.db-wal
 .server-port
+.cynapx-config
+.env
 
-# Reports
-reports/
+# Build Artifacts (other than dist)
+*.tgz
+build/

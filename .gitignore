@@ -1,26 +1,20 @@
 # Dependencies
 node_modules/
 
-# Database (Generated Artifacts)
-knowledge.db
-knowledge.db-shm
-knowledge.db-wal
-.server-port
-.cynapx-config
-
-# Environment variables
-.env
-
 # Build outputs
 dist/
 build/
 *.tgz
 
-# Logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
+# Database (Generated Artifacts)
+*.db
+*.db-shm
+*.db-wal
+.server-port
+.cynapx-config
+
+# Environment variables
+.env
 
 # OS specific
 .DS_Store
@@ -30,20 +24,20 @@ Thumbs.db
 .vscode/
 .idea/
 
-# Test files
+# Development & Test Artifacts
 *test_*
 *temp_*
 *verify_*
+*coverage_*
 *.test.*
 *.spec.*
 tests/
 __tests__/
+scripts/
 switch-env.js
 
-# Agent files
-GEMINI.md
-agent_docs/
+# AI Agent Context (Development only)
 .gemini/
-
-# Reports
+agent_docs/
 reports/
+GEMINI.md
