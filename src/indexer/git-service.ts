@@ -78,4 +78,22 @@ export class GitService {
             return [];
         }
     }
+
+    /**
+     * Returns the commit history for a specific file.
+     */
+    public async getHistoryForFile(filePath: string, limit: number = 5): Promise<any[]> {
+        try {
+            const log = await this.git.log({ file: filePath, maxCount: limit });
+            return log.all.map(commit => ({
+                hash: commit.hash,
+                message: commit.message,
+                author: commit.author_name,
+                date: commit.date
+            }));
+        } catch (error) {
+            console.error(`Failed to get history for ${filePath}:`, error);
+            return [];
+        }
+    }
 }

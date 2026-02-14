@@ -50,6 +50,14 @@ export interface CodeNode {
     // Structural Characteristic Tagging (Task 32)
     tags?: string[]; // Stored as JSON in DB
 
+    // Historical Evidence Mapping (Task 33)
+    history?: {
+        hash: string;
+        message: string;
+        author: string;
+        date: string;
+    }[]; // Stored as JSON in DB
+
     // Semantic Clustering (Task 24)
     cluster_id?: number;
 }

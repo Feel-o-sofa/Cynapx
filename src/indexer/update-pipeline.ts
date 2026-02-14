@@ -55,6 +55,34 @@ export class UpdatePipeline {
         }
     }
 
+    public async mapHistoryToProject(): Promise<void> {
+        if (!this.gitService) return;
+        const filePaths = this.nodeRepo.getAllFilePaths();
+        console.log(`Backfilling history for ${filePaths.length} files...`);
+
+        const previousLock = this.writeLock;
+        let resolveLock: () => void;
+        this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
+        await previousLock;
+
+        try {
+            this.db.prepare('BEGIN').run();
+            for (const filePath of filePaths) {
+                const history = await this.gitService.getHistoryForFile(filePath);
+                if (history && history.length > 0) {
+                    const historyJson = JSON.stringify(history);
+                    this.db.prepare('UPDATE nodes SET history = ? WHERE file_path = ?').run(historyJson, filePath);
+                }
+            }
+            this.db.prepare('COMMIT').run();
+        } catch (e) {
+            if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+            throw e;
+        } finally {
+            resolveLock!();
+        }
+    }
+
     public async processChangeEvent(event: FileChangeEvent, version: number): Promise<void> {
         const { event: type, file_path, commit } = event;
 
@@ -113,8 +141,10 @@ export class UpdatePipeline {
                 if (res.status === 'success') {
                     this.nodeRepo.deleteNodesByFilePath(res.event.file_path);
                     if (res.event.event !== 'DELETE') {
+                        const history = this.gitService ? await this.gitService.getHistoryForFile(res.event.file_path) : undefined;
                         for (const node of res.delta.nodes) {
                             node.tags = StructuralTagger.tagNode(node);
+                            if (history) node.history = history;
                             const nodeId = this.nodeRepo.createNode(node);
                             symbolCache.set(toCanonical(node.qualified_name), nodeId);
                         }
@@ -155,9 +185,11 @@ export class UpdatePipeline {
             this.db.prepare('BEGIN').run();
             if (type === 'MODIFY') this.nodeRepo.deleteNodesByFilePath(filePath);
 
+            const history = this.gitService ? await this.gitService.getHistoryForFile(filePath) : undefined;
             const symbolCache = new Map<string, number>();
             for (const node of delta.nodes) {
                 node.tags = StructuralTagger.tagNode(node);
+                if (history) node.history = history;
                 const nodeId = this.nodeRepo.createNode(node);
                 symbolCache.set(toCanonical(node.qualified_name), nodeId);
             }

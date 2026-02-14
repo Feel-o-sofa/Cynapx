@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     -- Structural Characteristic Tagging (Task 32)
     tags TEXT, -- JSON array of strings
 
+    -- Historical Evidence Mapping (Task 33)
+    history TEXT, -- JSON array of commit objects
+
     -- Semantic Clustering (Task 24)
     cluster_id INTEGER,
     FOREIGN KEY (cluster_id) REFERENCES logical_clusters(id) ON DELETE SET NULL

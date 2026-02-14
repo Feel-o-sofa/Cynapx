@@ -630,6 +630,13 @@ Please follow this safety protocol:
                     text += `- **Structural Tags**: ${node.tags.map(t => `\`${t}\``).join(', ')}\n`;
                 }
 
+                if (node.history && node.history.length > 0) {
+                    text += `\n#### Historical Evidence:\n`;
+                    node.history.forEach(commit => {
+                        text += `- **[${commit.hash.substring(0, 7)}]** ${commit.message} (by *${commit.author}* on ${commit.date})\n`;
+                    });
+                }
+
                 text += `\n#### Metrics:\n`;
                 if (node.loc !== undefined) text += `- **LOC**: ${node.loc}\n`;
                 if (node.cyclomatic !== undefined) text += `- **Cyclomatic Complexity**: ${node.cyclomatic}\n`;
@@ -930,6 +937,28 @@ Please follow this safety protocol:
                     return { content: [{ type: "text", text: "Successfully re-tagged all nodes in the project." }] };
                 } catch (err) {
                     return { isError: true, content: [{ type: "text", text: `Failed to re-tag nodes: ${err}` }] };
+                }
+            }
+        );
+
+        // backfill_history
+        this.sdkServer.registerTool(
+            "backfill_history",
+            {
+                description: "Fetch and associate Git commit history for all symbols in the current project. Essential for historical evidence mapping.",
+                inputSchema: z.object({})
+            },
+            async () => {
+                await this.waitUntilReady();
+                const pipeline = (this as any).updatePipeline;
+                if (!pipeline) {
+                    return { isError: true, content: [{ type: "text", text: "Update pipeline not available in this session." }] };
+                }
+                try {
+                    await pipeline.mapHistoryToProject();
+                    return { content: [{ type: "text", text: "Successfully backfilled Git history for all symbols." }] };
+                } catch (err) {
+                    return { isError: true, content: [{ type: "text", text: `Failed to backfill history: ${err}` }] };
                 }
             }
         );

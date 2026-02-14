@@ -48,6 +48,9 @@
 *   **Task 32: Structural Characteristic Tagging (구조적 특성 태깅)**:
     - 경로, 명명 규칙, 상속 계층 등 물리적 사실에 기반한 심볼 특성(Layer, Role, Trait) 추출 엔진 구축 완료.
     - 에이전트가 "어느 레이어의 무엇을 참조하는가"를 객관적으로 판단할 수 있는 태그 데이터셋 상시 노출 완료.
+*   **Task 33: Historical Evidence Mapping (역사적 증거 맵핑)**:
+    - 심볼 단위로 Git 커밋 이력(Hash, Message, Author)을 직접 연결하여 구현 배경(Rationale) 데이터 제공 완료.
+    - 에이전트가 과거의 변경 기록을 바탕으로 코드의 의도와 설계 결정을 스스로 추론할 수 있는 역사적 컨텍스트 인프라 구축 완료.
 
 ---
 
