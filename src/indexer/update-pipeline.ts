@@ -308,16 +308,18 @@ export class UpdatePipeline {
         if (side === 'to' && this.projectPath) {
             const registry = readRegistry();
             const otherProjects = registry.filter(p => p.path.toLowerCase() !== this.projectPath!.toLowerCase());
-            // console.log(`[Boundaryless] Searching for ${qname} in ${otherProjects.length} other projects...`);
+            
+            // Extract pure symbol name if it contains # (e.g. "path/to/file.ts#MyClass" -> "MyClass")
+            const symbolName = qname.includes('#') ? qname.split('#').pop()! : qname;
 
             for (const project of otherProjects) {
                 try {
-                    // Quick check: does the DB file exist?
                     if (!require('fs').existsSync(project.db_path)) continue;
 
                     const remoteDb = new SQLiteDatabase(project.db_path, { readonly: true });
+                    // Try exact match first, then suffix match with symbol name
                     const remoteStmt = remoteDb.prepare("SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LIKE ? COLLATE NOCASE LIMIT 1");
-                    const remoteMatch = remoteStmt.get(canonicalQName, `%#${canonicalQName}`) as any;
+                    const remoteMatch = remoteStmt.get(canonicalQName, `%#${symbolName}`) as any;
                     remoteDb.close();
 
                     if (remoteMatch) {
@@ -335,13 +337,14 @@ export class UpdatePipeline {
                             version: 0,
                             remote_project_path: project.path,
                             signature: remoteMatch.signature,
-                            return_type: remoteMatch.return_type
+                            return_type: remoteMatch.return_type,
+                            tags: remoteMatch.tags ? JSON.parse(remoteMatch.tags) : undefined,
+                            history: remoteMatch.history ? JSON.parse(remoteMatch.history) : undefined
                         });
-                        console.log(`[Boundaryless] Resolved cross-project edge to ${project.name}: ${remoteMatch.qualified_name}`);
                         return shadowNodeId;
                     }
                 } catch (err) {
-                    // Silently ignore errors for specific remote DBs to ensure stability
+                    // Silently ignore errors for specific remote DBs
                 }
             }
         }
