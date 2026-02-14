@@ -1,6 +1,6 @@
 {
   "name": "cynapx",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Cynapx: High-Performance Isolated Code Knowledge Engine for AI Agents",
   "main": "dist/bootstrap.js",
   "bin": {
@@ -15,7 +15,9 @@
   ],
   "scripts": {
     "start": "ts-node src/bootstrap.ts",
-    "build": "tsc",
+    "build": "npm run build:ts && npm run build:copy",
+    "build:ts": "tsc",
+    "build:copy": "powershell -NoProfile -Command \"Copy-Item -Path 'src/indexer/languages/queries' -Destination 'dist/indexer/languages/' -Recurse -Force ; If (Test-Path 'src-native/*.node') { Copy-Item -Path 'src-native/*.node' -Destination 'dist/' -Force }\"",
     "build:native": "npm run build --prefix src-native",
     "dev": "ts-node-dev --respawn src/bootstrap.ts",
     "prepublishOnly": "npm run build"

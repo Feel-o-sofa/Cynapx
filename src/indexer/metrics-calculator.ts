@@ -5,14 +5,29 @@
  */
 import * as ts from 'typescript';
 import * as path from 'path';
+import * as fs from 'fs';
 
 let nativeModule: any = null;
 try {
-    const nativePath = path.resolve(__dirname, '../../src-native/cynapx-native.win32-x64-msvc.node');
-    nativeModule = require(nativePath);
-    console.error('[Metrics] Native acceleration enabled.');
+    // Look for the native binary in the same directory or up one level (dist/ or dist/indexer/)
+    const possiblePaths = [
+        path.resolve(__dirname, '../cynapx-native.win32-x64-msvc.node'),
+        path.resolve(__dirname, '../../cynapx-native.win32-x64-msvc.node'),
+        path.resolve(__dirname, './cynapx-native.win32-x64-msvc.node')
+    ];
+
+    for (const p of possiblePaths) {
+        if (fs.existsSync(p)) {
+            nativeModule = require(p);
+            break;
+        }
+    }
+
+    if (nativeModule) {
+        console.error('[Metrics] Native acceleration enabled.');
+    }
 } catch (err) {
-    console.error('[Metrics] Native acceleration unavailable, falling back to TS.');
+    console.error(`[Metrics] Native acceleration unavailable: ${err}`);
 }
 
 /**
