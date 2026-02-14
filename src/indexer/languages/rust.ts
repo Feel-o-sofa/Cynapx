@@ -8,6 +8,8 @@ import { SymbolType } from '../../types';
 // @ts-ignore
 import Rust from 'tree-sitter-rust';
 import Parser from 'tree-sitter';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class RustProvider implements LanguageProvider {
     public extensions = ['rs'];
@@ -18,19 +20,8 @@ export class RustProvider implements LanguageProvider {
     }
 
     public getQuery(): string {
-        return `
-            (function_item 
-                name: (identifier) @function.name
-                parameters: (parameters) @function.params
-            ) @function.def
-            (struct_item name: (type_identifier) @class.name) @class.def
-            (enum_item name: (type_identifier) @class.name) @class.def
-            (trait_item name: (type_identifier) @interface.name) @interface.def
-            (impl_item type: (_) @class.name) @class.def
-            (mod_item name: (identifier) @module.name) @module.def
-            (call_expression function: (_) @call.name) @call.expr
-            (use_declaration) @import.def
-        `;
+        const queryPath = path.resolve(__dirname, './queries/rust.scm');
+        return fs.readFileSync(queryPath, 'utf8');
     }
 
     public mapCaptureToSymbolType(captureName: string): SymbolType {

@@ -8,6 +8,8 @@ import { SymbolType } from '../../types';
 // @ts-ignore
 import CSharp from 'tree-sitter-c-sharp';
 import Parser from 'tree-sitter';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class CsharpProvider implements LanguageProvider {
     public extensions = ['cs'];
@@ -18,16 +20,8 @@ export class CsharpProvider implements LanguageProvider {
     }
 
     public getQuery(): string {
-        return `
-            (class_declaration (identifier) @class.name) @class.def
-            (interface_declaration (identifier) @interface.name) @interface.def
-            (method_declaration (identifier) @function.name parameters: (parameter_list) @function.params) @function.def
-            
-            (base_list [(identifier) (qualified_name) (predefined_type) (generic_name)] @relation.inherits)
-            
-            (invocation_expression function: [(identifier) (member_access_expression name: (identifier))] @call.name) @call.expr
-            (using_directive [(identifier) (qualified_name)] @import.name) @import.def
-        `;
+        const queryPath = path.resolve(__dirname, './queries/csharp.scm');
+        return fs.readFileSync(queryPath, 'utf8');
     }
 
     public mapCaptureToSymbolType(captureName: string): SymbolType {

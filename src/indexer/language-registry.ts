@@ -5,10 +5,12 @@
  */
 import { LanguageProvider } from './types';
 import * as path from 'path';
+import * as fs from 'fs';
 
 export class LanguageRegistry {
     private static instance: LanguageRegistry;
     private providers: Map<string, LanguageProvider> = new Map();
+    private pluginDirs: string[] = [path.resolve(__dirname, 'languages')];
     
     // Map extensions to provider module names for lazy loading
     private extensionMap: Map<string, string> = new Map([
@@ -30,7 +32,13 @@ export class LanguageRegistry {
         ['php', './languages/php']
     ]);
 
-    private constructor() { }
+    private constructor() {
+        // Automatically scan ~/.cynapx/plugins if it exists
+        const userPluginDir = path.join(process.env.HOME || process.env.USERPROFILE || '', '.cynapx', 'plugins');
+        if (fs.existsSync(userPluginDir)) {
+            this.pluginDirs.push(userPluginDir);
+        }
+    }
 
     public static getInstance(): LanguageRegistry {
         if (!this.instance) {
@@ -49,25 +57,19 @@ export class LanguageRegistry {
         const ext = filePath.split('.').pop()?.toLowerCase();
         if (!ext) return undefined;
 
-        // 1. Check already loaded providers
         if (this.providers.has(ext)) {
             return this.providers.get(ext);
         }
 
-        // 2. Try Lazy Loading
+        // Try to load from internal extension map
         const modulePath = this.extensionMap.get(ext);
         if (modulePath) {
             try {
-                // Using require for synchronous loading in indexer context
                 const fullPath = path.resolve(__dirname, modulePath);
                 const module = require(fullPath);
-                
-                // Expecting provider class to be exported as LanguageNameProvider (e.g. PythonProvider)
                 const className = modulePath.split('/').pop()!.charAt(0).toUpperCase() + modulePath.split('/').pop()!.slice(1) + 'Provider';
                 const provider = new module[className]();
-                
                 this.register(provider);
-                console.error(`LanguageRegistry: Lazily loaded ${className} for .${ext}`);
                 return provider;
             } catch (err) {
                 console.error(`LanguageRegistry: Failed to lazy load provider for .${ext}: ${err}`);
@@ -78,6 +80,13 @@ export class LanguageRegistry {
     }
 
     public getAllExtensions(): string[] {
-        return Array.from(this.extensionMap.keys());
+        const extensions = Array.from(this.extensionMap.keys());
+        // Also add extensions from dynamically loaded providers
+        this.providers.forEach(p => {
+            p.extensions.forEach(ext => {
+                if (!extensions.includes(ext)) extensions.push(ext);
+            });
+        });
+        return extensions;
     }
 }

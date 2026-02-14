@@ -8,6 +8,8 @@ import { SymbolType } from '../../types';
 // @ts-ignore
 import Kotlin from 'tree-sitter-kotlin';
 import Parser from 'tree-sitter';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class KotlinProvider implements LanguageProvider {
     public extensions = ['kt', 'kts'];
@@ -18,20 +20,8 @@ export class KotlinProvider implements LanguageProvider {
     }
 
     public getQuery(): string {
-        return `
-            (class_declaration 
-                [(type_identifier) (simple_identifier)] @class.name
-                (delegation_specifier [(user_type) (constructor_invocation)] @relation.inherits)?
-            ) @class.def
-            (function_declaration 
-                (simple_identifier) @function.name
-                (function_value_parameters) @function.params
-            ) @function.def
-            (call_expression 
-                [(navigation_expression (simple_identifier) @call.name) (simple_identifier) @call.name]
-            ) @call.expr
-            (import_header (identifier) @import.name) @import.def
-        `;
+        const queryPath = path.resolve(__dirname, './queries/kotlin.scm');
+        return fs.readFileSync(queryPath, 'utf8');
     }
 
     public mapCaptureToSymbolType(captureName: string): SymbolType {

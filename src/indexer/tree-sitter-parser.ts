@@ -11,6 +11,7 @@ import * as path from 'path';
 import { calculateChecksum } from '../utils/checksum';
 import { LanguageRegistry } from './language-registry';
 import { toCanonical } from '../utils/paths';
+import { MetricsCalculator } from './metrics-calculator';
 
 /**
  * Optimized Generic TreeSitterParser that delegates language-specific logic to LanguageProviders.
@@ -108,7 +109,7 @@ export class TreeSitterParser implements CodeParser {
                         last_updated_commit: commit,
                         version: version,
                         loc: node.endPosition.row - node.startPosition.row + 1,
-                        cyclomatic: this.calculateCC(node, provider),
+                        cyclomatic: MetricsCalculator.calculateCyclomaticComplexity(node, node.text),
                         signature: paramsCapture ? `${name}${paramsCapture.node.text}` : undefined,
                         return_type: returnCapture ? returnCapture.node.text.replace(/^[:\s->]+/, '') : undefined,
                         modifiers: modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : undefined

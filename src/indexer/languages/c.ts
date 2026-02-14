@@ -8,6 +8,8 @@ import { SymbolType } from '../../types';
 // @ts-ignore
 import C from 'tree-sitter-c';
 import Parser from 'tree-sitter';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class CProvider implements LanguageProvider {
     public extensions = ['c', 'h'];
@@ -18,18 +20,8 @@ export class CProvider implements LanguageProvider {
     }
 
     public getQuery(): string {
-        return `
-            (function_definition 
-                declarator: (function_declarator 
-                    declarator: (identifier) @function.name
-                    parameters: (parameter_list) @function.params
-                )
-            ) @function.def
-            (struct_specifier name: (type_identifier) @class.name) @class.def
-            (enum_specifier name: (type_identifier) @class.name) @class.def
-            (call_expression function: (identifier) @call.name) @call.expr
-            (preproc_include path: [(string_literal) (system_lib_string)] @import.name) @import.def
-        `;
+        const queryPath = path.resolve(__dirname, './queries/c.scm');
+        return fs.readFileSync(queryPath, 'utf8');
     }
 
     public mapCaptureToSymbolType(captureName: string): SymbolType {

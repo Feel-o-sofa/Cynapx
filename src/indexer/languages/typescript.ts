@@ -8,6 +8,8 @@ import { SymbolType } from '../../types';
 // @ts-ignore
 import TypeScript from 'tree-sitter-typescript';
 import Parser from 'tree-sitter';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class TypescriptProvider implements LanguageProvider {
     public extensions = ['ts'];
@@ -18,24 +20,8 @@ export class TypescriptProvider implements LanguageProvider {
     }
 
     public getQuery(): string {
-        return `
-            (class_declaration 
-                name: (type_identifier) @class.name) @class.def
-            (method_definition 
-                name: (property_identifier) @method.name
-                parameters: (formal_parameters) @method.params
-                return_type: (type_annotation)? @method.return) @method.def
-            (function_declaration 
-                name: (identifier) @function.name
-                parameters: (formal_parameters) @function.params
-                return_type: (type_annotation)? @function.return) @function.def
-            
-            (extends_clause [(identifier) (member_expression)] @relation.inherits)
-            (implements_clause [(type_identifier) (nested_type_identifier)] @relation.implements)
-
-            (call_expression function: (identifier) @call.name) @call.expr
-            (import_statement source: (string) @import.name)
-        `;
+        const queryPath = path.resolve(__dirname, './queries/typescript.scm');
+        return fs.readFileSync(queryPath, 'utf8');
     }
 
     public mapCaptureToSymbolType(captureName: string): SymbolType {

@@ -8,6 +8,8 @@ import { SymbolType } from '../../types';
 // @ts-ignore
 import GDScript from 'tree-sitter-gdscript';
 import Parser from 'tree-sitter';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class GdscriptProvider implements LanguageProvider {
     public extensions = ['gd'];
@@ -18,13 +20,8 @@ export class GdscriptProvider implements LanguageProvider {
     }
 
     public getQuery(): string {
-        return `
-            (class_name_statement name: (name) @class.name) @class.def
-            (function_definition name: (name) @function.name) @function.def
-            (signal_statement name: (name) @event.name) @event.def
-            (call) @call.expr
-            (extends_statement) @import.def
-        `;
+        const queryPath = path.resolve(__dirname, './queries/gdscript.scm');
+        return fs.readFileSync(queryPath, 'utf8');
     }
 
     public mapCaptureToSymbolType(captureName: string): SymbolType {

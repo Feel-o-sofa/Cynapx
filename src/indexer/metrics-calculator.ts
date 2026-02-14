@@ -4,6 +4,16 @@
  * See LICENSE in the project root for license information.
  */
 import * as ts from 'typescript';
+import * as path from 'path';
+
+let nativeModule: any = null;
+try {
+    const nativePath = path.resolve(__dirname, '../../src-native/cynapx-native.win32-x64-msvc.node');
+    nativeModule = require(nativePath);
+    console.error('[Metrics] Native acceleration enabled.');
+} catch (err) {
+    console.error('[Metrics] Native acceleration unavailable, falling back to TS.');
+}
 
 /**
  * Utility to calculate code metrics from AST.
@@ -13,9 +23,14 @@ export class MetricsCalculator {
      * Calculates the cyclomatic complexity of a function/method node.
      * Formula: CC = number of decision points + 1
      */
-    public static calculateCyclomaticComplexity(node: ts.Node): number {
-        let complexity = 1;
+    public static calculateCyclomaticComplexity(node: any, sourceCode?: string): number {
+        // Use native acceleration if available and source code is provided
+        if (nativeModule && sourceCode) {
+            const decisionPoints = ['if', 'for', 'while', 'case', 'catch', '&&', '||'];
+            return nativeModule.calculateCyclomaticComplexityNative(sourceCode, decisionPoints);
+        }
 
+        let complexity = 1;
         const visit = (n: ts.Node) => {
             switch (n.kind) {
                 case ts.SyntaxKind.IfStatement:

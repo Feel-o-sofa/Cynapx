@@ -8,6 +8,8 @@ import { SymbolType } from '../../types';
 // @ts-ignore
 import JavaScript from 'tree-sitter-javascript';
 import Parser from 'tree-sitter';
+import * as fs from 'fs';
+import * as path from 'path';
 
 export class JavascriptProvider implements LanguageProvider {
     public extensions = ['js'];
@@ -18,13 +20,8 @@ export class JavascriptProvider implements LanguageProvider {
     }
 
     public getQuery(): string {
-        return `
-            (function_declaration name: (identifier) @function.name) @function.def
-            (class_declaration name: (identifier) @class.name) @class.def
-            (method_definition name: (property_identifier) @method.name) @method.def
-            (call_expression function: (identifier) @call.name) @call.expr
-            (import_statement source: (string) @import.name)
-        `;
+        const queryPath = path.resolve(__dirname, './queries/javascript.scm');
+        return fs.readFileSync(queryPath, 'utf8');
     }
 
     public mapCaptureToSymbolType(captureName: string): SymbolType {

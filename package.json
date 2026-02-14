@@ -16,6 +16,7 @@
   "scripts": {
     "start": "ts-node src/bootstrap.ts",
     "build": "tsc",
+    "build:native": "npm run build --prefix src-native",
     "dev": "ts-node-dev --respawn src/bootstrap.ts",
     "prepublishOnly": "npm run build"
   },
