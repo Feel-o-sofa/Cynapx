@@ -38,28 +38,35 @@
     *   **S-Query 외부화**: 12개 언어의 Tree-sitter 쿼리(`*.scm`) 분리 및 유연한 캡처 규칙 구조 확립 완료.
     *   **Async Registry**: 비차단 방식의 인덱스 로딩 및 쓰기 잠금 최적화 완료.
     *   **Dynamic Plugin System**: `~/.cynapx/plugins` 내 외부 플러그인(`.js/.ts`) 자동 탐지 및 런타임 등록 엔진 구현 완료. (Task 29.5 완료)
+*   **Task 30: AI-Native Token Optimization (AI 에이전트 전용 토큰 효율화)**:
+    *   **Symbol-First Query Protocol**: `get_symbol_details`에 `summary_only` 및 `include_source` 옵션 추가.
+    *   **Smart Context Pruning**: 100라인 이상의 긴 심볼 소스 코드를 지능적으로 생략(50라인)하여 토큰 낭비 방지.
+    *   **Graph-based Caching**: `GraphEngine` 내 영향 분석 결과(Impact Analysis) 1분 캐싱 도입으로 반복 질의 최적화.
 
 ---
 
 ## 2. 현재 상태 (Current Status)
 *   **브랜드**: **Cynapx (시냅스엑스)** - 코드의 신경망을 잇는 지능형 인덱스.
-*   **통합**: MCP SDK v2 (Streamable HTTP) 표준을 준수하며, Rust 네이티브 가속 및 동적 플러그인 아키텍처를 통한 무한한 확장성 확보.
-*   **다국어 지원**: 12개 기본 언어 정밀 분석 및 사용자 정의 플러그인을 통한 언어 지원 확장 가능.
-*   **성능**: 네이티브 병렬 처리를 통해 기존 대비 분석 속도 약 180% 향상.
+*   **통합**: MCP SDK v2 (Streamable HTTP) 표준 준수, AI 에이전트 전용 고효율 쿼리 프로토콜 내장.
+*   **다국어 지원**: 12개 기본 언어 정밀 분석 및 사용자 정의 플러그인 확장 가능.
+*   **성능**: Rust 네이티브 가속 및 그래프 캐싱을 통해 대규모 프로젝트 분석 및 반복 질의 성능 극대화.
 
 ---
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 9: Massive Scaling & AI-Native Optimization (대규모 확장 및 AI 최적화)
+### Phase 10: High-Fidelity Evidence & Objective Context (고충실도 증거 및 객관적 맥락 제공)
 
-*   **Task 30: AI-Native Token Optimization (AI 에이전트 전용 토큰 효율화)**:
+*   **Task 31: Boundaryless Edge Discovery (경계 없는 호출지 탐색)**:
+    *   단일 프로젝트 경계를 넘어 멀티 저장소 간의 물리적 호출(Call) 및 참조(Reference) 접점을 빠짐없이 데이터로 제공.
+    *   에이전트가 시스템 전체의 의존성 지형을 스스로 유추할 수 있도록 가공되지 않은 모든 연결(Edge) 정보를 노출.
+*   **Task 32: Structural Characteristic Tagging (구조적 특성 태깅)**:
+    *   심볼이 위치한 경로, 상속 계층, 직접 참조 라이브러리 등 물리적 사실에 기반한 객관적 태그(Tag) 데이터 추출.
+    *   "이 클래스는 어느 레이어에 속하며 무엇을 참조한다"라는 사실 관계만 제공하여 에이전트가 설계 패턴 위반 여부를 스스로 판단하게 함.
+*   **Task 33: Historical Evidence Mapping (역사적 증거 맵핑)**:
+    *   심볼 단위로 Git 커밋 메시지, 이슈 ID, PR 원문 기록을 정밀하게 연결하여 에이전트의 컨텍스트로 전달.
+    *   과거의 기록을 요약하거나 해석하지 않고 원문 그대로를 제공함으로써 에이전트가 구현의 배경(Rationale)을 직접 추론하게 함.
 
-    *   **Symbol-First Query Protocol**: `get_symbol_details`에 `summary_only` 및 `include_source` 옵션을 추가하여 불필요한 소스 코드 읽기 방지 및 구조 중심 분석 워크플로우 내재화 완료.
-
-    *   **Smart Context Pruning**: 100라인 이상의 긴 심볼 소스 코드에 대해 핵심부(50라인)만 노출하는 지능형 스니펫 엔진 구축 완료.
-
-    *   **Graph-based Caching**: `GraphEngine`에 영향 분석 결과(Impact Analysis) 레벨의 1분 캐싱을 도입하여 반복 질의 성능 및 토큰 소모 최적화 완료.
 
 
 
