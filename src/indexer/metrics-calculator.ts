@@ -13,7 +13,8 @@ try {
     const possiblePaths = [
         path.resolve(__dirname, '../cynapx-native.win32-x64-msvc.node'),
         path.resolve(__dirname, '../../cynapx-native.win32-x64-msvc.node'),
-        path.resolve(__dirname, './cynapx-native.win32-x64-msvc.node')
+        path.resolve(__dirname, './cynapx-native.win32-x64-msvc.node'),
+        path.resolve(__dirname, '../../src-native/cynapx-native.win32-x64-msvc.node')
     ];
 
     for (const p of possiblePaths) {

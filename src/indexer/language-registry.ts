@@ -38,6 +38,7 @@ export class LanguageRegistry {
         if (fs.existsSync(userPluginDir)) {
             this.pluginDirs.push(userPluginDir);
         }
+        this.scanPlugins();
     }
 
     public static getInstance(): LanguageRegistry {
@@ -47,9 +48,68 @@ export class LanguageRegistry {
         return this.instance;
     }
 
+    private scanPlugins(): void {
+        for (const dir of this.pluginDirs) {
+            if (!fs.existsSync(dir)) continue;
+            
+            // Skip the internal 'languages' dir for dynamic scanning as it's handled by extensionMap lazy loading
+            if (dir === path.resolve(__dirname, 'languages')) continue;
+
+            try {
+                const files = fs.readdirSync(dir);
+                for (const file of files) {
+                    if (file.endsWith('.js') || file.endsWith('.ts')) {
+                        const fullPath = path.join(dir, file);
+                        this.tryRegisterPlugin(fullPath);
+                    }
+                }
+            } catch (err) {
+                console.error(`LanguageRegistry: Error scanning directory ${dir}: ${err}`);
+            }
+        }
+    }
+
+    private tryRegisterPlugin(fullPath: string): void {
+        try {
+            // Using require for plugin loading
+            const plugin = require(fullPath);
+            let registeredCount = 0;
+
+            for (const key in plugin) {
+                const Exported = plugin[key];
+                if (typeof Exported === 'function') {
+                    try {
+                        const instance = new Exported();
+                        if (this.isLanguageProvider(instance)) {
+                            this.register(instance);
+                            registeredCount++;
+                        }
+                    } catch {
+                        // Not a constructible provider class, skip
+                    }
+                }
+            }
+            if (registeredCount > 0) {
+                console.error(`LanguageRegistry: Registered ${registeredCount} provider(s) from ${fullPath}`);
+            }
+        } catch (err) {
+            console.error(`LanguageRegistry: Failed to load plugin ${fullPath}: ${err}`);
+        }
+    }
+
+    private isLanguageProvider(obj: any): obj is LanguageProvider {
+        return obj && 
+               Array.isArray(obj.extensions) && 
+               typeof obj.languageName === 'string' &&
+               typeof obj.getLanguage === 'function' &&
+               typeof obj.getQuery === 'function';
+    }
+
     public register(provider: LanguageProvider): void {
         provider.extensions.forEach(ext => {
-            this.providers.set(ext.toLowerCase(), provider);
+            const normalizedExt = ext.toLowerCase();
+            // External plugins or explicit registration takes precedence over lazy internal map
+            this.providers.set(normalizedExt, provider);
         });
     }
 
