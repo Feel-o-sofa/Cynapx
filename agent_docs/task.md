@@ -28,38 +28,36 @@
 *   **Task 25.5: 상속 및 구현 관계(Inheritance) 추출 정교화**: Java/C#/Python/TS/CPP 상속 관계 엣지 누락 현상 해결 및 정밀도 개선 완료.
 *   **Task 26: Wave 3 확장 (PHP Integrated)**: PHP Trait 및 상속 관계 추출 엔진 구축 완료. (Lua 지원은 환경 호환성 문제로 철회)
 
+### Phase 8: Connectivity & Security (연결성 및 보안 고도화)
+*   **Task 27: Purely Ephemeral HTTPS**: 기동 시 휘발성 인증서 자동 생성 및 파일 시스템 흔적 없는(Zero-Pollution) 보안 모델 구축 완료.
+*   **Task 28: MCP-over-SSE & Streamable HTTP**: MCP SDK v2 표준 기반 Streamable HTTP 전환, 다중 세션 관리 및 실시간 도구 연결 인프라 구축 완료.
+
 ---
 
 ## 2. 현재 상태 (Current Status)
 *   **브랜드**: **Cynapx (시냅스엑스)** - 코드의 신경망을 잇는 지능형 인덱스.
-*   **통합**: 공식 MCP SDK를 통해 Gemini CLI와 안정적으로 연결됨.
-*   **다국어 지원**: TS, JS, PY, C, CPP, RS, GO, GD, JAVA, KT, CS, PHP (총 12개 언어) 지원.
-*   **지능형 분석**: 의미론적 클러스터링을 통한 시스템 '심장부(Core)' 및 '유틸리티' 자동 식별 지원.
-*   **안정성**: Canonical Path Normalization 및 비차단 상태 체크가 적용된 견고한 아키텍처.
+*   **통합**: MCP SDK v2 (Streamable HTTP) 표준을 준수하여 다중 에이전트 동시 접속 지원.
+*   **다국어 지원**: TS, JS, PY, C, CPP, RS, GO, GD, JAVA, KT, CS, PHP (총 12개 언어) 정밀 분석.
+*   **지능형 분석**: 그래프 기반 영향 분석 및 의미론적 클러스터링을 통한 시스템 코어 자동 식별.
+*   **보안**: 휘발성 HTTPS 및 샌드박스 정책을 통한 안전한 에이전트 실행 환경 제공.
 
 ---
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 8: Advanced Reasoning & Scalability (지능형 추론 및 확장성 고도화)
-
-*   **Task 27: Purely Ephemeral HTTPS Implementation (완전 휘발성 HTTPS 구축)**:
-    *   **On-the-fly Generation**: 기동 시 메모리 내 인증서 자동 생성 엔진 구축.
-    *   **Consistent Sandboxing**: 가상 및 로컬 환경에서 일관된 비저장(Stateless) 보안 모델 적용.
-    *   **Zero-Pollution Verification**: 파일 시스템 흔적 0% 검증. (완료)
-
-*   **Task 28: MCP-over-SSE Implementation (지속적 연결성 강화)**:
-    *   **SSE Transport Support**: Stdio 외에 Server-Sent Events를 통한 원격 MCP 연결 지원. (완료)
-    *   **Streamable HTTP Migration**: MCP SDK v2 표준에 맞춰 SSE를 Streamable HTTP로 업그레이드 및 다중 세션 지원 아키텍처 구축. (완료)
-    *   **Persistent Tool Connection**: 스탠드얼론 프로세스와 에이전트 간의 실시간/지속적 도구 세션 유지. (완료)
-    *   **Monitoring Middleware**: 실시간 요청 감시 및 감사 로깅 시스템 구축. (완료)
+### Phase 9: Massive Scaling & AI-Native Optimization (대규모 확장 및 AI 최적화)
 
 *   **Task 29: 대규모 분석 성능 고도화 및 플러그인 시스템**:
-    *   **Rust 기반 Core Indexer**: 대규모 멀티 언어 처리를 위한 인덱서 코어의 Rust 전환 검토.
-    *   **Plugin System**: 사용자 정의 Tree-sitter 문법 및 S-query 추가를 위한 플러그인 인터페이스 개방.
-    *   **Async Registry**: ESM/TLA 모듈 지원을 위한 비동기 로딩 아키텍처 전환 검토.
+    *   **Rust 기반 Core Indexer**: 수백만 라인 이상의 대규모 프로젝트 처리를 위한 인덱서 코어의 Rust 전환.
+    *   **Plugin System**: 사용자 정의 Tree-sitter 문법 및 분석 규칙(S-query) 플러그인 인터페이스 개방.
+    *   **Async Registry**: 비차단 방식의 인덱스 로딩 및 동적 언어 파서 등록 시스템 최적화.
+
+*   **Task 30: AI-Native Token Optimization (AI 에이전트 전용 토큰 효율화)**:
+    *   **Symbol-First Query Protocol**: `read_file` 의존도를 낮추고 심볼 메타데이터 중심의 분석 워크플로우를 에이전트에 내재화.
+    *   **Smart Context Pruning**: 분석 단계에 따라 불필요한 코드 블록을 제외하고 핵심 로직만 노출하는 지능형 스니펫 엔진.
+    *   **Graph-based Caching**: 빈번하게 조회되는 호출 관계 및 영향 범위 데이터의 결과 레벨 캐싱을 통한 API 응답 속도 및 토큰 절감.
 
 ---
-**Status**: Phase 8 - **Advanced Reasoning & Scalability (Optimization)**
-**Context**: Major systems are stable. Secure HTTPS and Streamable HTTP connectivity are fully operational. Next focus is scaling the core engine for massive codebases.
+**Status**: Phase 9 - **Massive Scaling & AI-Native Optimization**
+**Context**: Secure connectivity and multi-client support are stable. Now focusing on handling massive codebases and maximizing AI agent reasoning efficiency via token-aware graph queries.
 
