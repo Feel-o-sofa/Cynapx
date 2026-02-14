@@ -19,13 +19,13 @@ export class NodeRepository {
         visibility, is_generated, last_updated_commit, version,
         checksum, modifiers, signature, return_type, field_type,
         loc, cyclomatic, fan_in, fan_out, fan_in_dynamic, fan_out_dynamic,
-        cluster_id, remote_project_path
+        cluster_id, remote_project_path, tags
       ) VALUES (
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
-        ?, ?
+        ?, ?, ?
       )
     `);
 
@@ -52,7 +52,8 @@ export class NodeRepository {
             node.fan_in_dynamic || 0,
             node.fan_out_dynamic || 0,
             node.cluster_id || null,
-            node.remote_project_path || null
+            node.remote_project_path || null,
+            node.tags ? JSON.stringify(node.tags) : null
         );
 
         return result.lastInsertRowid as number;
@@ -213,7 +214,8 @@ export class NodeRepository {
             fan_in_dynamic: row.fan_in_dynamic,
             fan_out_dynamic: row.fan_out_dynamic,
             cluster_id: row.cluster_id,
-            remote_project_path: row.remote_project_path
+            remote_project_path: row.remote_project_path,
+            tags: row.tags ? JSON.parse(row.tags) : undefined
         };
     }
 }

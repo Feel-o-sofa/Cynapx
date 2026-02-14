@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     -- Boundaryless Edge Discovery (Task 31)
     remote_project_path TEXT,
 
+    -- Structural Characteristic Tagging (Task 32)
+    tags TEXT, -- JSON array of strings
+
     -- Semantic Clustering (Task 24)
     cluster_id INTEGER,
     FOREIGN KEY (cluster_id) REFERENCES logical_clusters(id) ON DELETE SET NULL

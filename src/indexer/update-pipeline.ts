@@ -12,6 +12,7 @@ import { GitService } from './git-service';
 import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
 import { WorkerPool } from './worker-pool';
 import { toCanonical, readRegistry } from '../utils/paths';
+import { StructuralTagger } from './structural-tagger';
 
 /**
  * UpdatePipeline manages the incremental update process for the knowledge graph.
@@ -29,6 +30,30 @@ export class UpdatePipeline {
     ) { }
 
     private writeLock: Promise<void> = Promise.resolve();
+
+    public async reTagAllNodes(): Promise<void> {
+        const nodes = this.nodeRepo.getAllNodes();
+        const previousLock = this.writeLock;
+        let resolveLock: () => void;
+        this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
+        await previousLock;
+
+        try {
+            this.db.prepare('BEGIN').run();
+            for (const node of nodes) {
+                if (node.id) {
+                    const tags = StructuralTagger.tagNode(node);
+                    this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?').run(JSON.stringify(tags), node.id);
+                }
+            }
+            this.db.prepare('COMMIT').run();
+        } catch (e) {
+            if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
+            throw e;
+        } finally {
+            resolveLock!();
+        }
+    }
 
     public async processChangeEvent(event: FileChangeEvent, version: number): Promise<void> {
         const { event: type, file_path, commit } = event;
@@ -89,6 +114,7 @@ export class UpdatePipeline {
                     this.nodeRepo.deleteNodesByFilePath(res.event.file_path);
                     if (res.event.event !== 'DELETE') {
                         for (const node of res.delta.nodes) {
+                            node.tags = StructuralTagger.tagNode(node);
                             const nodeId = this.nodeRepo.createNode(node);
                             symbolCache.set(toCanonical(node.qualified_name), nodeId);
                         }
@@ -131,6 +157,7 @@ export class UpdatePipeline {
 
             const symbolCache = new Map<string, number>();
             for (const node of delta.nodes) {
+                node.tags = StructuralTagger.tagNode(node);
                 const nodeId = this.nodeRepo.createNode(node);
                 symbolCache.set(toCanonical(node.qualified_name), nodeId);
             }

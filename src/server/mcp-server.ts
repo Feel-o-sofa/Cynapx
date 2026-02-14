@@ -111,6 +111,10 @@ export class McpServer {
         this.onPurgeCallback = callback;
     }
 
+    public setUpdatePipeline(pipeline: any) {
+        (this as any).updatePipeline = pipeline;
+    }
+
     private async waitUntilReady() {
         // Only wait for the initial startup promise
         if (!this.isInitialized) {
@@ -621,6 +625,10 @@ Please follow this safety protocol:
                 if (node.remote_project_path) {
                     text += `- **Remote Project**: \`${node.remote_project_path}\` (Boundaryless Discovery)\n`;
                 }
+                
+                if (node.tags && node.tags.length > 0) {
+                    text += `- **Structural Tags**: ${node.tags.map(t => `\`${t}\``).join(', ')}\n`;
+                }
 
                 text += `\n#### Metrics:\n`;
                 if (node.loc !== undefined) text += `- **LOC**: ${node.loc}\n`;
@@ -900,6 +908,28 @@ Please follow this safety protocol:
                     };
                 } catch (err) {
                     return { isError: true, content: [{ type: "text", text: `Failed to purge index: ${err}` }] };
+                }
+            }
+        );
+
+        // re_tag_project
+        this.sdkServer.registerTool(
+            "re_tag_project",
+            {
+                description: "Re-run structural characteristic tagging for all symbols in the current project. Useful after updating tagging logic.",
+                inputSchema: z.object({})
+            },
+            async () => {
+                await this.waitUntilReady();
+                const pipeline = (this as any).updatePipeline;
+                if (!pipeline) {
+                    return { isError: true, content: [{ type: "text", text: "Update pipeline not available in this session." }] };
+                }
+                try {
+                    await pipeline.reTagAllNodes();
+                    return { content: [{ type: "text", text: "Successfully re-tagged all nodes in the project." }] };
+                } catch (err) {
+                    return { isError: true, content: [{ type: "text", text: `Failed to re-tag nodes: ${err}` }] };
                 }
             }
         );

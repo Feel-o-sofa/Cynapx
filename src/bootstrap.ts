@@ -164,6 +164,9 @@ Environment Variables:
 
         // Initialize MCP Server (always needed for either Stdio or SSE mode)
         const mcpServer = new McpServer(currentGraphEngine!, metadataRepo!, currentConsistencyChecker);
+        if (updatePipeline) {
+            mcpServer.setUpdatePipeline(updatePipeline);
+        }
         // Important: Register default handlers for Stdio/Single-mode
         mcpServer.registerHandlers();
         
@@ -181,6 +184,7 @@ Environment Variables:
                 // Dynamically update MCP server's references
                 (mcpServer as any).graphEngine = result.graphEngine;
                 (mcpServer as any).metadataRepo = result.metadataRepo;
+                mcpServer.setUpdatePipeline(updatePipeline);
                 mcpServer!.setConsistencyChecker(result.consistencyChecker);
                 mcpServer!.setSecurityProvider(result.securityProvider);
             });

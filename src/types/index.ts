@@ -44,11 +44,14 @@ export interface CodeNode {
     fan_in_dynamic?: number;
     fan_out_dynamic?: number;
 
-    // Semantic Clustering (Task 24)
-    cluster_id?: number;
-
     // Boundaryless Edge Discovery (Task 31)
     remote_project_path?: string;
+
+    // Structural Characteristic Tagging (Task 32)
+    tags?: string[]; // Stored as JSON in DB
+
+    // Semantic Clustering (Task 24)
+    cluster_id?: number;
 }
 
 /**
