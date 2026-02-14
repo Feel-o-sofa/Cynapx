@@ -3,7 +3,7 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { Database } from 'better-sqlite3';
+import SQLiteDatabase from 'better-sqlite3';
 import * as path from 'path';
 import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
@@ -11,20 +11,21 @@ import { MetadataRepository } from '../db/metadata-repository';
 import { GitService } from './git-service';
 import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
 import { WorkerPool } from './worker-pool';
-import { toCanonical } from '../utils/paths';
+import { toCanonical, readRegistry } from '../utils/paths';
 
 /**
  * UpdatePipeline manages the incremental update process for the knowledge graph.
  */
 export class UpdatePipeline {
     constructor(
-        private db: Database,
+        private db: SQLiteDatabase.Database,
         private nodeRepo: NodeRepository,
         private edgeRepo: EdgeRepository,
         private parser: CodeParser,
         private metadataRepo?: MetadataRepository,
         private gitService?: GitService,
-        private workerPool?: WorkerPool
+        private workerPool?: WorkerPool,
+        private projectPath?: string
     ) { }
 
     private writeLock: Promise<void> = Promise.resolve();
@@ -211,6 +212,50 @@ export class UpdatePipeline {
                 : candidates[0];
             return bestMatch.id;
         }
+
+        // Boundaryless Edge Discovery (Task 31)
+        // If not found locally, search across other registered projects
+        if (side === 'to' && this.projectPath) {
+            const registry = readRegistry();
+            const otherProjects = registry.filter(p => p.path.toLowerCase() !== this.projectPath!.toLowerCase());
+            // console.log(`[Boundaryless] Searching for ${qname} in ${otherProjects.length} other projects...`);
+
+            for (const project of otherProjects) {
+                try {
+                    // Quick check: does the DB file exist?
+                    if (!require('fs').existsSync(project.db_path)) continue;
+
+                    const remoteDb = new SQLiteDatabase(project.db_path, { readonly: true });
+                    const remoteStmt = remoteDb.prepare("SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LIKE ? COLLATE NOCASE LIMIT 1");
+                    const remoteMatch = remoteStmt.get(canonicalQName, `%#${canonicalQName}`) as any;
+                    remoteDb.close();
+
+                    if (remoteMatch) {
+                        // Create a Shadow Node in the local DB
+                        const shadowNodeId = this.nodeRepo.createNode({
+                            qualified_name: `remote:${project.name}:${remoteMatch.qualified_name}`,
+                            symbol_type: remoteMatch.symbol_type,
+                            language: remoteMatch.language,
+                            file_path: remoteMatch.file_path, // Remote file path
+                            start_line: remoteMatch.start_line,
+                            end_line: remoteMatch.end_line,
+                            visibility: remoteMatch.visibility,
+                            is_generated: true,
+                            last_updated_commit: 'remote',
+                            version: 0,
+                            remote_project_path: project.path,
+                            signature: remoteMatch.signature,
+                            return_type: remoteMatch.return_type
+                        });
+                        console.log(`[Boundaryless] Resolved cross-project edge to ${project.name}: ${remoteMatch.qualified_name}`);
+                        return shadowNodeId;
+                    }
+                } catch (err) {
+                    // Silently ignore errors for specific remote DBs to ensure stability
+                }
+            }
+        }
+
         return undefined;
     }
 }

@@ -30,6 +30,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     fan_in_dynamic INTEGER DEFAULT 0,
     fan_out_dynamic INTEGER DEFAULT 0,
 
+    -- Boundaryless Edge Discovery (Task 31)
+    remote_project_path TEXT,
+
     -- Semantic Clustering (Task 24)
     cluster_id INTEGER,
     FOREIGN KEY (cluster_id) REFERENCES logical_clusters(id) ON DELETE SET NULL

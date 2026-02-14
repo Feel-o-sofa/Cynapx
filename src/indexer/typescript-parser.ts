@@ -9,6 +9,7 @@ import { CodeParser, DeltaGraph, RawCodeEdge } from './types';
 import { CodeNode, SymbolType, Visibility } from '../types';
 import { MetricsCalculator } from './metrics-calculator';
 import { calculateChecksum } from '../utils/checksum';
+import { toCanonical } from '../utils/paths';
 
 export class TypeScriptParser implements CodeParser {
     private program: ts.Program | null = null;
@@ -43,10 +44,11 @@ export class TypeScriptParser implements CodeParser {
         const nodes: CodeNode[] = [];
         const edges: RawCodeEdge[] = [];
         const sourceCode = sourceFile.getFullText();
+        const canonicalFilePath = toCanonical(filePath);
 
         // 1. File Node
         const fileNode: CodeNode = {
-            qualified_name: filePath,
+            qualified_name: canonicalFilePath,
             symbol_type: 'file',
             language: 'typescript',
             file_path: filePath,
@@ -66,13 +68,13 @@ export class TypeScriptParser implements CodeParser {
             if ((ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) && (node as any).name) {
                 const symbol = this.typeChecker?.getSymbolAtLocation((node as any).name);
                 if (symbol) {
-                    const qname = this.getName(symbol);
+                    const qname = toCanonical(this.getName(symbol));
                     const type = this.getSymbolType(node);
                     nodes.push(this.createNode(node, sourceFile, qname, type, filePath, commit, version));
 
                     // Edge: file -> symbol (defines)
                     edges.push({
-                        from_qname: filePath,
+                        from_qname: canonicalFilePath,
                         to_qname: qname,
                         edge_type: 'defines',
                         dynamic: false
@@ -89,7 +91,7 @@ export class TypeScriptParser implements CodeParser {
                     if (!pkgName.startsWith('.')) {
                         const pkgNodeQName = `package:${pkgName}`;
                         edges.push({
-                            from_qname: filePath,
+                            from_qname: canonicalFilePath,
                             to_qname: pkgNodeQName,
                             edge_type: 'depends_on',
                             dynamic: false
@@ -101,7 +103,7 @@ export class TypeScriptParser implements CodeParser {
             // 4. Resolve Calls (Edge Extraction)
             if (ts.isCallExpression(node)) {
                 const centerNode = this.findParentSymbol(node);
-                const fromQName = centerNode ? this.getName(centerNode) : filePath;
+                const fromQName = centerNode ? toCanonical(this.getName(centerNode)) : canonicalFilePath;
                 this.resolveCall(node, sourceFile, fromQName, edges);
             }
 
@@ -150,7 +152,7 @@ export class TypeScriptParser implements CodeParser {
             const declaration = symbol.valueDeclaration || symbol.declarations?.[0];
             if (declaration) {
                 const targetFile = declaration.getSourceFile().fileName;
-                const targetQName = this.getName(symbol);
+                const targetQName = toCanonical(this.getName(symbol));
 
                 edges.push({
                     from_qname: fromQName,

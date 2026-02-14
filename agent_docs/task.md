@@ -42,6 +42,9 @@
     *   **Symbol-First Query Protocol**: `get_symbol_details`에 `summary_only` 및 `include_source` 옵션 추가.
     *   **Smart Context Pruning**: 100라인 이상의 긴 심볼 소스 코드를 지능적으로 생략(50라인)하여 토큰 낭비 방지.
     *   **Graph-based Caching**: `GraphEngine` 내 영향 분석 결과(Impact Analysis) 1분 캐싱 도입으로 반복 질의 최적화.
+*   **Task 31: Boundaryless Edge Discovery (경계 없는 호출지 탐색)**:
+    - 전역 레지스트리를 기반으로 프로젝트 간 물리적 호출/참조를 자동 연결하는 Shadow Node 아키텍처 구축 완료.
+    - 정적 분석 결과가 로컬 범위를 벗어날 경우 타 프로젝트 DB를 역추적하여 전역적 의존성 지형 데이터 제공 완료.
 
 ---
 

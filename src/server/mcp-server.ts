@@ -31,9 +31,23 @@ export class McpServer {
         public metadataRepo: MetadataRepository,
         public consistencyChecker?: ConsistencyChecker
     ) {
+        let version = "1.0.2";
+        try {
+            const pkgPath = path.join(__dirname, '..', '..', 'package.json');
+            if (fs.existsSync(pkgPath)) {
+                version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
+            } else {
+                // Try alternate path for dist
+                const distPkgPath = path.join(__dirname, '..', 'package.json');
+                if (fs.existsSync(distPkgPath)) {
+                    version = JSON.parse(fs.readFileSync(distPkgPath, 'utf8')).version;
+                }
+            }
+        } catch (e) {}
+
         this.sdkServer = new SdkMcpServer({
             name: "cynapx",
-            version: "1.0.0"
+            version: version
         });
 
         this.readyPromise = new Promise((resolve) => {
@@ -604,6 +618,10 @@ Please follow this safety protocol:
                 if (node.field_type) text += `- **Field Type**: \`${node.field_type}\`\n`;
                 text += `- **File**: \`${node.file_path}\` (line ${node.start_line}-${node.end_line})\n`;
                 
+                if (node.remote_project_path) {
+                    text += `- **Remote Project**: \`${node.remote_project_path}\` (Boundaryless Discovery)\n`;
+                }
+
                 text += `\n#### Metrics:\n`;
                 if (node.loc !== undefined) text += `- **LOC**: ${node.loc}\n`;
                 if (node.cyclomatic !== undefined) text += `- **Cyclomatic Complexity**: ${node.cyclomatic}\n`;

@@ -46,6 +46,9 @@ export interface CodeNode {
 
     // Semantic Clustering (Task 24)
     cluster_id?: number;
+
+    // Boundaryless Edge Discovery (Task 31)
+    remote_project_path?: string;
 }
 
 /**

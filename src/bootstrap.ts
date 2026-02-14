@@ -77,7 +77,20 @@ Environment Variables:
     const anchorPath = findProjectAnchor(startPath);
     const initialProjectPath = anchorPath || startPath;
 
-    log(`--- Starting Cynapx (Parallel Mode) ---`);
+    // Load version from package.json
+    let version = 'unknown';
+    try {
+        const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+        version = pkg.version;
+    } catch (e) {
+        // Fallback for production/dist where package.json might be in a different relative path
+        try {
+            const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
+            version = pkg.version;
+        } catch (e2) {}
+    }
+
+    log(`--- Starting Cynapx v${version} (Parallel Mode) ---`);
     log(`Start Directory: ${startPath}`);
     if (anchorPath) log(`Detected Anchor at: ${anchorPath}`);
 
@@ -114,7 +127,7 @@ Environment Variables:
 
             const workerPoolSize = Math.min(os.cpus().length, 4);
             workerPool = lifecycle.track(new WorkerPool(workerPoolSize));
-            updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool);
+            updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool, projectPath);
             consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
 
             log('Synchronizing index with Project state...');

@@ -57,6 +57,13 @@ export class GraphEngine {
         return node;
     }
 
+    /**
+     * Checks if a node is a Shadow Node pointing to a remote project.
+     */
+    public isShadowNode(node: CodeNode): boolean {
+        return !!node.remote_project_path;
+    }
+
     public clearCache(): void {
         this.nodeCache.clear();
         this.qnameCache.clear();
@@ -309,18 +316,26 @@ export class GraphEngine {
         mermaid += '  classDef interface fill:#9ff,stroke:#333,stroke-width:2px\n';
         mermaid += '  classDef method fill:#bbf,stroke:#333,stroke-width:1px\n';
         mermaid += '  classDef function fill:#dfd,stroke:#333,stroke-width:1px\n';
+        mermaid += '  classDef remote fill:#ffd,stroke:#f66,stroke-width:2px,stroke-dasharray: 5 5\n';
 
         // Dedup nodes
         const uniqueNodes = Array.from(new Map(nodesToExport.map(n => [n.id, n])).values());
         
         for (const node of uniqueNodes) {
             const shortName = node.qualified_name.split(/[#.\/]/).pop();
-            const label = `${node.symbol_type}: ${shortName}`;
-            const cssClass = node.symbol_type === 'file' ? ':::file' : 
+            let label = `${node.symbol_type}: ${shortName}`;
+            
+            let cssClass = node.symbol_type === 'file' ? ':::file' : 
                            node.symbol_type === 'class' ? ':::class' :
                            node.symbol_type === 'interface' ? ':::interface' :
                            node.symbol_type === 'method' ? ':::method' :
                            node.symbol_type === 'function' ? ':::function' : '';
+
+            if (node.remote_project_path) {
+                const projectName = node.qualified_name.split(':')[1];
+                label = `[${projectName}] ${label}`;
+                cssClass = ':::remote';
+            }
             
             mermaid += `  N${node.id}["${label}"]${cssClass}\n`;
         }
