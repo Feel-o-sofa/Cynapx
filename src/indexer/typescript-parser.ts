@@ -79,6 +79,34 @@ export class TypeScriptParser implements CodeParser {
                         edge_type: 'defines',
                         dynamic: false
                     });
+
+                    // OOP Relationships (inherits / implements)
+                    if (ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) {
+                        if (node.heritageClauses) {
+                            for (const clause of node.heritageClauses) {
+                                const edgeType = clause.token === ts.SyntaxKind.ExtendsKeyword ? 'inherits' : 'implements';
+                                for (const typeNode of clause.types) {
+                                    const typeSymbol = this.typeChecker?.getSymbolAtLocation(typeNode.expression);
+                                    if (typeSymbol) {
+                                        edges.push({
+                                            from_qname: qname,
+                                            to_qname: toCanonical(this.getName(typeSymbol)),
+                                            edge_type: edgeType,
+                                            dynamic: false
+                                        });
+                                    } else {
+                                        // Fallback to text if symbol cannot be resolved (e.g. external)
+                                        edges.push({
+                                            from_qname: qname,
+                                            to_qname: typeNode.expression.getText(),
+                                            edge_type: edgeType,
+                                            dynamic: false
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
 

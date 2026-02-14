@@ -184,7 +184,7 @@ export class NodeRepository {
     }
 
     public findNodesBySymbolName(name: string): CodeNode[] {
-        const stmt = this.db.prepare("SELECT * FROM nodes WHERE qualified_name = ? OR qualified_name LIKE ?");
+        const stmt = this.db.prepare("SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LIKE ? COLLATE NOCASE");
         // Match exact name (if global) or suffixed name
         const rows = stmt.all(name, `%#${name}`);
         return rows.map(row => this.mapRowToNode(row));

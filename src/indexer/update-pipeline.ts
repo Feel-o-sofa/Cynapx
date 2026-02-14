@@ -13,6 +13,7 @@ import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
 import { WorkerPool } from './worker-pool';
 import { toCanonical, readRegistry } from '../utils/paths';
 import { StructuralTagger } from './structural-tagger';
+import { CodeNode } from '../types';
 
 /**
  * UpdatePipeline manages the incremental update process for the knowledge graph.
@@ -40,12 +41,42 @@ export class UpdatePipeline {
 
         try {
             this.db.prepare('BEGIN').run();
+            
+            // 1. First pass: Initialize node map with baseline tags
+            const nodeMap = new Map<number, { node: CodeNode, tags: string[] }>();
             for (const node of nodes) {
                 if (node.id) {
-                    const tags = StructuralTagger.tagNode(node);
-                    this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?').run(JSON.stringify(tags), node.id);
+                    const baselineTags = StructuralTagger.tagNode(node);
+                    nodeMap.set(node.id, { node, tags: baselineTags });
                 }
             }
+
+            // 2. Second pass: Propagate roles via inheritance (multiple passes to reach stability)
+            for (let i = 0; i < 5; i++) {
+                let changed = false;
+                for (const [id, data] of nodeMap.entries()) {
+                    const outgoing = this.edgeRepo.getOutgoingEdges(id).filter(e => e.edge_type === 'inherits' || e.edge_type === 'implements');
+                    
+                    for (const edge of outgoing) {
+                        const parentData = nodeMap.get(edge.to_id);
+                        if (parentData && parentData.tags.length > 0) {
+                            const newTags = StructuralTagger.mergeRoles(data.tags, parentData.tags);
+                            if (newTags.length !== data.tags.length || !newTags.every(t => data.tags.includes(t))) {
+                                data.tags = newTags;
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                if (!changed) break;
+            }
+
+            // 3. Persist updated tags to DB
+            const updateStmt = this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?');
+            for (const [id, data] of nodeMap.entries()) {
+                updateStmt.run(JSON.stringify(data.tags), id);
+            }
+
             this.db.prepare('COMMIT').run();
         } catch (e) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();

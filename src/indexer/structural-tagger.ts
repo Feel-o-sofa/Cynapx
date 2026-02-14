@@ -10,14 +10,76 @@ import * as path from 'path';
  * StructuralTagger extracts physical and structural characteristics of symbols.
  */
 export class StructuralTagger {
+    // Priority for consolidation (lower number = more primitive/fundamental)
+    private static ROLE_PRIORITY: Record<string, number> = {
+        'role:repository': 1,
+        'role:parser': 2,
+        'role:server': 3,
+        'role:controller': 4,
+        'role:service': 5,
+        'role:utility': 10
+    };
+
     /**
-     * Extracts and assigns tags to a node based on its properties.
+     * Merges roles from parents into the current node's tags.
+     * Consolidates primitive roles and lists distinct roles in parallel.
+     */
+    public static mergeRoles(currentTags: string[], parentTags: string[]): string[] {
+        const tagSet = new Set(currentTags);
+        const parentRoles = parentTags.filter(t => t.startsWith('role:'));
+
+        for (const pRole of parentRoles) {
+            let shouldAdd = true;
+            
+            // Check for consolidation with existing roles
+            for (const cTag of Array.from(tagSet)) {
+                if (!cTag.startsWith('role:')) continue;
+
+                const pPriority = this.ROLE_PRIORITY[pRole] || 99;
+                const cPriority = this.ROLE_PRIORITY[cTag] || 99;
+
+                if (pRole === cTag) {
+                    shouldAdd = false;
+                    break;
+                }
+
+                // If they are related (e.g., repository and utility), 
+                // keep the more primitive one (lower priority number)
+                if (this.isRelated(pRole, cTag)) {
+                    if (pPriority < cPriority) {
+                        tagSet.delete(cTag);
+                        shouldAdd = true;
+                    } else {
+                        shouldAdd = false;
+                    }
+                    break;
+                }
+            }
+
+            if (shouldAdd) tagSet.add(pRole);
+        }
+
+        return Array.from(tagSet);
+    }
+
+    /**
+     * Determines if two roles are related enough to be consolidated.
+     * For now, we consolidate 'utility' with anything else.
+     */
+    private static isRelated(roleA: string, roleB: string): boolean {
+        if (roleA === 'role:utility' || roleB === 'role:utility') return true;
+        // Add more specific relationship logic here as the role system grows
+        return false;
+    }
+
+    /**
+     * Extracts and assigns baseline tags to a node based on its properties.
      */
     public static tagNode(node: CodeNode): string[] {
         const tags: Set<string> = new Set(node.tags || []);
 
         // 1. Layer Detection (based on directory structure)
-        const parts = node.file_path.split(/[\\/]/);
+        const parts = node.file_path.toLowerCase().split(/[\\/]/);
         if (parts.includes('db') || parts.includes('repository')) tags.add('layer:data');
         if (parts.includes('server') || parts.includes('api')) tags.add('layer:api');
         if (parts.includes('indexer') || parts.includes('engine')) tags.add('layer:core');
@@ -25,23 +87,26 @@ export class StructuralTagger {
         if (parts.includes('types') || parts.includes('domain')) tags.add('layer:domain');
 
         // 2. Role Detection (based on naming conventions)
-        const name = node.qualified_name.toLowerCase();
-        if (name.endsWith('repository') || name.includes('repo')) tags.add('role:repository');
-        if (name.endsWith('service')) tags.add('role:service');
-        if (name.endsWith('controller')) tags.add('role:controller');
-        if (name.endsWith('parser')) tags.add('role:parser');
-        if (name.endsWith('server')) tags.add('role:server');
-        if (name.endsWith('util') || name.endsWith('utils')) tags.add('role:utility');
+        const fullName = node.qualified_name.toLowerCase();
+        const symbolPart = fullName.split('#').pop() || '';
+
+        if (symbolPart.includes('repository') || symbolPart.includes('repo')) tags.add('role:repository');
+        if (symbolPart.includes('service')) tags.add('role:service');
+        if (symbolPart.includes('controller')) tags.add('role:controller');
+        if (symbolPart.includes('parser')) tags.add('role:parser');
+        if (symbolPart.includes('server')) tags.add('role:server');
+        if (symbolPart.includes('util')) tags.add('role:utility');
 
         // 3. Trait Detection
         if (node.symbol_type === 'interface') tags.add('trait:abstract');
-        if (node.modifiers?.includes('abstract')) tags.add('trait:abstract');
-        if (node.modifiers?.includes('static')) tags.add('trait:static');
+        if (node.modifiers?.some(m => m.toLowerCase().includes('abstract'))) tags.add('trait:abstract');
+        if (node.modifiers?.some(m => m.toLowerCase().includes('static'))) tags.add('trait:static');
         if (node.is_generated) tags.add('trait:generated');
         if (node.remote_project_path) tags.add('trait:external');
 
         // Entry point detection (basic)
-        if (node.symbol_type === 'file' && (node.file_path.endsWith('main.ts') || node.file_path.endsWith('bootstrap.ts') || node.file_path.endsWith('index.ts'))) {
+        const fileName = node.file_path.toLowerCase();
+        if (node.symbol_type === 'file' && (fileName.endsWith('main.ts') || fileName.endsWith('bootstrap.ts') || fileName.endsWith('index.ts'))) {
             tags.add('trait:entrypoint');
         }
 
