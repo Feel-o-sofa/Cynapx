@@ -44,44 +44,42 @@
     *   **Graph-based Caching**: `GraphEngine` 내 영향 분석 결과(Impact Analysis) 1분 캐싱 도입으로 반복 질의 최적화.
 *   **Task 31: Boundaryless Edge Discovery (경계 없는 호출지 탐색)**:
     - 전역 레지스트리를 기반으로 프로젝트 간 물리적 호출/참조를 자동 연결하는 Shadow Node 아키텍처 구축 완료.
-    - 정적 분석 결과가 로컬 범위를 벗어날 경우 타 프로젝트 DB를 역추적하여 전역적 의존성 지형 데이터 제공 완료.
+    - 정적 분석 결과가 로컬 범위를 벗어날 경우 타 프로젝트 DB를 역추적하여 전역적 의존성 지형 데이터 제공 완료. (심볼명 기반 역추적 고도화 완료)
 *   **Task 32: Structural Characteristic Tagging (구조적 특성 태깅)**:
     - 경로, 명명 규칙, 상속 계층 등 물리적 사실에 기반한 심볼 특성(Layer, Role, Trait) 추출 엔진 구축 완료.
-    - 에이전트가 "어느 레이어의 무엇을 참조하는가"를 객관적으로 판단할 수 있는 태그 데이터셋 상시 노출 완료.
+    - 상속 계층을 통한 역할 전이(Role Propagation) 및 다중 역할 병렬 기재 알고리즘 적용 완료.
 *   **Task 33: Historical Evidence Mapping (역사적 증거 맵핑)**:
     - 심볼 단위로 Git 커밋 이력(Hash, Message, Author)을 직접 연결하여 구현 배경(Rationale) 데이터 제공 완료.
-    - 에이전트가 과거의 변경 기록을 바탕으로 코드의 의도와 설계 결정을 스스로 추론할 수 있는 역사적 컨텍스트 인프라 구축 완료.
+    - `backfill_history` 도구를 통해 기존 인덱스에 대한 역사적 컨텍스트 전면 매핑 완료.
+*   **Phase 10 Ultimate Verification**: 멀티 저장소 환경에서의 크로스 프로젝트 분석, 역할 전이, 이력 매핑 통합 테스트 통과 (100% Pass).
 
 ---
 
 ## 2. 현재 상태 (Current Status)
 *   **브랜드**: **Cynapx (시냅스엑스)** - 코드의 신경망을 잇는 지능형 인덱스.
 *   **통합**: MCP SDK v2 (Streamable HTTP) 표준 준수, AI 에이전트 전용 고효율 쿼리 프로토콜 내장.
-*   **다국어 지원**: 12개 기본 언어 정밀 분석 및 사용자 정의 플러그인 확장 가능.
+*   **지능**: 단일 저장소의 경계를 넘는 전역 의존성 파악 및 구조/역사적 맥락을 기반으로 한 객관적 추론 데이터 제공.
 *   **성능**: Rust 네이티브 가속 및 그래프 캐싱을 통해 대규모 프로젝트 분석 및 반복 질의 성능 극대화.
 
 ---
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 10: High-Fidelity Evidence & Objective Context (고충실도 증거 및 객관적 맥락 제공)
+### Phase 11: Architectural Reasoning & Autonomous Refactoring (아키텍처 추론 및 자율 리팩토링)
 
-*   **Task 31: Boundaryless Edge Discovery (경계 없는 호출지 탐색)**:
-    *   단일 프로젝트 경계를 넘어 멀티 저장소 간의 물리적 호출(Call) 및 참조(Reference) 접점을 빠짐없이 데이터로 제공.
-    *   에이전트가 시스템 전체의 의존성 지형을 스스로 유추할 수 있도록 가공되지 않은 모든 연결(Edge) 정보를 노출.
-*   **Task 32: Structural Characteristic Tagging (구조적 특성 태깅)**:
-    *   심볼이 위치한 경로, 상속 계층, 직접 참조 라이브러리 등 물리적 사실에 기반한 객관적 태그(Tag) 데이터 추출.
-    *   "이 클래스는 어느 레이어에 속하며 무엇을 참조한다"라는 사실 관계만 제공하여 에이전트가 설계 패턴 위반 여부를 스스로 판단하게 함.
-*   **Task 33: Historical Evidence Mapping (역사적 증거 맵핑)**:
-    *   심볼 단위로 Git 커밋 메시지, 이슈 ID, PR 원문 기록을 정밀하게 연결하여 에이전트의 컨텍스트로 전달.
-    *   과거의 기록을 요약하거나 해석하지 않고 원문 그대로를 제공함으로써 에이전트가 구현의 배경(Rationale)을 직접 추론하게 함.
-
-
-
+*   **Task 34: Policy-based Architecture Violation Detection (정책 기반 설계 위반 탐지)**:
+    - 추출된 `layer` 및 `role` 태그를 기반으로 허용되지 않은 참조 관계(예: Data 계층이 API 계층을 참조)를 자동으로 식별.
+    - 에이전트가 "설계 원칙 위반"을 객관적 지표로 보고할 수 있는 인프라 구축.
+*   **Task 35: Impact-Aware Refactoring Proposal (영향도 인식 리팩토링 제안)**:
+    - `analyze_impact`와 `structural tags`를 결합하여, 수정 시 위험도가 높은(High Fan-in) 심볼에 대한 안전한 리팩토링 경로 자동 계산.
+    - 단순 코드 수정을 넘어 시스템 전체의 결합도(Coupling)를 낮추는 방향의 구조적 개선안 제시.
+*   **Task 36: Knowledge Graph Pruning & Optimization (지식 그래프 정제)**:
+    - 사용 빈도가 낮거나 죽은 코드(Dead Code)를 탐지하여 그래프에서 제외하거나 최적화하는 기능.
+    - 인덱스 크기 최적화 및 쿼리 응답성 향상.
 
 ---
 
-**Status**: Phase 10 - **Next Generation Intelligence & Enterprise Ready**
+**Status**: Phase 11 - **Architectural Intelligence & Autonomous Optimization**
 
-**Context**: Token efficiency and large-scale performance are optimized. Ready for even more sophisticated reasoning and enterprise-grade integration.
+**Context**: Global dependency mapping and historical context are established. Moving towards active architectural diagnosis and self-improvement suggestions.
 
