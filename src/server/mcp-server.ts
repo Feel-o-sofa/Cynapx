@@ -574,10 +574,12 @@ Please follow this safety protocol:
             {
                 description: "Get comprehensive details about a specific symbol by its qualified name, including its type, location, metrics (complexity, fan-in/out), and source code snippet.",
                 inputSchema: z.object({
-                    qualified_name: z.string().describe("The full qualified name of the symbol (e.g., 'src/utils/paths.ts/getDatabasePath')")
+                    qualified_name: z.string().describe("The full qualified name of the symbol (e.g., 'src/utils/paths.ts/getDatabasePath')"),
+                    include_source: z.boolean().optional().default(true).describe("Whether to include the source code snippet (default: true)"),
+                    summary_only: z.boolean().optional().default(false).describe("If true, returns only basic metadata and metrics without relations or source code.")
                 })
             },
-            async ({ qualified_name }) => {
+            async ({ qualified_name, include_source, summary_only }) => {
                 await this.waitUntilReady();
                 const node = this.graphEngine.getNodeByQualifiedName(qualified_name);
                 if (!node || node.id === undefined) {
@@ -593,8 +595,6 @@ Please follow this safety protocol:
                         }]
                     };
                 }
-                const outgoing = this.graphEngine.getOutgoingEdges(node.id);
-                const incoming = this.graphEngine.getIncomingEdges(node.id);
 
                 let text = `### Symbol: ${node.qualified_name}\n`;
                 text += `- **Type**: \`${node.symbol_type}\`\n`;
@@ -610,9 +610,20 @@ Please follow this safety protocol:
                 text += `- **Static Coupling**: Fan-in: ${node.fan_in || 0}, Fan-out: ${node.fan_out || 0}\n`;
                 text += `- **Dynamic Coupling**: Fan-in: ${node.fan_in_dynamic || 0}, Fan-out: ${node.fan_out_dynamic || 0}\n`;
                 
+                if (summary_only) {
+                    return { content: [{ type: "text", text }] };
+                }
+
+                const outgoing = this.graphEngine.getOutgoingEdges(node.id);
+                const incoming = this.graphEngine.getIncomingEdges(node.id);
+                
                 text += `\n#### Relationships:\n`;
                 text += `- **Outgoing Edges**: ${outgoing.length}\n`;
                 text += `- **Incoming Edges**: ${incoming.length}\n`;
+
+                if (include_source === false) {
+                    return { content: [{ type: "text", text }] };
+                }
 
                 // Read source code from file with Path Traversal Protection
                 try {
@@ -620,15 +631,19 @@ Please follow this safety protocol:
                         this.securityProvider.validatePath(node.file_path);
                     }
                     
-                    if (fs.existsSync(node.file_path)) {
                         const content = fs.readFileSync(node.file_path, 'utf8');
                         const lines = content.split('\n');
-                        const sourceCode = lines.slice(node.start_line - 1, node.end_line).join('\n');
+                        const sourceCodeLines = lines.slice(node.start_line - 1, node.end_line);
                         
                         const lang = node.file_path.endsWith('.py') ? 'python' : 
                                      (node.file_path.endsWith('.ts') || node.file_path.endsWith('.tsx')) ? 'typescript' : 'javascript';
-                        text += `\n#### Source Code Snippet:\n\`\`\`${lang}\n${sourceCode}\n\`\`\`\n`;
-                    }
+                        
+                        // Smart Pruning: if more than 100 lines, truncate to 50
+                        const displayCode = sourceCodeLines.length > 100 ? 
+                            sourceCodeLines.slice(0, 50).join('\n') + '\n\n// ... [Truncated for Token Optimization: Use read_file for full content] ...' :
+                            sourceCodeLines.join('\n');
+
+                        text += `\n#### Source Code Snippet:\n\`\`\`${lang}\n${displayCode}\n\`\`\`\n`;
                 } catch (err: any) {
                     if (err.code === CynapxErrorCode.PATH_TRAVERSAL_DENIED) {
                         text += `\n> [!CAUTION]\n> **Security Warning**: Access to file outside project directory denied. (ErrorCode: ${CynapxErrorCode.PATH_TRAVERSAL_DENIED})\n`;
@@ -653,10 +668,11 @@ Please follow this safety protocol:
                 description: "Analyze the ripple effect of changing a symbol by identifying all other symbols that depend on it (transitively). Essential for risk assessment before refactoring.",
                 inputSchema: z.object({
                     qualified_name: z.string().describe("The qualified name of the symbol to analyze"),
-                    max_depth: z.number().optional().default(3).describe("Maximum depth of impact analysis traversal")
+                    max_depth: z.number().optional().default(3).describe("Maximum depth of impact analysis traversal"),
+                    use_cache: z.boolean().optional().default(true).describe("Whether to use cached results for faster response (default: true)")
                 })
             },
-            async ({ qualified_name, max_depth }) => {
+            async ({ qualified_name, max_depth, use_cache }) => {
                 await this.waitUntilReady();
                 const targetNode = this.graphEngine.getNodeByQualifiedName(qualified_name);
                 if (!targetNode || targetNode.id === undefined) {
@@ -667,7 +683,8 @@ Please follow this safety protocol:
                 }
                 const results = this.graphEngine.traverse(targetNode.id, 'BFS', {
                     direction: 'incoming',
-                    maxDepth: max_depth || 3
+                    maxDepth: max_depth || 3,
+                    useCache: use_cache
                 });
 
                 const formatted = results.map(r => {

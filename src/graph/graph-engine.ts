@@ -26,6 +26,7 @@ export interface TraversalResult {
 export class GraphEngine {
     private nodeCache = new Map<number, CodeNode>();
     private qnameCache = new Map<string, CodeNode>();
+    private impactCache = new Map<string, { timestamp: number, results: TraversalResult[] }>();
 
     constructor(
         public nodeRepo: NodeRepository,
@@ -59,6 +60,7 @@ export class GraphEngine {
     public clearCache(): void {
         this.nodeCache.clear();
         this.qnameCache.clear();
+        this.impactCache.clear();
     }
 
     public getOutgoingEdges(nodeId: number, edgeType?: EdgeType): CodeEdge[] {
@@ -220,17 +222,32 @@ export class GraphEngine {
             maxDepth?: number;
             direction?: 'outgoing' | 'incoming';
             edgeType?: EdgeType;
+            useCache?: boolean;
         } = {}
     ): TraversalResult[] {
         const maxDepth = options.maxDepth ?? 5;
         const direction = options.direction ?? 'outgoing';
         const edgeType = options.edgeType;
+        const useCache = options.useCache ?? true;
+
+        if (useCache && strategy === 'BFS') {
+            const cacheKey = `${startNodeId}:${direction}:${edgeType}:${maxDepth}`;
+            const cached = this.impactCache.get(cacheKey);
+            if (cached && (Date.now() - cached.timestamp < 60000)) { // 1 minute cache
+                return cached.results;
+            }
+        }
 
         const results: TraversalResult[] = [];
         const visited = new Set<number>();
 
         if (strategy === 'BFS') {
             this.bfs(startNodeId, direction, edgeType, maxDepth, results, visited);
+            
+            if (useCache) {
+                const cacheKey = `${startNodeId}:${direction}:${edgeType}:${maxDepth}`;
+                this.impactCache.set(cacheKey, { timestamp: Date.now(), results });
+            }
         } else {
             this.dfs(startNodeId, 0, [], direction, edgeType, maxDepth, results, visited);
         }
