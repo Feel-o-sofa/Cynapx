@@ -51,35 +51,42 @@
 *   **Task 33: Historical Evidence Mapping (역사적 증거 맵핑)**:
     - 심볼 단위로 Git 커밋 이력(Hash, Message, Author)을 직접 연결하여 구현 배경(Rationale) 데이터 제공 완료.
     - `backfill_history` 도구를 통해 기존 인덱스에 대한 역사적 컨텍스트 전면 매핑 완료.
-*   **Phase 10 Ultimate Verification**: 멀티 저장소 환경에서의 크로스 프로젝트 분석, 역할 전이, 이력 매핑 통합 테스트 통과 (100% Pass).
+
+### Phase 10: Ultimate Verification**: 멀티 저장소 환경에서의 크로스 프로젝트 분석, 역할 전이, 이력 매핑 통합 테스트 통과 (100% Pass).
+
+### Phase 11: Architectural Reasoning & Autonomous Refactoring (아키텍처 추론 및 자율 리팩토링)
+*   **Task 34: Policy-based Architecture Violation Detection (정책 기반 설계 위반 탐지)**:
+    - 추출된 `layer` 및 `role` 태그를 기반으로 허용되지 않은 참조 관계 식별 엔진(`ArchitectureEngine`) 및 `check_architecture_violations` 도구 구축 완료.
+*   **Task 35: Impact-Aware Refactoring Proposal (영향도 인식 리팩토링 제안)**:
+    - `analyze_impact`와 구조적 태그를 결합하여 위험도 기반 리팩토링 경로를 계산하는 `RefactoringEngine` 및 `propose_refactor` 도구 구축 완료.
+*   **Task 36: Knowledge Graph Pruning & Optimization (지식 그래프 정제)**:
+    - 사용 빈도가 낮거나 죽은 코드(Dead Code)를 탐지하여 최적화안을 제시하는 `OptimizationEngine` 및 `find_dead_code` 도구 구축 완료.
+*   **Task 36.5: One-shot CLI Mode Integration (단발성 CLI 명령 지원)**:
+    - MCP 서버 기동 없이 `npx cynapx <command>` 형태로 도구 로직을 즉시 실행하고 결과를 반환하는 실행 계층 구축 완료. (쉘 무한 대기 문제 해결)
 
 ---
 
 ## 2. 현재 상태 (Current Status)
 *   **브랜드**: **Cynapx (시냅스엑스)** - 코드의 신경망을 잇는 지능형 인덱스.
-*   **통합**: MCP SDK v2 (Streamable HTTP) 표준 준수, AI 에이전트 전용 고효율 쿼리 프로토콜 내장.
-*   **지능**: 단일 저장소의 경계를 넘는 전역 의존성 파악 및 구조/역사적 맥락을 기반으로 한 객관적 추론 데이터 제공.
+*   **버전**: **v1.0.3**
+*   **통합**: MCP SDK v2 (Streamable HTTP) 표준 준수, One-shot CLI 모드 내장으로 강력한 쉘 가시성 확보.
+*   **지능**: 전역 의존성 파악, 구조/역사적 맥락 제공, 아키텍처 위반 및 리팩토링 위험도 자동 판별 기능 탑재.
 *   **성능**: Rust 네이티브 가속 및 그래프 캐싱을 통해 대규모 프로젝트 분석 및 반복 질의 성능 극대화.
 
 ---
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 11: Architectural Reasoning & Autonomous Refactoring (아키텍처 추론 및 자율 리팩토링)
+### Phase 12: Autonomous Quality Assurance & Self-Healing (자율 품질 보증 및 자가 치유)
 
-*   **Task 34: Policy-based Architecture Violation Detection (정책 기반 설계 위반 탐지)**:
-    - 추출된 `layer` 및 `role` 태그를 기반으로 허용되지 않은 참조 관계(예: Data 계층이 API 계층을 참조)를 자동으로 식별.
-    - 에이전트가 "설계 원칙 위반"을 객관적 지표로 보고할 수 있는 인프라 구축.
-*   **Task 35: Impact-Aware Refactoring Proposal (영향도 인식 리팩토링 제안)**:
-    - `analyze_impact`와 `structural tags`를 결합하여, 수정 시 위험도가 높은(High Fan-in) 심볼에 대한 안전한 리팩토링 경로 자동 계산.
-    - 단순 코드 수정을 넘어 시스템 전체의 결합도(Coupling)를 낮추는 방향의 구조적 개선안 제시.
-*   **Task 36: Knowledge Graph Pruning & Optimization (지식 그래프 정제)**:
-    - 사용 빈도가 낮거나 죽은 코드(Dead Code)를 탐지하여 그래프에서 제외하거나 최적화하는 기능.
-    - 인덱스 크기 최적화 및 쿼리 응답성 향상.
+*   **Task 37: Automated Fix Proposals for Violations**:
+    - 탐지된 아키텍처 위반 사항에 대해 구체적인 코드 수정안(코드 블록 단위) 자동 생성.
+*   **Task 38: Predictive Bug Analysis**:
+    - 역사적 이력과 복잡도 패턴을 결합하여 버그 발생 가능성이 높은 취약 지점 예측.
+*   **Task 39: Live Architectural Watchdog**:
+    - 파일 변경 감지 시 실시간으로 아키텍처 위반을 체크하고 AI 에이전트에게 경고를 전송하는 상주형 감시 엔진 고도화.
 
 ---
 
-**Status**: Phase 11 - **Architectural Intelligence & Autonomous Optimization**
-
-**Context**: Global dependency mapping and historical context are established. Moving towards active architectural diagnosis and self-improvement suggestions.
+**Status**: Phase 12 - **Autonomous QA & Self-Healing IN PROGRESS**
 

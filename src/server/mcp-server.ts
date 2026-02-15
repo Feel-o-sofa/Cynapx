@@ -15,9 +15,15 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { ANCHOR_FILE, readRegistry, addToRegistry, getDatabasePath } from '../utils/paths';
 import { SecurityProvider } from '../utils/security';
+import { ArchitectureEngine } from '../graph/architecture-engine';
+import { RefactoringEngine } from '../graph/refactoring-engine';
+import { OptimizationEngine } from '../graph/optimization-engine';
 
 export class McpServer {
     private sdkServer: SdkMcpServer;
+    private architectureEngine: ArchitectureEngine;
+    private refactoringEngine: RefactoringEngine;
+    private optimizationEngine: OptimizationEngine;
     private isCheckingConsistency: boolean = false;
     private readyPromise: Promise<void>;
     private resolveReady?: () => void;
@@ -49,6 +55,10 @@ export class McpServer {
             name: "cynapx",
             version: version
         });
+
+        this.architectureEngine = new ArchitectureEngine(this.graphEngine);
+        this.refactoringEngine = new RefactoringEngine(this.graphEngine);
+        this.optimizationEngine = new OptimizationEngine(this.graphEngine);
 
         this.readyPromise = new Promise((resolve) => {
             this.resolveReady = resolve;
@@ -368,6 +378,22 @@ Please follow this safety protocol:
         this.securityProvider = provider;
     }
 
+    /**
+     * Updates the GraphEngine and re-initializes all specialized analysis engines.
+     * This is critical for maintaining valid DB connections during project switching.
+     */
+    public setGraphEngine(engine: GraphEngine) {
+        this.graphEngine = engine;
+        this.architectureEngine = new ArchitectureEngine(engine);
+        this.refactoringEngine = new RefactoringEngine(engine);
+        this.optimizationEngine = new OptimizationEngine(engine);
+    }
+
+    /**
+     * Registers all standard Cynapx handlers (tools, resources, prompts) to the SDK server.
+     */
+
+
     private registerTools() {
         // get_setup_context
         this.sdkServer.registerTool(
@@ -437,6 +463,42 @@ Please follow this safety protocol:
                 } catch (err) {
                     return { isError: true, content: [{ type: "text", text: `Initialization failed: ${err}` }] };
                 }
+            }
+        );
+
+        // check_architecture_violations
+        this.sdkServer.registerTool(
+            "check_architecture_violations",
+            {
+                description: "Analyzes the code knowledge graph to detect violations of architectural policies (e.g., layer violations, illegal role dependencies).",
+                inputSchema: z.object({})
+            },
+            async () => {
+                await this.waitUntilReady();
+                const violations = await this.architectureEngine.checkViolations();
+                
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            status: "SUCCESS",
+                            violation_count: violations.length,
+                            violations: violations.map(v => ({
+                                policy_id: v.policyId,
+                                description: v.description,
+                                source: {
+                                    qname: v.source.qualified_name,
+                                    tags: v.source.tags
+                                },
+                                target: {
+                                    qname: v.target.qualified_name,
+                                    tags: v.target.tags
+                                },
+                                edge_type: v.edge.edge_type
+                            }))
+                        }, null, 2)
+                    }]
+                };
             }
         );
 
@@ -745,6 +807,30 @@ Please follow this safety protocol:
             }
         );
 
+        // propose_refactor
+        this.sdkServer.registerTool(
+            "propose_refactor",
+            {
+                description: "Proposes a refactoring plan for a given symbol based on risk assessment (fan-in, complexity) and structural role.",
+                inputSchema: z.object({
+                    qualified_name: z.string().describe("The qualified name of the symbol to analyze for refactoring")
+                })
+            },
+            async ({ qualified_name }) => {
+                await this.waitUntilReady();
+                const proposal = await this.refactoringEngine.proposeRefactor(qualified_name);
+                if (!proposal) {
+                    return { isError: true, content: [{ type: "text", text: "Symbol not found or no impact detected." }] };
+                }
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(proposal, null, 2)
+                    }]
+                };
+            }
+        );
+
         // get_hotspots
         this.sdkServer.registerTool(
             "get_hotspots",
@@ -783,6 +869,25 @@ Please follow this safety protocol:
                 }));
                 return {
                     content: [{ type: "text", text: JSON.stringify(hotspots, null, 2) }]
+                };
+            }
+        );
+
+        // find_dead_code
+        this.sdkServer.registerTool(
+            "find_dead_code",
+            {
+                description: "Identifies potential dead code (unused symbols) in the knowledge graph. Excludes entry points, tests, and public interfaces.",
+                inputSchema: z.object({})
+            },
+            async () => {
+                await this.waitUntilReady();
+                const report = await this.optimizationEngine.findDeadCode();
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(report, null, 2)
+                    }]
                 };
             }
         );
@@ -981,5 +1086,95 @@ Please follow this safety protocol:
      */
     public async connectTransport(transport: any) {
         await this.sdkServer.connect(transport);
+    }
+
+    /**
+     * Executes a tool programmatically by name.
+     * This allows the CLI to reuse the same logic as the MCP handlers.
+     */
+    public async executeTool(name: string, args: any): Promise<any> {
+        await this.waitUntilReady();
+
+        // Map of tool names to their internal logic
+        // This is a simplified dispatcher to avoid complex SDK introspection
+        switch (name) {
+            case 'search_symbols':
+                const nodes = this.graphEngine.nodeRepo.searchSymbols(args.query, args.limit || 10, {
+                    symbol_type: args.symbol_type,
+                    language: args.language,
+                    visibility: args.visibility
+                });
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(nodes.map(n => ({
+                            qname: n.qualified_name,
+                            type: n.symbol_type,
+                            file: n.file_path,
+                            language: n.language
+                        })), null, 2)
+                    }]
+                };
+
+            case 'get_symbol_details':
+                const node = this.graphEngine.getNodeByQualifiedName(args.qualified_name);
+                if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(node, null, 2)
+                    }]
+                };
+
+            case 'get_setup_context':
+                const registry = readRegistry();
+                const currentPath = process.cwd();
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            status: this.isInitialized ? "ALREADY_INITIALIZED" : "INITIALIZATION_REQUIRED",
+                            current_directory: currentPath,
+                            registered_projects: registry,
+                            instructions: "Choose to (1) Load an existing project, (2) Initialize at current directory, or (3) Initialize at custom path."
+                        }, null, 2)
+                    }]
+                };
+
+            case 'check_architecture_violations':
+                const violations = await this.architectureEngine.checkViolations();
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            status: "SUCCESS",
+                            violation_count: violations.length,
+                            violations: violations.map(v => ({
+                                policy_id: v.policyId,
+                                description: v.description,
+                                source: { qname: v.source.qualified_name, tags: v.source.tags },
+                                target: { qname: v.target.qualified_name, tags: v.target.tags },
+                                edge_type: v.edge.edge_type
+                            }))
+                        }, null, 2)
+                    }]
+                };
+
+            case 'propose_refactor':
+                const proposal = await this.refactoringEngine.proposeRefactor(args.qualified_name);
+                return proposal ? {
+                    content: [{ type: "text", text: JSON.stringify(proposal, null, 2) }]
+                } : { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+
+            case 'find_dead_code':
+                const report = await this.optimizationEngine.findDeadCode();
+                return {
+                    content: [{ type: "text", text: JSON.stringify(report, null, 2) }]
+                };
+
+            default:
+                // For other tools, we could either implement them here or throw
+                throw new Error(`Tool '${name}' is not yet supported in CLI mode.`);
+        }
     }
 }

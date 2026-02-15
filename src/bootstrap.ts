@@ -46,23 +46,36 @@ async function bootstrap() {
     const log = isMcpMode ? console.error : console.log;
 
     const args = process.argv.slice(2);
+    
+    // Command identification (anything that doesn't start with --)
+    const command = args.find(arg => !arg.startsWith('--'));
+    const isOneShot = !!command;
+
     if (args.includes('--help') || args.includes('-h')) {
         log(`
 Cynapx: High-Performance Isolated Code Knowledge Engine
 
 Usage:
-  cynapx [options]
+  cynapx [command] [options]
+
+Commands:
+  search_symbols        Search for symbols in the knowledge graph
+  get_symbol_details    Get details and source for a specific symbol
+  analyze_impact        Analyze the impact of changing a symbol
+  check_architecture_violations  Detect architectural policy violations
+  propose_refactor      Get a refactoring proposal for a symbol
+  find_dead_code        Identify potential dead code
+  get_setup_context     Get project status and registry info
+  ... (all other MCP tools are available as commands)
 
 Options:
   --path <dir>    Path to the project directory to analyze (default: current directory)
-  --https         Enable ephemeral HTTPS for the API server
+  --https         Enable ephemeral HTTPS for the API server (API Mode only)
   --help, -h      Show this help message
 
 Environment Variables:
   MCP_MODE=true   Start in MCP (Model Context Protocol) mode via stdio
   PORT=<number>   Port for the HTTP API server (default: 3000)
-  SSL_KEY_PATH    (Optional) Path to manual SSL key
-  SSL_CERT_PATH   (Optional) Path to manual SSL certificate
         `);
         process.exit(0);
     }
@@ -182,7 +195,7 @@ Environment Variables:
                 await lifecycle.disposeAll();
                 const result = await initializeEngine(newPath);
                 // Dynamically update MCP server's references
-                (mcpServer as any).graphEngine = result.graphEngine;
+                mcpServer.setGraphEngine(result.graphEngine);
                 (mcpServer as any).metadataRepo = result.metadataRepo;
                 mcpServer.setUpdatePipeline(updatePipeline);
                 mcpServer!.setConsistencyChecker(result.consistencyChecker);
@@ -248,6 +261,43 @@ Environment Variables:
         }
 
         log('--- Startup Sequence Complete ---');
+
+        // Handle One-Shot CLI Command
+        if (isOneShot) {
+            log(`\nExecuting CLI Command: ${command}`);
+            try {
+                // Parse remaining args as tool input (basic key-value pairs)
+                const input: any = {};
+                for (let i = 0; i < args.length; i++) {
+                    if (args[i].startsWith('--') && args[i] !== '--path' && args[i] !== '--https') {
+                        const key = args[i].replace('--', '');
+                        const value = args[i+1];
+                        if (value && !value.startsWith('--')) {
+                            input[key] = isNaN(Number(value)) ? value : Number(value);
+                            i++;
+                        } else {
+                            input[key] = true;
+                        }
+                    }
+                }
+
+                // Execute via McpServer's new public method
+                const result = await mcpServer.executeTool(command, input);
+
+                if (result.isError) {
+                    console.error('\n❌ Command Failed:');
+                    console.error(JSON.stringify(result.content, null, 2));
+                    process.exit(1);
+                } else {
+                    console.log('\n✅ Command Result:');
+                    console.log(result.content.map((c: any) => c.text || JSON.stringify(c)).join('\n'));
+                    process.exit(0);
+                }
+            } catch (err) {
+                console.error(`\n❌ Error executing command '${command}': ${err}`);
+                process.exit(1);
+            }
+        }
 
         if (isMcpMode) {
             process.stdin.on('end', () => {

@@ -79,6 +79,13 @@ export class GraphEngine {
     }
 
     /**
+     * Returns all edges in the knowledge graph.
+     */
+    public getAllEdges(): CodeEdge[] {
+        return this.edgeRepo.getAllEdges();
+    }
+
+    /**
      * Executes the semantic clustering algorithm.
      * Groups symbols into logical clusters based on affinity and saves results to DB.
      */
