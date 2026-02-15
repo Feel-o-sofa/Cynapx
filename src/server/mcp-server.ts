@@ -21,6 +21,38 @@ import { OptimizationEngine } from '../graph/optimization-engine';
 import { RemediationEngine } from '../graph/remediation-engine';
 import { PolicyDiscoverer } from '../graph/policy-discoverer';
 
+/**
+ * [Phase 14] Zod Schemas for Strict Protocol Reinforcement
+ */
+const CodeNodeSchema = z.object({
+    qualified_name: z.string(),
+    symbol_type: z.string(),
+    language: z.string().optional(),
+    file_path: z.string().optional(),
+    tags: z.string().array().optional(),
+    metrics: z.object({
+        loc: z.number().optional(),
+        cyclomatic: z.number().optional(),
+        fan_in: z.number().optional(),
+        fan_out: z.number().optional()
+    }).optional()
+});
+
+const CodeEdgeSchema = z.object({
+    from_id: z.number(),
+    to_id: z.number(),
+    edge_type: z.string(),
+    dynamic: z.boolean()
+});
+
+const ArchitectureViolationSchema = z.object({
+    policyId: z.string(),
+    description: z.string(),
+    source: CodeNodeSchema,
+    target: CodeNodeSchema,
+    edge: CodeEdgeSchema
+});
+
 export class McpServer {
     private sdkServer: SdkMcpServer;
     private architectureEngine: ArchitectureEngine;
@@ -58,6 +90,18 @@ export class McpServer {
         this.sdkServer = new SdkMcpServer({
             name: "cynapx",
             version: version
+        }, {
+            instructions: `
+# Cynapx Operator Manual (Phase 14)
+
+You are operating the Cynapx high-performance code knowledge engine. Adhere to these protocol invariants:
+
+1. **Investigation-First**: Before modifying code, always use 'analyze_impact' and 'get_symbol_details'.
+2. **Context Efficiency**: For symbols with >100 lines, 'get_symbol_details' automatically prunes the output. Use 'read_file' with specific offsets only if full logic is required. Prefer 'summary_only: true' for initial discovery.
+3. **Architectural Integrity**: Use 'check_architecture_violations' after every major refactor. If violations are found, use 'get_remediation_strategy' for expert structural guidance.
+4. **Data Purity**: Follow the Zero-Pollution principle. Do not create local configuration files unless explicitly asked.
+5. **Consistency**: Monitor 'graph://ledger' to ensure the Knowledge Graph matches the physical file system state. Use 'check_consistency --repair' if sums do not match.
+`
         });
 
         this.architectureEngine = new ArchitectureEngine(this.graphEngine);
@@ -516,12 +560,12 @@ Please follow this safety protocol:
             {
                 description: "Provides actionable refactoring strategies for a specific architectural violation.",
                 inputSchema: z.object({
-                    violation: z.any().describe("The violation object returned from 'check_architecture_violations'")
+                    violation: ArchitectureViolationSchema.describe("The violation object returned from 'check_architecture_violations'")
                 })
             },
             async ({ violation }) => {
                 await this.waitUntilReady();
-                const strategy = this.remediationEngine.getRemediationStrategy(violation);
+                const strategy = this.remediationEngine.getRemediationStrategy(violation as any);
                 return {
                     content: [{
                         type: "text",
@@ -984,6 +1028,11 @@ Please follow this safety protocol:
                     maxDepth: max_depth
                 });
 
+                const data = await this.graphEngine.getGraphData({
+                    rootQName: root_qname,
+                    maxDepth: max_depth
+                });
+
                 let text = `### Knowledge Graph Visualization\n`;
                 if (root_qname) {
                     text += `- **Root**: \`${root_qname}\`\n`;
@@ -991,11 +1040,18 @@ Please follow this safety protocol:
                 text += `- **Max Depth**: ${max_depth}\n\n`;
                 text += `\`\`\`mermaid\n${mermaid}\n\`\`\``;
 
+                const summary = {
+                    node_count: data.nodes.length,
+                    edge_count: data.edges.length,
+                    nodes: data.nodes.map(n => ({ qname: n.qualified_name, type: n.symbol_type })),
+                    note: "This JSON summary provides a parsable structure of the graph shown above."
+                };
+
                 return {
-                    content: [{ 
-                        type: "text", 
-                        text: text
-                    }]
+                    content: [
+                        { type: "text", text: text },
+                        { type: "text", text: `### Graph Data Summary\n\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\`` }
+                    ]
                 };
             }
         );
@@ -1246,6 +1302,33 @@ Please follow this safety protocol:
                 const report = await this.optimizationEngine.findDeadCode();
                 return {
                     content: [{ type: "text", text: JSON.stringify(report, null, 2) }]
+                };
+
+            case 'get_remediation_strategy':
+                const strategy = this.remediationEngine.getRemediationStrategy(args.violation);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(strategy, null, 2) }]
+                };
+
+            case 'export_graph':
+                const mermaid = await this.graphEngine.exportToMermaid({
+                    rootQName: args.root_qname,
+                    maxDepth: args.max_depth
+                });
+                const graphData = await this.graphEngine.getGraphData({
+                    rootQName: args.root_qname,
+                    maxDepth: args.max_depth
+                });
+                const summary = {
+                    node_count: graphData.nodes.length,
+                    edge_count: graphData.edges.length,
+                    nodes: graphData.nodes.map(n => ({ qname: n.qualified_name, type: n.symbol_type }))
+                };
+                return {
+                    content: [
+                        { type: "text", text: mermaid },
+                        { type: "text", text: JSON.stringify(summary, null, 2) }
+                    ]
                 };
 
             case 're_tag_project':

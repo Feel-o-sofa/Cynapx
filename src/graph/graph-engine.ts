@@ -276,6 +276,59 @@ export class GraphEngine {
         return results;
     }
 
+    /**
+     * Retrieves nodes and edges for a subgraph, centered around a root symbol.
+     */
+    public async getGraphData(options: {
+        rootQName?: string;
+        maxDepth?: number;
+    } = {}): Promise<{ nodes: CodeNode[], edges: CodeEdge[] }> {
+        let nodesToExport: CodeNode[] = [];
+        let edgesToExport: CodeEdge[] = [];
+
+        if (options.rootQName) {
+            const root = this.getNodeByQualifiedName(options.rootQName);
+            if (!root || !root.id) return { nodes: [], edges: [] };
+
+            const results = this.traverse(root.id, 'BFS', { maxDepth: options.maxDepth ?? 3 });
+            nodesToExport = results.map(r => r.node);
+            const nodeIds = new Set(nodesToExport.map(n => n.id!));
+
+            for (const id of nodeIds) {
+                const outgoing = this.getOutgoingEdges(id);
+                for (const e of outgoing) {
+                    if (nodeIds.has(e.to_id)) {
+                        edgesToExport.push(e);
+                    }
+                }
+            }
+        } else {
+            const allFiles = this.nodeRepo.searchSymbols('', 10).filter(n => n.symbol_type === 'file');
+            const nodeIds = new Set<number>();
+            
+            for (const file of allFiles) {
+                const results = this.traverse(file.id!, 'BFS', { maxDepth: 1 });
+                results.forEach(r => {
+                    nodesToExport.push(r.node);
+                    nodeIds.add(r.node.id!);
+                });
+            }
+
+            for (const id of nodeIds) {
+                const outgoing = this.getOutgoingEdges(id);
+                for (const e of outgoing) {
+                    if (nodeIds.has(e.to_id)) {
+                        edgesToExport.push(e);
+                    }
+                }
+            }
+        }
+
+        // Return unique nodes
+        const uniqueNodes = Array.from(new Map(nodesToExport.map(n => [n.id, n])).values());
+        return { nodes: uniqueNodes, edges: edgesToExport };
+    }
+
     public async exportToMermaid(options: {
         rootQName?: string;
         maxDepth?: number;
