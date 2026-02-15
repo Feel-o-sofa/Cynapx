@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+*.tgz
+
+# Database & State (Generated Artifacts)
+*.db
+*.db-shm
+*.db-wal
+.server-port
+.cynapx-config
+
+# Environment variables
+.env
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# IDE specific
+.vscode/
+.idea/
+
+# Rust / Native
+src-native/target/
+src-native/*.node
+src-native/index.js
+src-native/index.d.ts
+
+# Development & Test Artifacts
+*test_*
+*temp_*
+*verify_*
+*coverage_*
+*.test.*
+*.spec.*
+tests/
+__tests__/
+scripts/
+switch-env.js
+
+# AI Agent Context & Internal Docs (Exempt from Repo)
+.gemini/
+agent_docs/
+reports/
+GEMINI.md

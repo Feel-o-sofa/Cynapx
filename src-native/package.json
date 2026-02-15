@@ -1,0 +1,17 @@
+{
+  "name": "cynapx-native",
+  "version": "1.0.0",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "napi": {
+    "name": "cynapx-native",
+    "package": {
+      "name": "@cynapx/native"
+    }
+  },
+  "scripts": {
+    "build": "napi build --platform --release",
+    "build:debug": "napi build --platform"
+  },
+  "license": "MIT"
+}
