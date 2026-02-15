@@ -72,28 +72,43 @@
 *   **Task 39: Latent Policy Discovery**:
     - 현재 코드베이스의 호출 패턴을 통계적으로 분석하여, 명시되지 않은 잠재적 아키텍처 규칙을 역으로 추출하고 제안하는 엔진 구축 완료.
 
+### Phase 13: Precision Tagging & Advanced Violation Filtering (정밀 태깅 및 고급 위반 필터링)
+*   **Task 40: Visibility-aware Structural Tagging**:
+    - `StructuralTagger`를 고도화하여 메서드의 가시성(Public/Private) 및 명명 규칙에 따라 `trait:internal` 태그를 자동 부여하고 클래스 역할을 차별화하여 전파하는 기능 구현 완료.
+*   **Task 41: Contextual Violation Filtering**:
+    - `ArchitectureEngine`이 동일 파일/클래스 내부의 '자가 호출(Self-call)'을 인식하여 `domain-isolation` 위반에서 제외하도록 필터링 로직 개선 완료.
+*   **Task 42: Comprehensive Tagging Re-validation**:
+    - `re_tag_project`를 통해 전체 인덱스를 갱신하고, 기존 23건의 위반 사항이 실질적인 설계 결함으로 정교하게 압축(실질 위반 0건 확인)됨을 검증 완료.
+
 ---
 
 ## 2. 현재 상태 (Current Status)
 *   **브랜드**: **Cynapx (시냅스엑스)** - 코드의 신경망을 잇는 지능형 인덱스.
-*   **버전**: **v1.0.4.5**
+*   **버전**: **v1.0.5**
 *   **통합**: MCP SDK v2 (Streamable HTTP) 표준 준수, One-shot CLI 모드 내장으로 강력한 쉘 가시성 확보.
-*   **지능**: 전역 의존성 파악, 구조/역사적 맥락 제공, 아키텍처 위반 및 리팩토링 위험도 자동 판별 기능 탑재.
+*   **지능**: 가시성/맥락 인식 아키텍처 위반 탐지, 리팩토링 전략 제안, 잠재 정책 발견 및 리스크 프로파일링.
 *   **성능**: Rust 네이티브 가속 및 그래프 캐싱을 통해 대규모 프로젝트 분석 및 반복 질의 성능 극대화.
 
 ---
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 13: Precision Tagging & Advanced Violation Filtering (정밀 태깅 및 고급 위반 필터링)
+### Phase 14: MCP Protocol Perfection (MCP 프로토콜 완벽화)
 
-*   **Task 40: Visibility-aware Structural Tagging**:
-    - `StructuralTagger`를 고도화하여 메서드의 가시성(Public/Private) 및 명명 규칙에 따라 `trait:internal` 태그를 자동 부여하고 클래스 역할을 차별화하여 전파.
-*   **Task 41: Contextual Violation Filtering**:
-    - `ArchitectureEngine`이 동일 파일/클래스 내부의 '자가 호출(Self-call)'을 인식하여 `domain-isolation` 위반에서 제외하도록 필터링 로직 개선.
-*   **Task 42: Comprehensive Tagging Re-validation**:
-    - `re_tag_project`를 통해 전체 인덱스를 갱신하고, 기존 23건의 위반 사항이 실질적인 설계 결함으로 정교하게 압축되는지 검증.
+*   **Task 43: Strict Schema Reinforcement**:
+    - `z.any()`를 사용하는 도구(get_remediation_strategy 등)의 입력 스키마를 구체적인 객체 구조로 정의하여 에이전트의 추론 정확도 향상.
+*   **Task 44: Multi-modal Data Structure Refinement**:
+    - `export_graph` 등 시각화 도구의 응답 객체를 정교화하여, 단순 텍스트를 넘어 데이터 구조와 메타데이터가 공존하는 풍부한 콘텐츠 제공.
+*   **Task 45: Instruction Injection Implementation**:
+    - MCP 서버 초기화(`initializeResult`) 시 에이전트에게 'Cynapx 운영 가이드'를 자동 주입하여 전문적인 도구 사용 페르소나 구축.
+
+### Phase 15: Autonomous Quality Assurance & Self-Healing (자율 품질 보증 및 자가 치유)
+
+*   **Task 46: Automated Fix Proposals for Violations**:
+    - 탐지된 아키텍처 위반 사항에 대해 구체적인 코드 수정안(코드 블록 단위) 자동 생성.
+*   **Task 47: Predictive Bug Analysis**:
+    - 역사적 이력과 복잡도 패턴을 결합하여 버그 발생 가능성이 높은 취약 지점 예측.
 
 ---
 
-**Status**: Phase 13 - **Precision Tagging & Advanced Violation Filtering IN PROGRESS**
+**Status**: Phase 14 - **MCP Protocol Perfection IN PROGRESS**
