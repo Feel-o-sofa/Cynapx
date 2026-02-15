@@ -64,6 +64,14 @@
 *   **Task 36.5: One-shot CLI Mode Integration (단발성 CLI 명령 지원)**:
     - MCP 서버 기동 없이 `npx cynapx <command>` 형태로 도구 로직을 즉시 실행하고 결과를 반환하는 실행 계층 구축 완료. (쉘 무한 대기 문제 해결)
 
+### Phase 12: AI-Agentic Decision Support & Policy Evolution (AI 에이전트 의사결정 지원 및 정책 진화)
+*   **Task 37: Refactoring Strategy Provider**:
+    - 아키텍처 위반 사항에 대해 인터페이스 추출, 레이어 이동, 의존성 역전 등 구체적인 구조적 해결 전략을 제안하는 도구 구현 완료.
+*   **Task 38: Contextual Risk Profiler**:
+    - Git Churn(수정 빈도) + Fan-in(파급력) + Complexity(복잡도)를 결합하여 심볼별 위험 점수를 제공하고, 에이전트의 수정 우선순위 결정을 보조하는 기능 구현 완료.
+*   **Task 39: Latent Policy Discovery**:
+    - 현재 코드베이스의 호출 패턴을 통계적으로 분석하여, 명시되지 않은 잠재적 아키텍처 규칙을 역으로 추출하고 제안하는 엔진 구축 완료.
+
 ---
 
 ## 2. 현재 상태 (Current Status)
@@ -77,16 +85,15 @@
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 12: AI-Agentic Decision Support & Policy Evolution (AI 에이전트 의사결정 지원 및 정책 진화)
+### Phase 13: Precision Tagging & Advanced Violation Filtering (정밀 태깅 및 고급 위반 필터링)
 
-*   **Task 37: Refactoring Strategy Provider**:
-    - 아키텍처 위반 사항에 대해 인터페이스 추출, 레이어 이동, 의존성 역전 등 구체적인 구조적 해결 전략을 제안하는 도구 구현.
-*   **Task 38: Contextual Risk Profiler**:
-    - Git Churn(수정 빈도) + Fan-in(파급력) + Complexity(복잡도)를 결합하여 심볼별 위험 점수를 제공하고, 에이전트의 수정 우선순위 결정을 보조.
-*   **Task 39: Latent Policy Discovery**:
-    - 현재 코드베이스의 호출 패턴을 통계적으로 분석하여, 명시되지 않은 잠재적 아키텍처 규칙을 역으로 추출하고 제안하는 엔진 구축.
+*   **Task 40: Visibility-aware Structural Tagging**:
+    - `StructuralTagger`를 고도화하여 메서드의 가시성(Public/Private) 및 명명 규칙에 따라 `trait:internal` 태그를 자동 부여하고 클래스 역할을 차별화하여 전파.
+*   **Task 41: Contextual Violation Filtering**:
+    - `ArchitectureEngine`이 동일 파일/클래스 내부의 '자가 호출(Self-call)'을 인식하여 `domain-isolation` 위반에서 제외하도록 필터링 로직 개선.
+*   **Task 42: Comprehensive Tagging Re-validation**:
+    - `re_tag_project`를 통해 전체 인덱스를 갱신하고, 기존 23건의 위반 사항이 실질적인 설계 결함으로 정교하게 압축되는지 검증.
 
 ---
 
-**Status**: Phase 12 - **AI-Agentic Decision Support & Policy Evolution IN PROGRESS**
-
+**Status**: Phase 13 - **Precision Tagging & Advanced Violation Filtering IN PROGRESS**

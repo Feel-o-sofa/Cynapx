@@ -1201,7 +1201,7 @@ Please follow this safety protocol:
                     }]
                 };
 
-            case 'get_setup_context':
+            case 'get_setup_context': {
                 const registry = readRegistry();
                 const currentPath = process.cwd();
                 return {
@@ -1215,6 +1215,7 @@ Please follow this safety protocol:
                         }, null, 2)
                     }]
                 };
+            }
 
             case 'check_architecture_violations':
                 const violations = await this.architectureEngine.checkViolations();
@@ -1246,6 +1247,54 @@ Please follow this safety protocol:
                 return {
                     content: [{ type: "text", text: JSON.stringify(report, null, 2) }]
                 };
+
+            case 're_tag_project':
+                const pipeline = (this as any).updatePipeline;
+                if (!pipeline) throw new Error("Update pipeline not available in CLI mode.");
+                await pipeline.reTagAllNodes();
+                return { content: [{ type: "text", text: "Successfully re-tagged all nodes." }] };
+
+            case 'discover_latent_policies':
+                const policies = await this.policyDiscoverer.discoverPolicies(args.threshold, args.min_count);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(policies, null, 2) }]
+                };
+
+            case 'check_consistency':
+                if (!this.consistencyChecker) throw new Error("Consistency checker not available in CLI mode.");
+                const results = await this.consistencyChecker.validate(args.repair || false, args.force || false);
+                return {
+                    content: [{ type: "text", text: JSON.stringify(results, null, 2) }]
+                };
+
+            case 'backfill_history':
+                const historyPipeline = (this as any).updatePipeline;
+                if (!historyPipeline) throw new Error("Update pipeline not available in CLI mode.");
+                await historyPipeline.mapHistoryToProject();
+                return { content: [{ type: "text", text: "Successfully backfilled history." }] };
+
+            case 'purge_index': {
+                if (!args.confirm) return { content: [{ type: "text", text: "Please confirm purge." }] };
+                const currentPath = process.cwd();
+                const dbPath = getDatabasePath(currentPath);
+                if (this.onPurgeCallback) await this.onPurgeCallback();
+                this.isInitialized = false;
+                const filesToDelete = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
+                filesToDelete.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
+                return { content: [{ type: "text", text: "Index purged successfully." }] };
+            }
+
+            case 'initialize_project': {
+                let projectPath = process.cwd();
+                if (args.mode === 'existing' || args.mode === 'custom') {
+                    if (!args.path) throw new Error("Path required for custom initialization.");
+                    projectPath = path.resolve(args.path);
+                }
+                addToRegistry(projectPath);
+                if (this.onInitializeCallback) await this.onInitializeCallback(projectPath);
+                this.markReady(true);
+                return { content: [{ type: "text", text: `Initialized project at ${projectPath}` }] };
+            }
 
             default:
                 // For other tools, we could either implement them here or throw

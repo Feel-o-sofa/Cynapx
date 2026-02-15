@@ -87,7 +87,21 @@ export class ArchitectureEngine {
 
             if (!fromNode || !toNode) continue;
 
+            // [Phase 13] Contextual Filtering
+            // 1. Ignore calls within the same file
+            if (fromNode.file_path === toNode.file_path) continue;
+
+            // 2. Ignore calls within the same class/object (shared prefix before #)
+            const fromPrefix = fromNode.qualified_name.split('#')[0];
+            const toPrefix = toNode.qualified_name.split('#')[0];
+            if (fromPrefix === toPrefix) continue;
+
             for (const policy of this.policies) {
+                // 3. Special handling for domain-isolation
+                if (policy.id === 'domain-isolation' && this.hasTag(toNode, 'trait:internal')) {
+                    continue;
+                }
+
                 for (const rule of policy.forbidden) {
                     if (this.hasTag(fromNode, rule.from) && this.hasTag(toNode, rule.to)) {
                         violations.push({

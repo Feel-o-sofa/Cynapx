@@ -25,6 +25,11 @@ export class StructuralTagger {
      * Consolidates primitive roles and lists distinct roles in parallel.
      */
     public static mergeRoles(currentTags: string[], parentTags: string[]): string[] {
+        // If the current node is marked as internal, do not inherit parent roles
+        if (currentTags.includes('trait:internal')) {
+            return currentTags;
+        }
+
         const tagSet = new Set(currentTags);
         const parentRoles = parentTags.filter(t => t.startsWith('role:'));
 
@@ -103,6 +108,15 @@ export class StructuralTagger {
         if (node.modifiers?.some(m => m.toLowerCase().includes('static'))) tags.add('trait:static');
         if (node.is_generated) tags.add('trait:generated');
         if (node.remote_project_path) tags.add('trait:external');
+
+        // 4. Visibility & Access Detection
+        const rawSymbolName = node.qualified_name.split('#').pop() || '';
+        if (node.visibility === 'private' || node.visibility === 'protected' || rawSymbolName.startsWith('_')) {
+            tags.add('trait:internal');
+        } else if (node.visibility === 'public' || /^[A-Z]/.test(rawSymbolName)) {
+            // Treat PascalCase symbols (Classes/Interfaces) or explicit public as public
+            tags.add('trait:public');
+        }
 
         // Entry point detection (basic)
         const fileName = node.file_path.toLowerCase();
