@@ -18,12 +18,16 @@ import { SecurityProvider } from '../utils/security';
 import { ArchitectureEngine } from '../graph/architecture-engine';
 import { RefactoringEngine } from '../graph/refactoring-engine';
 import { OptimizationEngine } from '../graph/optimization-engine';
+import { RemediationEngine } from '../graph/remediation-engine';
+import { PolicyDiscoverer } from '../graph/policy-discoverer';
 
 export class McpServer {
     private sdkServer: SdkMcpServer;
     private architectureEngine: ArchitectureEngine;
     private refactoringEngine: RefactoringEngine;
     private optimizationEngine: OptimizationEngine;
+    private remediationEngine: RemediationEngine;
+    private policyDiscoverer: PolicyDiscoverer;
     private isCheckingConsistency: boolean = false;
     private readyPromise: Promise<void>;
     private resolveReady?: () => void;
@@ -59,6 +63,8 @@ export class McpServer {
         this.architectureEngine = new ArchitectureEngine(this.graphEngine);
         this.refactoringEngine = new RefactoringEngine(this.graphEngine);
         this.optimizationEngine = new OptimizationEngine(this.graphEngine);
+        this.remediationEngine = new RemediationEngine();
+        this.policyDiscoverer = new PolicyDiscoverer(this.graphEngine);
 
         this.readyPromise = new Promise((resolve) => {
             this.resolveReady = resolve;
@@ -387,6 +393,8 @@ Please follow this safety protocol:
         this.architectureEngine = new ArchitectureEngine(engine);
         this.refactoringEngine = new RefactoringEngine(engine);
         this.optimizationEngine = new OptimizationEngine(engine);
+        this.remediationEngine = new RemediationEngine();
+        this.policyDiscoverer = new PolicyDiscoverer(engine);
     }
 
     /**
@@ -497,6 +505,27 @@ Please follow this safety protocol:
                                 edge_type: v.edge.edge_type
                             }))
                         }, null, 2)
+                    }]
+                };
+            }
+        );
+
+        // get_remediation_strategy
+        this.sdkServer.registerTool(
+            "get_remediation_strategy",
+            {
+                description: "Provides actionable refactoring strategies for a specific architectural violation.",
+                inputSchema: z.object({
+                    violation: z.any().describe("The violation object returned from 'check_architecture_violations'")
+                })
+            },
+            async ({ violation }) => {
+                await this.waitUntilReady();
+                const strategy = this.remediationEngine.getRemediationStrategy(violation);
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(strategy, null, 2)
                     }]
                 };
             }
@@ -831,6 +860,30 @@ Please follow this safety protocol:
             }
         );
 
+        // get_risk_profile
+        this.sdkServer.registerTool(
+            "get_risk_profile",
+            {
+                description: "Calculates a comprehensive Risk Profile for a symbol, considering complexity, coupling, and historical churn.",
+                inputSchema: z.object({
+                    qualified_name: z.string().describe("The full qualified name of the symbol")
+                })
+            },
+            async ({ qualified_name }) => {
+                await this.waitUntilReady();
+                const profile = await this.refactoringEngine.getRiskProfile(qualified_name);
+                if (!profile) {
+                    return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                }
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(profile, null, 2)
+                    }]
+                };
+            }
+        );
+
         // get_hotspots
         this.sdkServer.registerTool(
             "get_hotspots",
@@ -887,6 +940,28 @@ Please follow this safety protocol:
                     content: [{
                         type: "text",
                         text: JSON.stringify(report, null, 2)
+                    }]
+                };
+            }
+        );
+
+        // discover_latent_policies
+        this.sdkServer.registerTool(
+            "discover_latent_policies",
+            {
+                description: "Analyzes tag relationships to discover implicit architectural policies that are consistently followed in the codebase.",
+                inputSchema: z.object({
+                    threshold: z.number().optional().default(0.9).describe("Probability threshold for suggesting a policy (default: 0.9)"),
+                    min_count: z.number().optional().default(5).describe("Minimum occurrences required to suggest a policy (default: 5)")
+                })
+            },
+            async ({ threshold, min_count }) => {
+                await this.waitUntilReady();
+                const policies = await this.policyDiscoverer.discoverPolicies(threshold, min_count);
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify(policies, null, 2)
                     }]
                 };
             }

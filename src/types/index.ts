@@ -63,6 +63,29 @@ export interface CodeNode {
 }
 
 /**
+ * [Phase 12] Remediation Strategy
+ */
+export interface RemediationRecipe {
+    strategy: string;
+    rationale: string;
+    steps: string[];
+}
+
+/**
+ * [Phase 12] Risk Profile
+ */
+export interface RiskProfile {
+    symbol: string;
+    score: number; // 0.0 to 1.0
+    level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
+    factors: {
+        metric: string;
+        value: number | string;
+        impact: number;
+    }[];
+}
+
+/**
  * Edge types representing relationships between symbols.
  */
 export type EdgeType =

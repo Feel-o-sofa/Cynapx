@@ -4,7 +4,7 @@
  * See LICENSE in the project root for license information.
  */
 import { GraphEngine, TraversalResult } from './graph-engine';
-import { CodeNode } from '../types';
+import { CodeNode, RiskProfile } from '../types';
 
 export type RefactorRisk = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
@@ -21,6 +21,42 @@ export interface RefactoringProposal {
  */
 export class RefactoringEngine {
     constructor(private graphEngine: GraphEngine) {}
+
+    /**
+     * Calculates a comprehensive Risk Profile for a symbol.
+     */
+    public async getRiskProfile(qualifiedName: string): Promise<RiskProfile | null> {
+        const node = this.graphEngine.getNodeByQualifiedName(qualifiedName);
+        if (!node || node.id === undefined) return null;
+
+        const gitChurn = node.history ? node.history.length : 0;
+        const complexity = node.cyclomatic || 0;
+        const fanIn = node.fan_in || 0;
+
+        // Weights: Churn (0.4), Complexity (0.3), Coupling (0.3)
+        // Normalized scores (roughly)
+        const churnScore = Math.min(gitChurn / 20, 1.0) * 0.4;
+        const complexityScore = Math.min(complexity / 30, 1.0) * 0.3;
+        const couplingScore = Math.min(fanIn / 50, 1.0) * 0.3;
+
+        const totalScore = churnScore + complexityScore + couplingScore;
+
+        let level: 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' = 'LOW';
+        if (totalScore > 0.8) level = 'CRITICAL';
+        else if (totalScore > 0.5) level = 'HIGH';
+        else if (totalScore > 0.2) level = 'MEDIUM';
+
+        return {
+            symbol: qualifiedName,
+            score: parseFloat(totalScore.toFixed(2)),
+            level,
+            factors: [
+                { metric: 'Git Churn', value: gitChurn, impact: parseFloat(churnScore.toFixed(2)) },
+                { metric: 'Complexity', value: complexity, impact: parseFloat(complexityScore.toFixed(2)) },
+                { metric: 'Coupling (Fan-in)', value: fanIn, impact: parseFloat(couplingScore.toFixed(2)) }
+            ]
+        };
+    }
 
     /**
      * Proposes a refactoring plan for a given symbol.

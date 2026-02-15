@@ -86,6 +86,13 @@ export class GraphEngine {
     }
 
     /**
+     * Returns all nodes in the knowledge graph.
+     */
+    public getAllNodes(): CodeNode[] {
+        return this.nodeRepo.getAllNodes();
+    }
+
+    /**
      * Executes the semantic clustering algorithm.
      * Groups symbols into logical clusters based on affinity and saves results to DB.
      */

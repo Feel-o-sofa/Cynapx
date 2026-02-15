@@ -77,16 +77,16 @@
 
 ## 3. 향후 발전 방향 (Future Roadmap)
 
-### Phase 12: Autonomous Quality Assurance & Self-Healing (자율 품질 보증 및 자가 치유)
+### Phase 12: AI-Agentic Decision Support & Policy Evolution (AI 에이전트 의사결정 지원 및 정책 진화)
 
-*   **Task 37: Automated Fix Proposals for Violations**:
-    - 탐지된 아키텍처 위반 사항에 대해 구체적인 코드 수정안(코드 블록 단위) 자동 생성.
-*   **Task 38: Predictive Bug Analysis**:
-    - 역사적 이력과 복잡도 패턴을 결합하여 버그 발생 가능성이 높은 취약 지점 예측.
-*   **Task 39: Live Architectural Watchdog**:
-    - 파일 변경 감지 시 실시간으로 아키텍처 위반을 체크하고 AI 에이전트에게 경고를 전송하는 상주형 감시 엔진 고도화.
+*   **Task 37: Refactoring Strategy Provider**:
+    - 아키텍처 위반 사항에 대해 인터페이스 추출, 레이어 이동, 의존성 역전 등 구체적인 구조적 해결 전략을 제안하는 도구 구현.
+*   **Task 38: Contextual Risk Profiler**:
+    - Git Churn(수정 빈도) + Fan-in(파급력) + Complexity(복잡도)를 결합하여 심볼별 위험 점수를 제공하고, 에이전트의 수정 우선순위 결정을 보조.
+*   **Task 39: Latent Policy Discovery**:
+    - 현재 코드베이스의 호출 패턴을 통계적으로 분석하여, 명시되지 않은 잠재적 아키텍처 규칙을 역으로 추출하고 제안하는 엔진 구축.
 
 ---
 
-**Status**: Phase 12 - **Autonomous QA & Self-Healing IN PROGRESS**
+**Status**: Phase 12 - **AI-Agentic Decision Support & Policy Evolution IN PROGRESS**
 
