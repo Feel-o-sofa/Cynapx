@@ -6,7 +6,7 @@ dist/
 build/
 *.tgz
 
-# Database (Generated Artifacts)
+# Database & State (Generated Artifacts)
 *.db
 *.db-shm
 *.db-wal
@@ -42,7 +42,7 @@ __tests__/
 scripts/
 switch-env.js
 
-# AI Agent Context (Development only)
+# AI Agent Context & Internal Docs (Exempt from Repo)
 .gemini/
 agent_docs/
 reports/

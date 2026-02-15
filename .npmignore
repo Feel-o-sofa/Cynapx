@@ -1,5 +1,6 @@
 # Source
 src/
+src-native/
 tsconfig.json
 
 # Development Artifacts
@@ -22,3 +23,5 @@ switch-env.js
 # Build Artifacts (other than dist)
 *.tgz
 build/
+.git/
+.github/
