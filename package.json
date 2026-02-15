@@ -7,12 +7,6 @@
     "cynapx": "dist/bootstrap.js"
   },
   "license": "MIT",
-  "files": [
-    "dist",
-    "schema",
-    "README.md",
-    "LICENSE"
-  ],
   "scripts": {
     "start": "ts-node src/bootstrap.ts",
     "build": "npm run build:ts && npm run build:copy",
@@ -20,7 +14,7 @@
     "build:copy": "powershell -NoProfile -Command \"Copy-Item -Path 'src/indexer/languages/queries' -Destination 'dist/indexer/languages/' -Recurse -Force ; If (Test-Path 'src-native/*.node') { Copy-Item -Path 'src-native/*.node' -Destination 'dist/' -Force }\"",
     "build:native": "npm run build --prefix src-native",
     "dev": "ts-node-dev --respawn src/bootstrap.ts",
-    "prepublishOnly": "npm run build"
+    "prepare": "npm run build"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",
