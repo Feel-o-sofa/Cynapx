@@ -20,10 +20,12 @@ import { RefactoringEngine } from '../graph/refactoring-engine';
 import { OptimizationEngine } from '../graph/optimization-engine';
 import { RemediationEngine } from '../graph/remediation-engine';
 import { PolicyDiscoverer } from '../graph/policy-discoverer';
+import { IpcCoordinator } from "./ipc-coordinator";
 
 /**
  * [Phase 14] Zod Schemas for Strict Protocol Reinforcement
  */
+// ... (omitting schemas for brevity as they are unchanged)
 const CodeNodeSchema = z.object({
     qualified_name: z.string(),
     symbol_type: z.string(),
@@ -55,22 +57,24 @@ const ArchitectureViolationSchema = z.object({
 
 export class McpServer {
     private sdkServer: SdkMcpServer;
-    private architectureEngine: ArchitectureEngine;
-    private refactoringEngine: RefactoringEngine;
-    private optimizationEngine: OptimizationEngine;
+    private architectureEngine!: ArchitectureEngine;
+    private refactoringEngine!: RefactoringEngine;
+    private optimizationEngine!: OptimizationEngine;
     private remediationEngine: RemediationEngine;
-    private policyDiscoverer: PolicyDiscoverer;
+    private policyDiscoverer!: PolicyDiscoverer;
     private isCheckingConsistency: boolean = false;
     private readyPromise: Promise<void>;
     private resolveReady?: () => void;
     private isInitialized: boolean = false;
+    private isTerminal: boolean = false;
+    private terminalCoordinator?: IpcCoordinator;
     private onInitializeCallback?: (newPath: string) => Promise<void>;
     private onPurgeCallback?: () => Promise<void>;
     private securityProvider?: SecurityProvider;
 
     constructor(
-        public graphEngine: GraphEngine,
-        public metadataRepo: MetadataRepository,
+        public graphEngine?: GraphEngine,
+        public metadataRepo?: MetadataRepository,
         public consistencyChecker?: ConsistencyChecker
     ) {
         let version = "1.0.2";
@@ -104,15 +108,48 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
 `
         });
 
-        this.architectureEngine = new ArchitectureEngine(this.graphEngine);
-        this.refactoringEngine = new RefactoringEngine(this.graphEngine);
-        this.optimizationEngine = new OptimizationEngine(this.graphEngine);
+        if (this.graphEngine) {
+            this.architectureEngine = new ArchitectureEngine(this.graphEngine);
+            this.refactoringEngine = new RefactoringEngine(this.graphEngine);
+            this.optimizationEngine = new OptimizationEngine(this.graphEngine);
+            this.policyDiscoverer = new PolicyDiscoverer(this.graphEngine);
+        }
         this.remediationEngine = new RemediationEngine();
-        this.policyDiscoverer = new PolicyDiscoverer(this.graphEngine);
 
         this.readyPromise = new Promise((resolve) => {
             this.resolveReady = resolve;
         });
+    }
+
+    public setTerminal(coordinator: IpcCoordinator) {
+        this.isTerminal = true;
+        this.terminalCoordinator = coordinator;
+        // If we are a terminal, we are "ready" to proxy immediately
+        this.markReady(true);
+    }
+
+    /**
+     * Promotes this Terminal session to a Host session by injecting the engine.
+     */
+    public promoteToHost(
+        graphEngine: GraphEngine,
+        metadataRepo: MetadataRepository,
+        consistencyChecker?: ConsistencyChecker,
+        updatePipeline?: any
+    ) {
+        this.isTerminal = false;
+        this.terminalCoordinator = undefined;
+        this.graphEngine = graphEngine;
+        this.metadataRepo = metadataRepo;
+        this.consistencyChecker = consistencyChecker;
+        (this as any).updatePipeline = updatePipeline;
+
+        // Re-initialize engines with the new graphEngine
+        this.architectureEngine = new ArchitectureEngine(graphEngine);
+        this.refactoringEngine = new RefactoringEngine(graphEngine);
+        this.optimizationEngine = new OptimizationEngine(graphEngine);
+        this.policyDiscoverer = new PolicyDiscoverer(graphEngine);
+        this.remediationEngine = new RemediationEngine();
     }
 
     /**
@@ -141,7 +178,7 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
         setInterval(async () => {
             if (this.isCheckingConsistency || !this.consistencyChecker) return;
 
-            const stats = this.metadataRepo.getLedgerStats();
+            const stats = this.metadataRepo!.getLedgerStats();
             const isConsistent = 
                 stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
                 stats.metadata.total_calls_count === stats.actual.sum_fan_out &&
@@ -211,7 +248,7 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
                         }]
                     };
                 }
-                const db = (this.graphEngine.nodeRepo as any).db;
+                const db = (this.graphEngine!.nodeRepo as any).db;
                 const nodeCount = db.prepare("SELECT COUNT(*) as count FROM nodes").get().count;
                 const edgeCount = db.prepare("SELECT COUNT(*) as count FROM edges").get().count;
                 const fileCount = db.prepare("SELECT COUNT(DISTINCT file_path) as count FROM nodes").get().count;
@@ -250,7 +287,7 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
                     };
                 }
 
-                const stats = this.metadataRepo.getLedgerStats();
+                const stats = this.metadataRepo!.getLedgerStats();
                 const isConsistent = 
                     stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
                     stats.metadata.total_calls_count === stats.actual.sum_fan_out &&
@@ -292,7 +329,7 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
                     };
                 }
 
-                const db = (this.graphEngine.nodeRepo as any).db;
+                const db = (this.graphEngine!.nodeRepo as any).db;
                 
                 const topComplexity = db.prepare("SELECT qualified_name, symbol_type, cyclomatic FROM nodes ORDER BY cyclomatic DESC LIMIT 10").all();
                 const topFanIn = db.prepare("SELECT qualified_name, symbol_type, fan_in FROM nodes ORDER BY fan_in DESC LIMIT 10").all();
@@ -332,7 +369,7 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
                     };
                 }
 
-                const db = (this.graphEngine.nodeRepo as any).db;
+                const db = (this.graphEngine!.nodeRepo as any).db;
                 const clusters = db.prepare("SELECT * FROM logical_clusters").all();
                 const result = clusters.map((c: any) => {
                     const nodeCount = db.prepare("SELECT COUNT(*) as count FROM nodes WHERE cluster_id = ?").get(c.id).count;
@@ -590,7 +627,7 @@ Please follow this safety protocol:
             },
             async ({ query, limit, symbol_type, language, visibility }) => {
                 await this.waitUntilReady();
-                const nodes = this.graphEngine.nodeRepo.searchSymbols(query, limit || 10, {
+                const nodes = this.graphEngine!.nodeRepo.searchSymbols(query, limit || 10, {
                     symbol_type: symbol_type as any,
                     language,
                     visibility: visibility as any
@@ -623,12 +660,12 @@ Please follow this safety protocol:
             },
             async ({ qualified_name }) => {
                 await this.waitUntilReady();
-                const node = this.graphEngine.getNodeByQualifiedName(qualified_name);
+                const node = this.graphEngine!.getNodeByQualifiedName(qualified_name);
                 if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
                 
-                const edges = this.graphEngine.getIncomingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
+                const edges = this.graphEngine!.getIncomingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
                 const callers = edges.map(e => {
-                    const callerNode = this.graphEngine.getNodeById(e.from_id);
+                    const callerNode = this.graphEngine!.getNodeById(e.from_id);
                     return {
                         qname: callerNode?.qualified_name,
                         type: callerNode?.symbol_type,
@@ -652,12 +689,12 @@ Please follow this safety protocol:
             },
             async ({ qualified_name }) => {
                 await this.waitUntilReady();
-                const node = this.graphEngine.getNodeByQualifiedName(qualified_name);
+                const node = this.graphEngine!.getNodeByQualifiedName(qualified_name);
                 if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
                 
-                const edges = this.graphEngine.getOutgoingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
+                const edges = this.graphEngine!.getOutgoingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
                 const callees = edges.map(e => {
-                    const calleeNode = this.graphEngine.getNodeById(e.to_id);
+                    const calleeNode = this.graphEngine!.getNodeById(e.to_id);
                     return {
                         qname: calleeNode?.qualified_name,
                         type: calleeNode?.symbol_type,
@@ -681,16 +718,16 @@ Please follow this safety protocol:
             },
             async ({ qualified_name }) => {
                 await this.waitUntilReady();
-                const node = this.graphEngine.getNodeByQualifiedName(qualified_name);
+                const node = this.graphEngine!.getNodeByQualifiedName(qualified_name);
                 if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
                 
                 // Find edges where edge_type is 'tests'
-                const incomingTests = this.graphEngine.getIncomingEdges(node.id).filter(e => e.edge_type === 'tests');
-                const outgoingTests = this.graphEngine.getOutgoingEdges(node.id).filter(e => e.edge_type === 'tests');
+                const incomingTests = this.graphEngine!.getIncomingEdges(node.id).filter(e => e.edge_type === 'tests');
+                const outgoingTests = this.graphEngine!.getOutgoingEdges(node.id).filter(e => e.edge_type === 'tests');
                 
                 const testNodes = [...incomingTests, ...outgoingTests].map(e => {
                     const testId = e.edge_type === 'tests' ? (incomingTests.includes(e) ? e.from_id : e.to_id) : -1;
-                    const testNode = this.graphEngine.getNodeById(testId);
+                    const testNode = this.graphEngine!.getNodeById(testId);
                     return {
                         qname: testNode?.qualified_name,
                         file: testNode?.file_path,
@@ -711,7 +748,7 @@ Please follow this safety protocol:
             },
             async () => {
                 await this.waitUntilReady();
-                const result = await this.graphEngine.performClustering();
+                const result = await this.graphEngine!.performClustering();
                 return {
                     content: [{
                         type: "text",
@@ -734,7 +771,7 @@ Please follow this safety protocol:
             },
             async ({ qualified_name, include_source, summary_only }) => {
                 await this.waitUntilReady();
-                const node = this.graphEngine.getNodeByQualifiedName(qualified_name);
+                const node = this.graphEngine!.getNodeByQualifiedName(qualified_name);
                 if (!node || node.id === undefined) {
                     return {
                         isError: true,
@@ -782,8 +819,8 @@ Please follow this safety protocol:
                     return { content: [{ type: "text", text }] };
                 }
 
-                const outgoing = this.graphEngine.getOutgoingEdges(node.id);
-                const incoming = this.graphEngine.getIncomingEdges(node.id);
+                const outgoing = this.graphEngine!.getOutgoingEdges(node.id);
+                const incoming = this.graphEngine!.getIncomingEdges(node.id);
                 
                 text += `\n#### Relationships:\n`;
                 text += `- **Outgoing Edges**: ${outgoing.length}\n`;
@@ -842,14 +879,14 @@ Please follow this safety protocol:
             },
             async ({ qualified_name, max_depth, use_cache }) => {
                 await this.waitUntilReady();
-                const targetNode = this.graphEngine.getNodeByQualifiedName(qualified_name);
+                const targetNode = this.graphEngine!.getNodeByQualifiedName(qualified_name);
                 if (!targetNode || targetNode.id === undefined) {
                     return {
                         isError: true,
                         content: [{ type: "text", text: "Symbol not found" }]
                     };
                 }
-                const results = this.graphEngine.traverse(targetNode.id, 'BFS', {
+                const results = this.graphEngine!.traverse(targetNode.id, 'BFS', {
                     direction: 'incoming',
                     maxDepth: max_depth || 3,
                     useCache: use_cache
@@ -858,7 +895,7 @@ Please follow this safety protocol:
                 const formatted = results.map(r => {
                     const pathSteps = [...r.path].reverse();
                     const impactPath = pathSteps.map((step, index) => {
-                        const n = this.graphEngine.getNodeById(step.nodeId);
+                        const n = this.graphEngine!.getNodeById(step.nodeId);
                         const qname = n ? n.qualified_name : 'unknown';
                         if (index < pathSteps.length - 1) {
                             const edge = step.edge;
@@ -941,7 +978,7 @@ Please follow this safety protocol:
             },
             async ({ metric, threshold, symbol_type }) => {
                 await this.waitUntilReady();
-                const db = (this.graphEngine.nodeRepo as any).db;
+                const db = (this.graphEngine!.nodeRepo as any).db;
                 
                 // Whitelist allowed metrics to prevent SQL Injection
                 const allowedMetrics = ['cyclomatic', 'fan_in', 'fan_out', 'loc'];
@@ -1023,12 +1060,12 @@ Please follow this safety protocol:
             },
             async ({ root_qname, max_depth }) => {
                 await this.waitUntilReady();
-                const mermaid = await this.graphEngine.exportToMermaid({
+                const mermaid = await this.graphEngine!.exportToMermaid({
                     rootQName: root_qname,
                     maxDepth: max_depth
                 });
 
-                const data = await this.graphEngine.getGraphData({
+                const data = await this.graphEngine!.getGraphData({
                     rootQName: root_qname,
                     maxDepth: max_depth
                 });
@@ -1224,13 +1261,17 @@ Please follow this safety protocol:
      * This allows the CLI to reuse the same logic as the MCP handlers.
      */
     public async executeTool(name: string, args: any): Promise<any> {
+        if (this.isTerminal && this.terminalCoordinator) {
+            return this.terminalCoordinator.forwardExecuteTool(name, args);
+        }
+
         await this.waitUntilReady();
 
         // Map of tool names to their internal logic
         // This is a simplified dispatcher to avoid complex SDK introspection
         switch (name) {
             case 'search_symbols':
-                const nodes = this.graphEngine.nodeRepo.searchSymbols(args.query, args.limit || 10, {
+                const nodes = this.graphEngine!.nodeRepo.searchSymbols(args.query, args.limit || 10, {
                     symbol_type: args.symbol_type,
                     language: args.language,
                     visibility: args.visibility
@@ -1248,7 +1289,7 @@ Please follow this safety protocol:
                 };
 
             case 'get_symbol_details':
-                const node = this.graphEngine.getNodeByQualifiedName(args.qualified_name);
+                const node = this.graphEngine!.getNodeByQualifiedName(args.qualified_name);
                 if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
                 return {
                     content: [{
@@ -1311,11 +1352,11 @@ Please follow this safety protocol:
                 };
 
             case 'export_graph':
-                const mermaid = await this.graphEngine.exportToMermaid({
+                const mermaid = await this.graphEngine!.exportToMermaid({
                     rootQName: args.root_qname,
                     maxDepth: args.max_depth
                 });
-                const graphData = await this.graphEngine.getGraphData({
+                const graphData = await this.graphEngine!.getGraphData({
                     rootQName: args.root_qname,
                     maxDepth: args.max_depth
                 });

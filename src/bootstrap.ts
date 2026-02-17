@@ -25,6 +25,8 @@ import { LifecycleManager } from './utils/lifecycle-manager';
 import { SecurityProvider } from './utils/security';
 import { CertificateGenerator } from './utils/certificate-generator';
 import { getDatabasePath, findProjectAnchor } from './utils/paths';
+import { LockManager } from './utils/lock-manager';
+import { IpcCoordinator } from './server/ipc-coordinator';
 import { FileFilter } from './utils/file-filter';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -47,9 +49,19 @@ async function bootstrap() {
 
     const args = process.argv.slice(2);
     
-    // Command identification (anything that doesn't start with --)
-    const command = args.find(arg => !arg.startsWith('--'));
-    const isOneShot = !!command;
+    // Command identification (anything that doesn't start with -- and is not a value for a known option)
+    let command: string | undefined;
+    for (let i = 0; i < args.length; i++) {
+        if (!args[i].startsWith('--')) {
+            // Check if it's a value for the previous option
+            if (i > 0 && args[i - 1] === '--path') {
+                continue;
+            }
+            command = args[i];
+            break;
+        }
+    }
+    const isOneShot = !isMcpMode && !!command;
 
     if (args.includes('--help') || args.includes('-h')) {
         log(`
@@ -109,74 +121,94 @@ Environment Variables:
 
     const lifecycle = new LifecycleManager();
 
+    // Shared components (declared in outer scope for failover access)
+    let dbManager: DatabaseManager | undefined;
+    let nodeRepo: NodeRepository | undefined;
+    let edgeRepo: EdgeRepository | undefined;
+    let metadataRepo: MetadataRepository | undefined;
+    let graphEngine: GraphEngine | undefined;
+    let updatePipeline: UpdatePipeline | undefined;
+    let consistencyChecker: ConsistencyChecker | undefined;
+    let workerPool: WorkerPool | undefined;
+    let watcher: FileWatcher | undefined;
+
+    // Initialize core engine functionality
+    const initializeEngine = async (projectPath: string) => {
+        log(`Initializing Engine for: ${projectPath}`);
+        const dbPath = getDatabasePath(projectPath);
+        dbManager = lifecycle.track(new DatabaseManager(dbPath));
+        const db = dbManager.getDb();
+        nodeRepo = new NodeRepository(db);
+        edgeRepo = new EdgeRepository(db);
+        metadataRepo = new MetadataRepository(db);
+        graphEngine = new GraphEngine(nodeRepo, edgeRepo);
+
+        const gitService = new GitService(projectPath);
+        const tsParser = new TypeScriptParser();
+        const treeSitterParser = new TreeSitterParser();
+        const depParser = new DependencyParser();
+        const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
+
+        const workerPoolSize = Math.min(os.cpus().length, 4);
+        workerPool = lifecycle.track(new WorkerPool(workerPoolSize));
+        updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool, projectPath);
+        consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
+
+        log('Synchronizing index with Project state...');
+        await consistencyChecker.validate(true);
+        log('Synchronization Complete.');
+
+        watcher = lifecycle.track(new FileWatcher(updatePipeline, projectPath));
+        watcher.start(projectPath);
+        
+        const securityProvider = new SecurityProvider(projectPath);
+        
+        return { graphEngine, consistencyChecker, metadataRepo, securityProvider };
+    };
+
     try {
-        // Shared components
-        let dbManager: DatabaseManager | undefined;
-        let nodeRepo: NodeRepository | undefined;
-        let edgeRepo: EdgeRepository | undefined;
-        let metadataRepo: MetadataRepository | undefined;
-        let graphEngine: GraphEngine | undefined;
-        let updatePipeline: UpdatePipeline | undefined;
-        let consistencyChecker: ConsistencyChecker | undefined;
-        let workerPool: WorkerPool | undefined;
-        let watcher: FileWatcher | undefined;
-
-        // Initialize core engine functionality
-        const initializeEngine = async (projectPath: string) => {
-            log(`Initializing Engine for: ${projectPath}`);
-            const dbPath = getDatabasePath(projectPath);
-            dbManager = lifecycle.track(new DatabaseManager(dbPath));
-            const db = dbManager.getDb();
-            nodeRepo = new NodeRepository(db);
-            edgeRepo = new EdgeRepository(db);
-            metadataRepo = new MetadataRepository(db);
-            graphEngine = new GraphEngine(nodeRepo, edgeRepo);
-
-            const gitService = new GitService(projectPath);
-            const tsParser = new TypeScriptParser();
-            const treeSitterParser = new TreeSitterParser();
-            const depParser = new DependencyParser();
-            const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
-
-            const workerPoolSize = Math.min(os.cpus().length, 4);
-            workerPool = lifecycle.track(new WorkerPool(workerPoolSize));
-            updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool, projectPath);
-            consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
-
-            log('Synchronizing index with Project state...');
-            await consistencyChecker.validate(true);
-            log('Synchronization Complete.');
-
-            watcher = lifecycle.track(new FileWatcher(updatePipeline, projectPath));
-            watcher.start(projectPath);
-            
-            const securityProvider = new SecurityProvider(projectPath);
-            
-            return { graphEngine, consistencyChecker, metadataRepo, securityProvider };
-        };
+        // Coordination Logic
+        const projectPath = anchorPath || startPath;
+        const lockManager = new LockManager(projectPath);
+        const ipcCoordinator = new IpcCoordinator();
+        
+        let isTerminal = false;
+        const existingLock = await lockManager.getValidLock();
+        if (existingLock) {
+            log(`Existing Host found (PID: ${existingLock.pid}). Attempting Terminal connection...`);
+            try {
+                await ipcCoordinator.connectToHost(existingLock.ipcPort);
+                isTerminal = true;
+                log('Terminal mode active. Forwarding all calls to Host.');
+            } catch (err) {
+                log(`Failed to connect to Host. Stale lock? Continuing as Host.`);
+            }
+        }
 
         let currentGraphEngine: GraphEngine | undefined;
         let currentConsistencyChecker: ConsistencyChecker | undefined;
         let currentSecurityProvider: SecurityProvider | undefined;
 
-        if (anchorPath) {
-            const result = await initializeEngine(anchorPath);
-            currentGraphEngine = result.graphEngine;
-            currentConsistencyChecker = result.consistencyChecker;
-            currentSecurityProvider = result.securityProvider;
-        } else {
-            // Placeholder graph engine if not initialized
-            const dbPath = getDatabasePath(startPath); // Temporary or default
-            const tempDbManager = new DatabaseManager(dbPath);
-            const tempDb = tempDbManager.getDb();
-            nodeRepo = new NodeRepository(tempDb);
-            edgeRepo = new EdgeRepository(tempDb);
-            metadataRepo = new MetadataRepository(tempDb);
-            currentGraphEngine = new GraphEngine(nodeRepo, edgeRepo);
+        if (!isTerminal) {
+            if (anchorPath) {
+                const result = await initializeEngine(anchorPath);
+                currentGraphEngine = result.graphEngine;
+                currentConsistencyChecker = result.consistencyChecker;
+                currentSecurityProvider = result.securityProvider;
+            } else {
+                // Placeholder graph engine if not initialized
+                const dbPath = getDatabasePath(startPath); // Temporary or default
+                const tempDbManager = new DatabaseManager(dbPath);
+                const tempDb = tempDbManager.getDb();
+                nodeRepo = new NodeRepository(tempDb);
+                edgeRepo = new EdgeRepository(tempDb);
+                metadataRepo = new MetadataRepository(tempDb);
+                currentGraphEngine = new GraphEngine(nodeRepo, edgeRepo);
+            }
         }
 
-        // Initialize MCP Server (always needed for either Stdio or SSE mode)
-        const mcpServer = new McpServer(currentGraphEngine!, metadataRepo!, currentConsistencyChecker);
+        // Initialize MCP Server (always needed)
+        const mcpServer = new McpServer(currentGraphEngine, metadataRepo, currentConsistencyChecker);
         if (updatePipeline) {
             mcpServer.setUpdatePipeline(updatePipeline);
         }
@@ -187,14 +219,103 @@ Environment Variables:
             mcpServer.setSecurityProvider(currentSecurityProvider);
         }
 
+        const attemptFailover = async () => {
+            log('Starting failover process...');
+            // Jitter to avoid race condition among multiple terminals
+            const jitter = 500 + Math.random() * 3000;
+            await new Promise(r => setTimeout(r, jitter));
+
+            const lock = await lockManager.getValidLock();
+            if (!lock) {
+                log('No valid Host found. Attempting to acquire lock for promotion...');
+                try {
+                    // Try to start IPC server first to get a port
+                    const ipcPort = await ipcCoordinator.startHost();
+                    
+                    // ATOMIC CHECK & ACQUIRE: This is where we prevent multiple hosts.
+                    // LockManager.acquire will overwrite, but we should check again.
+                    const finalCheck = await lockManager.getValidLock();
+                    if (finalCheck) {
+                        log('Another session acquired the lock during jitter. Reconnecting...');
+                        await ipcCoordinator.connectToHost(finalCheck.ipcPort);
+                        return;
+                    }
+                    
+                    await lockManager.acquire(ipcPort);
+                    log('Lock acquired. Promoting this Terminal to Host...');
+
+                    const result = await initializeEngine(projectPath);
+                    ipcCoordinator.setMcpServer(mcpServer);
+
+                    mcpServer.promoteToHost(
+                        result.graphEngine,
+                        result.metadataRepo,
+                        result.consistencyChecker,
+                        updatePipeline
+                    );
+                    
+                    isTerminal = false;
+                    
+                    const heartbeatTimer = setInterval(() => lockManager.heartbeat(), 30000);
+                    lifecycle.track({ dispose: () => clearInterval(heartbeatTimer) });
+                    log('Promotion complete. This session is now the Host.');
+                } catch (err) {
+                    log(`Failed to promote to Host: ${err}. Retrying failover...`);
+                    await attemptFailover();
+                }
+            } else {
+                log(`New Host discovered (PID: ${lock.pid}). Reconnecting as Terminal...`);
+                try {
+                    await ipcCoordinator.connectToHost(lock.ipcPort);
+                    log('Reconnection successful.');
+                } catch (err) {
+                    log(`Failed to reconnect to new Host: ${err}. Retrying failover...`);
+                    await attemptFailover();
+                }
+            }
+        };
+
+        if (isTerminal) {
+            mcpServer.setTerminal(ipcCoordinator);
+            ipcCoordinator.on('disconnected', () => {
+                log('Host connection lost. Triggering failover...');
+                attemptFailover().catch(err => {
+                    log(`Failover failed FATALLY: ${err}`);
+                    process.emit('SIGINT');
+                });
+            });
+        } else {
+            // We are Host. Start IPC Server.
+            const ipcPort = await ipcCoordinator.startHost();
+            ipcCoordinator.setMcpServer(mcpServer);
+            await lockManager.acquire(ipcPort);
+            
+            // Heartbeat
+            const heartbeatTimer = setInterval(() => lockManager.heartbeat(), 30000);
+            lifecycle.track({ dispose: () => clearInterval(heartbeatTimer) });
+        }
+
         // Start MCP Server (Stdio Mode)
         if (isMcpMode) {
             // Handle deferred initialization
             mcpServer.setOnInitialize(async (newPath) => {
+                if (isTerminal) {
+                    log('Deferred initialization in Terminal mode is handled by Host.');
+                    return;
+                }
                 // Clear old resources before switching
                 await lifecycle.disposeAll();
+                await lockManager.release();
+                
+                // Switch LockManager to new project
+                const newLockManager = new LockManager(newPath);
                 const result = await initializeEngine(newPath);
-                // Dynamically update MCP server's references
+                
+                // Re-acquire lock for new project
+                const newIpcPort = await ipcCoordinator.startHost();
+                await newLockManager.acquire(newIpcPort);
+                
+                // Update references
                 mcpServer.setGraphEngine(result.graphEngine);
                 (mcpServer as any).metadataRepo = result.metadataRepo;
                 mcpServer.setUpdatePipeline(updatePipeline);
@@ -206,6 +327,7 @@ Environment Variables:
             mcpServer.setOnPurge(async () => {
                 log('Purging engine resources...');
                 await lifecycle.disposeAll();
+                await lockManager.release();
                 
                 // Reset local references (they will be re-initialized if needed)
                 dbManager = undefined;
@@ -263,7 +385,7 @@ Environment Variables:
         log('--- Startup Sequence Complete ---');
 
         // Handle One-Shot CLI Command
-        if (isOneShot) {
+        if (isOneShot && command) {
             log(`\nExecuting CLI Command: ${command}`);
             try {
                 // Parse remaining args as tool input (basic key-value pairs)
@@ -308,7 +430,10 @@ Environment Variables:
 
         process.on('SIGINT', async () => {
             log('Shutting down...');
+            if (!isTerminal) await lockManager.signalShutdown();
             if (mcpServer) await mcpServer.close();
+            ipcCoordinator.close();
+            await lockManager.release();
             await lifecycle.disposeAll();
             process.exit(0);
         });

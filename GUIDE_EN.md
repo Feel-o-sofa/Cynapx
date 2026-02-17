@@ -5,15 +5,13 @@ Cynapx is a high-performance knowledge graph engine. This guide focuses on how t
 
 ---
 
+[🏠 Home (EN)](./README.md) | [🏠 홈 (KR)](./README_KR.md) | [📖 사용자 가이드 (KR)](./GUIDE_KR.md)
+
+---
+
 ## 2. Getting Started: Installation & Registration
 
-### 2.1 Installation
-Instead of NPM, you can install the latest development version directly from GitHub:
-```bash
-npm install -g Feel-o-sofa/cynapx
-```
-
-### 2.2 MCP Registration via GitHub (npx)
+### MCP Registration via GitHub (npx)
 Using `npx` allows you to always use the latest version from the repository without manual updates.
 
 #### 💎 Gemini CLI

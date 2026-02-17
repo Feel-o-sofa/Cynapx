@@ -5,6 +5,10 @@
 
 ---
 
+[🌐 한국어 README (Korean)](./README_KR.md) | [📖 User Guide (EN)](./GUIDE_EN.md) | [📖 사용자 가이드 (KR)](./GUIDE_KR.md)
+
+---
+
 ## 🌟 Why Cynapx?
 - **Relationship-First**: Extracts inheritance, implementation, and call relationships.
 - **Zero-Pollution**: No files created in your project directory; all data is kept in `~/.cynapx/`.
@@ -60,7 +64,13 @@ codex mcp add cynapx -- npx cynapx --path "$PWD"
 
 ---
 
-## 🛡️ Security & License
+## � Documentation
+- [English User Guide](./GUIDE_EN.md)
+- [한국어 사용자 가이드](./GUIDE_KR.md)
+
+---
+
+## �🛡️ Security & License
 - **Path Traversal Guard**: Securely isolated analysis.
 - **License**: MIT License.
 

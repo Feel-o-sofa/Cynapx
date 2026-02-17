@@ -19,6 +19,14 @@ export function getCentralStorageDir(): string {
     return storageDir;
 }
 
+export function getLocksDir(): string {
+    const locksDir = path.join(getCentralStorageDir(), 'locks');
+    if (!fs.existsSync(locksDir)) {
+        fs.mkdirSync(locksDir, { recursive: true });
+    }
+    return locksDir;
+}
+
 export function getRegistryPath(): string {
     return path.join(getCentralStorageDir(), 'registry.json');
 }

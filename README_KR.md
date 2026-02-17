@@ -5,6 +5,10 @@
 
 ---
 
+[🌐 English README](./README.md) | [📖 User Guide (EN)](./GUIDE_EN.md) | [📖 사용자 가이드 (KR)](./GUIDE_KR.md)
+
+---
+
 ## 🌟 왜 Cynapx인가요?
 - **관계 중심**: 상속, 구현, 호출 관계를 정밀하게 추출합니다.
 - **무결성(Zero-Pollution)**: 프로젝트 폴더를 더럽히지 않고 `~/.cynapx/`에서 관리됩니다.
@@ -38,7 +42,7 @@ MCP 설정 파일에 다음 내용을 추가하세요:
   "mcpServers": {
     "cynapx": {
       "command": "npx",
-      "args": ["-y", "github:Feel-o-sofa/cynapx", "--path", "/프로젝트/절대/경로"]
+      "args": ["-y", "github:Feel-o-sofa/cynapx", "--path", "/프로젝트경로"]
     }
   }
 }
@@ -57,6 +61,12 @@ codex mcp add cynapx -- npx cynapx --path "$PWD"
 - `get_remediation_strategy`: 탐지된 위반에 대한 전문적인 3단계 수정 가이드 제공.
 - `get_risk_profile`: Git 이력과 복잡도를 결합한 통합 위험 점수 산출.
 - `export_graph`: Mermaid 다이어그램 시각화 및 JSON 구조 요약 반환.
+
+---
+
+## 📖 문서 가이드
+- [English User Guide](./GUIDE_EN.md)
+- [한국어 사용자 가이드](./GUIDE_KR.md)
 
 ---
 

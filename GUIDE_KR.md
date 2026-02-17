@@ -5,15 +5,13 @@ Cynapx는 고성능 지식 그래프 엔진입니다. 이 가이드는 GitHub를
 
 ---
 
+[🏠 Home (EN)](./README.md) | [🏠 홈 (KR)](./README_KR.md) | [📖 User Guide (EN)](./GUIDE_EN.md)
+
+---
+
 ## 2. 시작하기: 설치 및 에이전트 등록
 
-### 2.1 설치 방법
-NPM 공식 저장소 대신 GitHub에서 직접 최신 버전을 설치할 수 있습니다:
-```bash
-npm install -g Feel-o-sofa/cynapx
-```
-
-### 2.2 GitHub(npx)를 통한 MCP 등록
+### GitHub(npx)를 통한 MCP 등록
 `npx`를 사용하면 별도의 설치 없이도 항상 저장소의 최신 버전을 유지하며 실행할 수 있습니다.
 
 #### 💎 Gemini CLI
