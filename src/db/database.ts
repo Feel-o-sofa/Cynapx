@@ -6,6 +6,7 @@
 import Database from 'better-sqlite3';
 import fs from 'fs';
 import path from 'path';
+import * as sqliteVec from 'sqlite-vec';
 
 import { Disposable } from '../types';
 
@@ -23,6 +24,10 @@ export class DatabaseManager implements Disposable {
         }
 
         this.db = new Database(dbPath);
+
+        // Load sqlite-vec extension
+        sqliteVec.load(this.db);
+
         // Advanced Performance Tuning for Large Knowledge Graphs
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('foreign_keys = ON');

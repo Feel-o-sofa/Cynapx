@@ -165,3 +165,19 @@ BEGIN
   UPDATE nodes SET fan_in_dynamic = fan_in_dynamic - 1 WHERE id = old.to_id AND old.edge_type = 'dynamic_calls' AND new.edge_type != 'dynamic_calls';
   UPDATE index_metadata SET value = CAST(value AS INTEGER) - 1 WHERE key = 'total_dynamic_calls_count' AND old.edge_type = 'dynamic_calls' AND new.edge_type != 'dynamic_calls';
 END;
+
+-- Semantic Search (Phase 16)
+-- Virtual table for vector search (sqlite-vec)
+-- Dimensions: 896 (Optimized for Jina-code-embeddings-0.5b)
+CREATE VIRTUAL TABLE IF NOT EXISTS node_embeddings USING vec0(
+  rowid INTEGER PRIMARY KEY,
+  embedding float[896]
+);
+
+-- Metadata for embeddings tracking
+CREATE TABLE IF NOT EXISTS embedding_metadata (
+  node_id INTEGER PRIMARY KEY,
+  checksum TEXT, -- Source code checksum when embedded
+  model_name TEXT,
+  FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);

@@ -29,6 +29,7 @@ export class LockManager {
     /**
      * Checks if a valid lock exists for the project.
      * Returns the lock info if it exists and the process is alive.
+     * Automatically cleans up stale locks and residual DB journal files.
      */
     public async getValidLock(): Promise<LockInfo | null> {
         if (!fs.existsSync(this.lockPath)) {
@@ -39,20 +40,35 @@ export class LockManager {
             const data = fs.readFileSync(this.lockPath, 'utf8');
             const lock: LockInfo = JSON.parse(data);
 
-            // Check if process is alive (Unix/Windows compatible for PID 0 signal)
+            // Check if process is alive
             try {
                 process.kill(lock.pid, 0);
                 return lock;
             } catch (e: any) {
-                // On Windows, EPERM means the process exists but we don't have permission to signal it
-                if (e.code === 'EPERM') {
-                    return lock;
-                }
-                // Process is dead, lock is stale
+                // If it's a stale lock, perform a clean-up
+                console.error(`[*] Stale lock detected (PID ${lock.pid} is dead). Cleaning up residual files...`);
+                
+                // 1. Remove the lock file itself
+                if (fs.existsSync(this.lockPath)) fs.unlinkSync(this.lockPath);
+
+                // 2. Clear residual DB journal files that might keep the DB locked
+                const dbPath = this.lockPath.replace('.lock', '.db').replace('locks\\', '');
+                // The lock is in ~/.cynapx/locks/<hash>.lock, DB is in ~/.cynapx/<hash>.db
+                const dbBase = this.lockPath.replace(path.join('locks', path.basename(this.lockPath)), path.basename(this.lockPath, '.lock'));
+                const dir = path.dirname(path.dirname(this.lockPath));
+                const dbFile = path.join(dir, `${path.basename(this.lockPath, '.lock')}.db`);
+                
+                ['', '-wal', '-shm'].forEach(suffix => {
+                    const file = `${dbFile}${suffix}`;
+                    if (fs.existsSync(file)) {
+                        try { fs.unlinkSync(file); } catch(err) { console.error(`[!] Failed to delete ${file}: ${err}`); }
+                    }
+                });
+
                 return null;
             }
         } catch (err) {
-            // Corrupt lock file or other error
+            if (fs.existsSync(this.lockPath)) fs.unlinkSync(this.lockPath);
             return null;
         }
     }

@@ -13,12 +13,15 @@ import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
 import { WorkerPool } from './worker-pool';
 import { toCanonical, readRegistry } from '../utils/paths';
 import { StructuralTagger } from './structural-tagger';
+import { EmbeddingManager } from './embedding-manager';
 import { CodeNode } from '../types';
 
 /**
  * UpdatePipeline manages the incremental update process for the knowledge graph.
  */
 export class UpdatePipeline {
+    private embeddingManager: EmbeddingManager;
+
     constructor(
         private db: SQLiteDatabase.Database,
         private nodeRepo: NodeRepository,
@@ -28,7 +31,9 @@ export class UpdatePipeline {
         private gitService?: GitService,
         private workerPool?: WorkerPool,
         private projectPath?: string
-    ) { }
+    ) { 
+        this.embeddingManager = new EmbeddingManager(this.db, this.nodeRepo);
+    }
 
     private writeLock: Promise<void> = Promise.resolve();
 
@@ -198,6 +203,11 @@ export class UpdatePipeline {
             }
 
             this.db.prepare('COMMIT').run();
+            
+            // Trigger embedding update in background
+            this.embeddingManager.refreshAll().catch(err => {
+                console.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
+            });
         } catch (error) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
             throw error;
@@ -233,6 +243,11 @@ export class UpdatePipeline {
                 }
             }
             this.db.prepare('COMMIT').run();
+
+            // Trigger embedding update in background
+            this.embeddingManager.refreshAll().catch(err => {
+                console.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
+            });
         } catch (e) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
             throw e;

@@ -3,29 +3,33 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { McpServer as SdkMcpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Server as SdkMcpServer } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
+import {
+    CallToolRequestSchema,
+    ErrorCode,
+    ListResourcesRequestSchema,
+    ReadResourceRequestSchema,
+    ListToolsRequestSchema,
+    McpError,
+    ListPromptsRequestSchema,
+    GetPromptRequestSchema
+} from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { GraphEngine } from '../graph/graph-engine';
-import { ConsistencyChecker } from '../indexer/consistency-checker';
-import { MetadataRepository } from '../db/metadata-repository';
-import { CynapxErrorCode } from '../types';
-import * as fs from 'fs';
 import * as path from 'path';
-import { ANCHOR_FILE, readRegistry, addToRegistry, getDatabasePath } from '../utils/paths';
-import { SecurityProvider } from '../utils/security';
-import { ArchitectureEngine } from '../graph/architecture-engine';
-import { RefactoringEngine } from '../graph/refactoring-engine';
-import { OptimizationEngine } from '../graph/optimization-engine';
+import * as fs from 'fs';
 import { RemediationEngine } from '../graph/remediation-engine';
-import { PolicyDiscoverer } from '../graph/policy-discoverer';
-import { IpcCoordinator } from "./ipc-coordinator";
+import { IpcCoordinator } from './ipc-coordinator';
+import { EmbeddingProvider, PythonEmbeddingProvider } from '../indexer/embedding-manager';
+import { WorkspaceManager, EngineContext } from './workspace-manager';
+import { ConsistencyChecker } from '../indexer/consistency-checker';
+import { addToRegistry, getDatabasePath, readRegistry, ANCHOR_FILE } from '../utils/paths';
+import { CynapxErrorCode } from '../types';
+import { SecurityProvider } from '../utils/security';
 
 /**
  * [Phase 14] Zod Schemas for Strict Protocol Reinforcement
  */
-// ... (omitting schemas for brevity as they are unchanged)
 const CodeNodeSchema = z.object({
     qualified_name: z.string(),
     symbol_type: z.string(),
@@ -57,147 +61,111 @@ const ArchitectureViolationSchema = z.object({
 
 export class McpServer {
     private sdkServer: SdkMcpServer;
-    private architectureEngine!: ArchitectureEngine;
-    private refactoringEngine!: RefactoringEngine;
-    private optimizationEngine!: OptimizationEngine;
+    public workspaceManager: WorkspaceManager;
+    private embeddingProvider: EmbeddingProvider;
     private remediationEngine: RemediationEngine;
-    private policyDiscoverer!: PolicyDiscoverer;
-    private isCheckingConsistency: boolean = false;
     private readyPromise: Promise<void>;
     private resolveReady?: () => void;
     private isInitialized: boolean = false;
     private isTerminal: boolean = false;
     private terminalCoordinator?: IpcCoordinator;
+    
+    private isCheckingConsistency: boolean = false;
     private onInitializeCallback?: (newPath: string) => Promise<void>;
     private onPurgeCallback?: () => Promise<void>;
-    private securityProvider?: SecurityProvider;
 
-    constructor(
-        public graphEngine?: GraphEngine,
-        public metadataRepo?: MetadataRepository,
-        public consistencyChecker?: ConsistencyChecker
-    ) {
-        let version = "1.0.2";
+    constructor(workspaceManager?: WorkspaceManager) {
+        let version = "1.0.5";
         try {
             const pkgPath = path.join(__dirname, '..', '..', 'package.json');
-            if (fs.existsSync(pkgPath)) {
-                version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
-            } else {
-                // Try alternate path for dist
-                const distPkgPath = path.join(__dirname, '..', 'package.json');
-                if (fs.existsSync(distPkgPath)) {
-                    version = JSON.parse(fs.readFileSync(distPkgPath, 'utf8')).version;
-                }
-            }
+            if (fs.existsSync(pkgPath)) version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
         } catch (e) {}
 
         this.sdkServer = new SdkMcpServer({
-            name: "cynapx",
-            version: version
+            name: "cynapx", 
+            version 
         }, {
+            capabilities: { resources: {}, tools: {}, prompts: {} },
             instructions: `
 # Cynapx Operator Manual (Phase 14)
-
 You are operating the Cynapx high-performance code knowledge engine. Adhere to these protocol invariants:
-
 1. **Investigation-First**: Before modifying code, always use 'analyze_impact' and 'get_symbol_details'.
-2. **Context Efficiency**: For symbols with >100 lines, 'get_symbol_details' automatically prunes the output. Use 'read_file' with specific offsets only if full logic is required. Prefer 'summary_only: true' for initial discovery.
-3. **Architectural Integrity**: Use 'check_architecture_violations' after every major refactor. If violations are found, use 'get_remediation_strategy' for expert structural guidance.
-4. **Data Purity**: Follow the Zero-Pollution principle. Do not create local configuration files unless explicitly asked.
-5. **Consistency**: Monitor 'graph://ledger' to ensure the Knowledge Graph matches the physical file system state. Use 'check_consistency --repair' if sums do not match.
+2. **Context Efficiency**: For symbols with >100 lines, 'get_symbol_details' automatically prunes the output. Use 'read_file' with specific offsets for full logic.
+3. **Architectural Integrity**: Use 'check_architecture_violations' after major refactors.
+4. **Data Purity**: Follow the Zero-Pollution principle. No local configs unless asked.
+5. **Consistency**: Monitor 'graph://ledger'. Use 'check_consistency --repair' if sums do not match.
 `
         });
 
-        if (this.graphEngine) {
-            this.architectureEngine = new ArchitectureEngine(this.graphEngine);
-            this.refactoringEngine = new RefactoringEngine(this.graphEngine);
-            this.optimizationEngine = new OptimizationEngine(this.graphEngine);
-            this.policyDiscoverer = new PolicyDiscoverer(this.graphEngine);
-        }
+        this.workspaceManager = workspaceManager || new WorkspaceManager();
+        this.embeddingProvider = new PythonEmbeddingProvider();
         this.remediationEngine = new RemediationEngine();
 
-        this.readyPromise = new Promise((resolve) => {
-            this.resolveReady = resolve;
-        });
+        this.readyPromise = new Promise((resolve) => { this.resolveReady = resolve; });
+        this.registerHandlers();
+    }
+
+    private getContext(): EngineContext {
+        const ctx = this.workspaceManager.getActiveContext();
+        if (!ctx) throw new McpError(ErrorCode.InvalidRequest, "No active project in workspace.");
+        return ctx;
     }
 
     public setTerminal(coordinator: IpcCoordinator) {
         this.isTerminal = true;
         this.terminalCoordinator = coordinator;
-        // If we are a terminal, we are "ready" to proxy immediately
         this.markReady(true);
     }
 
-    /**
-     * Promotes this Terminal session to a Host session by injecting the engine.
-     */
-    public promoteToHost(
-        graphEngine: GraphEngine,
-        metadataRepo: MetadataRepository,
-        consistencyChecker?: ConsistencyChecker,
-        updatePipeline?: any
-    ) {
+    public promoteToHost() {
         this.isTerminal = false;
         this.terminalCoordinator = undefined;
-        this.graphEngine = graphEngine;
-        this.metadataRepo = metadataRepo;
-        this.consistencyChecker = consistencyChecker;
-        (this as any).updatePipeline = updatePipeline;
-
-        // Re-initialize engines with the new graphEngine
-        this.architectureEngine = new ArchitectureEngine(graphEngine);
-        this.refactoringEngine = new RefactoringEngine(graphEngine);
-        this.optimizationEngine = new OptimizationEngine(graphEngine);
-        this.policyDiscoverer = new PolicyDiscoverer(graphEngine);
-        this.remediationEngine = new RemediationEngine();
+        console.error("[McpServer] Promoted to Host mode.");
     }
 
-    /**
-     * Registers all standard Cynapx handlers (tools, resources, prompts) to the SDK server.
-     * This is public to allow registration on fresh server instances for new sessions.
-     */
-    public registerHandlers() {
-        this.registerTools();
-        this.registerResources();
-        this.registerPrompts();
-    }
-
-    public markReady(initialized: boolean = true) {
-        this.isInitialized = initialized;
-        if (this.resolveReady) {
+    public markReady(ready: boolean) {
+        if (ready && this.resolveReady) {
             this.resolveReady();
-            console.error(`Cynapx MCP Server marked as READY (Initialized: ${initialized})`);
-        }
-        if (initialized) {
+            this.isInitialized = true;
             this.startHealthMonitor();
         }
     }
 
     private startHealthMonitor() {
-        // Run health check every 5 minutes
+        if (this.isTerminal) return;
         setInterval(async () => {
-            if (this.isCheckingConsistency || !this.consistencyChecker) return;
+            if (this.isCheckingConsistency) return;
+            try {
+                const ctx = this.workspaceManager.getActiveContext();
+                if (!ctx) return;
+                
+                const stats = ctx.metadataRepo!.getLedgerStats();
+                const isConsistent = 
+                    stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
+                    stats.metadata.total_calls_count === stats.actual.sum_fan_out;
 
-            const stats = this.metadataRepo!.getLedgerStats();
-            const isConsistent = 
-                stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
-                stats.metadata.total_calls_count === stats.actual.sum_fan_out &&
-                stats.metadata.total_dynamic_calls_count === stats.actual.sum_fan_in_dynamic &&
-                stats.metadata.total_dynamic_calls_count === stats.actual.sum_fan_out_dynamic;
-
-            if (!isConsistent) {
-                console.error("HealthMonitor: Ledger inconsistency detected! Triggering auto-repair...");
-                this.isCheckingConsistency = true;
-                try {
-                    await this.consistencyChecker.validate(true, false);
-                    console.error("HealthMonitor: Auto-repair completed successfully.");
-                } catch (err) {
-                    console.error(`HealthMonitor: Auto-repair failed: ${err}`);
-                } finally {
+                if (!isConsistent) {
+                    console.error("[HealthMonitor] Ledger inconsistency detected. Triggering auto-repair...");
+                    this.isCheckingConsistency = true;
+                    const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, (ctx as any).gitService, (ctx as any).updatePipeline, ctx.projectPath);
+                    await checker.validate(true, false);
                     this.isCheckingConsistency = false;
                 }
-            }
+            } catch (err) {}
         }, 5 * 60 * 1000);
+    }
+
+    private async waitUntilReady() {
+        if (!this.isInitialized) {
+            const currentPath = process.cwd();
+            const registry = readRegistry();
+            const isRegistered = registry.some(p => currentPath.toLowerCase().startsWith(p.path.toLowerCase()));
+            if (!isRegistered) {
+                throw new McpError(ErrorCode.InvalidRequest, "Project not initialized. Please use 'initialize_project' first.");
+            }
+            this.isInitialized = true;
+        }
+        await this.readyPromise;
     }
 
     public setOnInitialize(callback: (newPath: string) => Promise<void>) {
@@ -208,1269 +176,494 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
         this.onPurgeCallback = callback;
     }
 
-    public setUpdatePipeline(pipeline: any) {
-        (this as any).updatePipeline = pipeline;
-    }
-
-    private async waitUntilReady() {
-        // Only wait for the initial startup promise
-        if (!this.isInitialized) {
-            const currentPath = process.cwd();
-            const registry = readRegistry();
-            const isRegistered = registry.some(p => currentPath.toLowerCase().startsWith(p.path.toLowerCase()));
-            
-            if (!isRegistered) {
-                throw {
-                    error_code: CynapxErrorCode.INITIALIZATION_REQUIRED,
-                    message: "Project not initialized. Please use 'initialize_project' first."
-                };
-            }
-            this.isInitialized = true;
-        }
-    }
-
-    private registerResources() {
-        this.sdkServer.registerResource(
-            "Graph Summary",
-            "graph://summary",
-            {
-                description: "A summary of the current code knowledge graph"
-            },
-            async (uri) => {
-                try {
-                    await this.waitUntilReady();
-                } catch (e: any) {
-                    return {
-                        contents: [{
-                            uri: uri.href,
-                            mimeType: "application/json",
-                            text: JSON.stringify({ error: e.message, setup_required: true })
-                        }]
-                    };
-                }
-                const db = (this.graphEngine!.nodeRepo as any).db;
-                const nodeCount = db.prepare("SELECT COUNT(*) as count FROM nodes").get().count;
-                const edgeCount = db.prepare("SELECT COUNT(*) as count FROM edges").get().count;
-                const fileCount = db.prepare("SELECT COUNT(DISTINCT file_path) as count FROM nodes").get().count;
-
-                return {
-                    contents: [{
-                        uri: uri.href,
-                        mimeType: "application/json",
-                        text: JSON.stringify({
-                            nodes: nodeCount,
-                            edges: edgeCount,
-                            files: fileCount,
-                            last_updated: new Date().toISOString()
-                        }, null, 2)
-                    }]
-                };
-            }
-        );
-
-        this.sdkServer.registerResource(
-            "Graph Ledger",
-            "graph://ledger",
-            {
-                description: "Global call ledger and consistency metrics (Conservation Law)"
-            },
-            async (uri) => {
-                try {
-                    await this.waitUntilReady();
-                } catch (e: any) {
-                    return {
-                        contents: [{
-                            uri: uri.href,
-                            mimeType: "application/json",
-                            text: JSON.stringify({ error: e.message, setup_required: true })
-                        }]
-                    };
-                }
-
-                const stats = this.metadataRepo!.getLedgerStats();
-                const isConsistent = 
-                    stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
-                    stats.metadata.total_calls_count === stats.actual.sum_fan_out &&
-                    stats.metadata.total_dynamic_calls_count === stats.actual.sum_fan_in_dynamic &&
-                    stats.metadata.total_dynamic_calls_count === stats.actual.sum_fan_out_dynamic;
-
-                return {
-                    contents: [{
-                        uri: uri.href,
-                        mimeType: "application/json",
-                        text: JSON.stringify({
-                            ledger: stats.metadata,
-                            actual_sums: stats.actual,
-                            is_consistent: isConsistent,
-                            conservation_law: "SUM(fan_in) == SUM(fan_out) == total_calls_count",
-                            last_updated: new Date().toISOString()
-                        }, null, 2)
-                    }]
-                };
-            }
-        );
-
-        this.sdkServer.registerResource(
-            "Graph Hotspots",
-            "graph://hotspots",
-            {
-                description: "Top technical debt hotspots (High complexity and coupling)"
-            },
-            async (uri) => {
-                try {
-                    await this.waitUntilReady();
-                } catch (e: any) {
-                    return {
-                        contents: [{
-                            uri: uri.href,
-                            mimeType: "application/json",
-                            text: JSON.stringify({ error: e.message, setup_required: true })
-                        }]
-                    };
-                }
-
-                const db = (this.graphEngine!.nodeRepo as any).db;
-                
-                const topComplexity = db.prepare("SELECT qualified_name, symbol_type, cyclomatic FROM nodes ORDER BY cyclomatic DESC LIMIT 10").all();
-                const topFanIn = db.prepare("SELECT qualified_name, symbol_type, fan_in FROM nodes ORDER BY fan_in DESC LIMIT 10").all();
-                const topFanOut = db.prepare("SELECT qualified_name, symbol_type, fan_out FROM nodes ORDER BY fan_out DESC LIMIT 10").all();
-
-                return {
-                    contents: [{
-                        uri: uri.href,
-                        mimeType: "application/json",
-                        text: JSON.stringify({
-                            by_complexity: topComplexity,
-                            by_fan_in: topFanIn,
-                            by_fan_out: topFanOut,
-                            last_updated: new Date().toISOString()
-                        }, null, 2)
-                    }]
-                };
-            }
-        );
-
-        this.sdkServer.registerResource(
-            "Logical Clusters",
-            "graph://clusters",
-            {
-                description: "Semantic groupings of symbols into logical modules (Core, Utility, Domain)"
-            },
-            async (uri) => {
-                try {
-                    await this.waitUntilReady();
-                } catch (e: any) {
-                    return {
-                        contents: [{
-                            uri: uri.href,
-                            mimeType: "application/json",
-                            text: JSON.stringify({ error: e.message, setup_required: true })
-                        }]
-                    };
-                }
-
-                const db = (this.graphEngine!.nodeRepo as any).db;
-                const clusters = db.prepare("SELECT * FROM logical_clusters").all();
-                const result = clusters.map((c: any) => {
-                    const nodeCount = db.prepare("SELECT COUNT(*) as count FROM nodes WHERE cluster_id = ?").get(c.id).count;
-                    return { ...c, node_count: nodeCount };
-                });
-
-                return {
-                    contents: [{
-                        uri: uri.href,
-                        mimeType: "application/json",
-                        text: JSON.stringify(result, null, 2)
-                    }]
-                };
-            }
-        );
-    }
-
-    private registerPrompts() {
-        this.sdkServer.registerPrompt(
-            "explain-impact",
-            {
-                description: "Explain the impact of changing a specific symbol",
-                argsSchema: {
-                    qualified_name: z.string().describe("The qualified name of the symbol")
-                }
-            },
-            async ({ qualified_name }) => {
-                await this.waitUntilReady();
-                return {
-                    messages: [{
-                        role: "user",
-                        content: {
-                            type: "text",
-                            text: `Please analyze the impact of changing the symbol '${qualified_name}'. Use the 'analyze_impact' tool to find incoming dependencies and explain what might break.`
-                        }
-                    }]
-                };
-            }
-        );
-
-        this.sdkServer.registerPrompt(
-            "check-health",
-            {
-                description: "Check the health and consistency of the code knowledge graph"
-            },
-            async () => {
-                await this.waitUntilReady();
-                return {
-                    messages: [{
-                        role: "user",
-                        content: {
-                            type: "text",
-                            text: "Please run a consistency check on the knowledge graph using the 'check_consistency' tool and report any issues found."
-                        }
-                    }]
-                };
-            }
-        );
-
-        this.sdkServer.registerPrompt(
-            "refactor-safety",
-            {
-                description: "Perform a comprehensive safety check before refactoring a symbol",
-                argsSchema: {
-                    qualified_name: z.string().describe("The qualified name of the symbol to be refactored")
-                }
-            },
-            async ({ qualified_name }) => {
-                await this.waitUntilReady();
-                return {
-                    messages: [{
-                        role: "user",
-                        content: {
-                            type: "text",
-                            text: `I am planning to refactor the symbol '${qualified_name}'. 
-Please follow this safety protocol:
-1. Read 'graph://ledger' to verify the current index integrity.
-2. Use 'analyze_impact' with 'qualified_name: ${qualified_name}' to identify all incoming dependencies.
-3. Use 'get_symbol_details' to check the complexity and metrics of '${qualified_name}'.
-4. Provide a risk assessment summary: (Low/Medium/High risk) based on the number of dependencies and complexity.`
-                        }
-                    }]
-                };
-            }
-        );
-    }
-
-    public setConsistencyChecker(checker: ConsistencyChecker) {
-        this.consistencyChecker = checker;
-    }
-
-    public setSecurityProvider(provider: SecurityProvider) {
-        this.securityProvider = provider;
-    }
-
-    /**
-     * Updates the GraphEngine and re-initializes all specialized analysis engines.
-     * This is critical for maintaining valid DB connections during project switching.
-     */
-    public setGraphEngine(engine: GraphEngine) {
-        this.graphEngine = engine;
-        this.architectureEngine = new ArchitectureEngine(engine);
-        this.refactoringEngine = new RefactoringEngine(engine);
-        this.optimizationEngine = new OptimizationEngine(engine);
-        this.remediationEngine = new RemediationEngine();
-        this.policyDiscoverer = new PolicyDiscoverer(engine);
-    }
-
-    /**
-     * Registers all standard Cynapx handlers (tools, resources, prompts) to the SDK server.
-     */
-
-
-    private registerTools() {
-        // get_setup_context
-        this.sdkServer.registerTool(
-            "get_setup_context",
-            {
-                description: "Get information needed to initialize a project when .cynapx-config is missing. Returns registry projects and current path.",
-                inputSchema: z.object({})
-            },
-            async () => {
-                const registry = readRegistry();
-                const currentPath = process.cwd();
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify({
-                            status: this.isInitialized ? "ALREADY_INITIALIZED" : "INITIALIZATION_REQUIRED",
-                            current_directory: currentPath,
-                            registered_projects: registry,
-                            instructions: "Choose to (1) Load an existing project, (2) Initialize at current directory, or (3) Initialize at custom path."
-                        }, null, 2)
-                    }]
-                };
-            }
-        );
-
-        // initialize_project
-        this.sdkServer.registerTool(
-            "initialize_project",
-            {
-                description: "Initialize a project and register it in the central registry. By default, it operates in Zero-Pollution mode.",
-                inputSchema: z.object({
-                    mode: z.enum(['current', 'existing', 'custom']).describe("Setup mode"),
-                    path: z.string().optional().describe("Absolute path for 'existing' or 'custom' mode"),
-                    zero_pollution: z.boolean().optional().default(true).describe("If true (default), do NOT create .cynapx-config file in the project directory.")
-                })
-            },
-            async ({ mode, path: targetPath, zero_pollution }) => {
-                let projectPath = process.cwd();
-                if (mode === 'existing' || mode === 'custom') {
-                    if (!targetPath) return { isError: true, content: [{ type: "text", text: "Path is required for this mode." }] };
-                    projectPath = path.resolve(targetPath);
-                }
-
-                try {
-                    if (!fs.existsSync(projectPath)) {
-                        fs.mkdirSync(projectPath, { recursive: true });
-                    }
-
-                    if (!zero_pollution) {
-                        const anchorPath = path.join(projectPath, ANCHOR_FILE);
-                        if (!fs.existsSync(anchorPath)) {
-                            fs.writeFileSync(anchorPath, JSON.stringify({ created_at: new Date().toISOString() }, null, 2));
-                        }
-                    }
-                    
-                    addToRegistry(projectPath);
-
-                    if (this.onInitializeCallback) {
-                        await this.onInitializeCallback(projectPath);
-                    }
-
-                    this.markReady(true);
-
-                    return {
-                        content: [{ type: "text", text: `Successfully initialized project at ${projectPath}${zero_pollution ? ' (Zero-Pollution Mode)' : ''}. Analysis engine is now active.` }]
-                    };
-                } catch (err) {
-                    return { isError: true, content: [{ type: "text", text: `Initialization failed: ${err}` }] };
-                }
-            }
-        );
-
-        // check_architecture_violations
-        this.sdkServer.registerTool(
-            "check_architecture_violations",
-            {
-                description: "Analyzes the code knowledge graph to detect violations of architectural policies (e.g., layer violations, illegal role dependencies).",
-                inputSchema: z.object({})
-            },
-            async () => {
-                await this.waitUntilReady();
-                const violations = await this.architectureEngine.checkViolations();
-                
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify({
-                            status: "SUCCESS",
-                            violation_count: violations.length,
-                            violations: violations.map(v => ({
-                                policy_id: v.policyId,
-                                description: v.description,
-                                source: {
-                                    qname: v.source.qualified_name,
-                                    tags: v.source.tags
-                                },
-                                target: {
-                                    qname: v.target.qualified_name,
-                                    tags: v.target.tags
-                                },
-                                edge_type: v.edge.edge_type
-                            }))
-                        }, null, 2)
-                    }]
-                };
-            }
-        );
-
-        // get_remediation_strategy
-        this.sdkServer.registerTool(
-            "get_remediation_strategy",
-            {
-                description: "Provides actionable refactoring strategies for a specific architectural violation.",
-                inputSchema: z.object({
-                    violation: ArchitectureViolationSchema.describe("The violation object returned from 'check_architecture_violations'")
-                })
-            },
-            async ({ violation }) => {
-                await this.waitUntilReady();
-                const strategy = this.remediationEngine.getRemediationStrategy(violation as any);
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(strategy, null, 2)
-                    }]
-                };
-            }
-        );
-
-        // search_symbols
-        this.sdkServer.registerTool(
-            "search_symbols",
-            {
-                description: "Search for symbols (functions, classes, variables) in the code knowledge graph using a search query. Returns basic metadata for matching symbols.",
-                inputSchema: z.object({
-                    query: z.string().describe("Search query for symbol names (supports partial matches)"),
-                    limit: z.number().optional().default(10).describe("Maximum number of results to return"),
-                    symbol_type: z.enum(['file', 'module', 'class', 'interface', 'method', 'function', 'field', 'test', 'package']).optional().describe("Filter by symbol type"),
-                    language: z.string().optional().describe("Filter by programming language (e.g., 'typescript', 'python')"),
-                    visibility: z.enum(['public', 'protected', 'internal', 'private']).optional().describe("Filter by visibility")
-                })
-            },
-            async ({ query, limit, symbol_type, language, visibility }) => {
-                await this.waitUntilReady();
-                const nodes = this.graphEngine!.nodeRepo.searchSymbols(query, limit || 10, {
-                    symbol_type: symbol_type as any,
-                    language,
-                    visibility: visibility as any
-                });
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(nodes.map(n => ({
-                            qname: n.qualified_name,
-                            type: n.symbol_type,
-                            file: n.file_path,
-                            language: n.language,
-                            visibility: n.visibility,
-                            signature: n.signature,
-                            return_type: n.return_type
-                        })), null, 2)
-                    }]
-                };
-            }
-        );
-
-        // get_callers
-        this.sdkServer.registerTool(
-            "get_callers",
-            {
-                description: "Get all direct callers of a specific symbol.",
-                inputSchema: z.object({
-                    qualified_name: z.string().describe("The qualified name of the symbol to find callers for")
-                })
-            },
-            async ({ qualified_name }) => {
-                await this.waitUntilReady();
-                const node = this.graphEngine!.getNodeByQualifiedName(qualified_name);
-                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-                
-                const edges = this.graphEngine!.getIncomingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
-                const callers = edges.map(e => {
-                    const callerNode = this.graphEngine!.getNodeById(e.from_id);
-                    return {
-                        qname: callerNode?.qualified_name,
-                        type: callerNode?.symbol_type,
-                        file: callerNode?.file_path,
-                        line: e.call_site_line,
-                        dynamic: e.dynamic
-                    };
-                });
-                return { content: [{ type: "text", text: JSON.stringify(callers, null, 2) }] };
-            }
-        );
-
-        // get_callees
-        this.sdkServer.registerTool(
-            "get_callees",
-            {
-                description: "Get all symbols directly called by a specific symbol.",
-                inputSchema: z.object({
-                    qualified_name: z.string().describe("The qualified name of the symbol to find callees for")
-                })
-            },
-            async ({ qualified_name }) => {
-                await this.waitUntilReady();
-                const node = this.graphEngine!.getNodeByQualifiedName(qualified_name);
-                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-                
-                const edges = this.graphEngine!.getOutgoingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
-                const callees = edges.map(e => {
-                    const calleeNode = this.graphEngine!.getNodeById(e.to_id);
-                    return {
-                        qname: calleeNode?.qualified_name,
-                        type: calleeNode?.symbol_type,
-                        file: calleeNode?.file_path,
-                        line: e.call_site_line,
-                        dynamic: e.dynamic
-                    };
-                });
-                return { content: [{ type: "text", text: JSON.stringify(callees, null, 2) }] };
-            }
-        );
-
-        // get_related_tests
-        this.sdkServer.registerTool(
-            "get_related_tests",
-            {
-                description: "Get all test symbols associated with a specific production symbol.",
-                inputSchema: z.object({
-                    qualified_name: z.string().describe("The qualified name of the production symbol")
-                })
-            },
-            async ({ qualified_name }) => {
-                await this.waitUntilReady();
-                const node = this.graphEngine!.getNodeByQualifiedName(qualified_name);
-                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-                
-                // Find edges where edge_type is 'tests'
-                const incomingTests = this.graphEngine!.getIncomingEdges(node.id).filter(e => e.edge_type === 'tests');
-                const outgoingTests = this.graphEngine!.getOutgoingEdges(node.id).filter(e => e.edge_type === 'tests');
-                
-                const testNodes = [...incomingTests, ...outgoingTests].map(e => {
-                    const testId = e.edge_type === 'tests' ? (incomingTests.includes(e) ? e.from_id : e.to_id) : -1;
-                    const testNode = this.graphEngine!.getNodeById(testId);
-                    return {
-                        qname: testNode?.qualified_name,
-                        file: testNode?.file_path,
-                        type: testNode?.symbol_type
-                    };
-                }).filter(n => n.qname !== undefined);
-
-                return { content: [{ type: "text", text: JSON.stringify(testNodes, null, 2) }] };
-            }
-        );
-
-        // perform_clustering
-        this.sdkServer.registerTool(
-            "perform_clustering",
-            {
-                description: "Execute the semantic clustering algorithm to group symbols into logical modules (Core, Utility, Domain).",
-                inputSchema: z.object({})
-            },
-            async () => {
-                await this.waitUntilReady();
-                const result = await this.graphEngine!.performClustering();
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(result, null, 2)
-                    }]
-                };
-            }
-        );
-
-        // get_symbol_details
-        this.sdkServer.registerTool(
-            "get_symbol_details",
-            {
-                description: "Get comprehensive details about a specific symbol by its qualified name, including its type, location, metrics (complexity, fan-in/out), and source code snippet.",
-                inputSchema: z.object({
-                    qualified_name: z.string().describe("The full qualified name of the symbol (e.g., 'src/utils/paths.ts/getDatabasePath')"),
-                    include_source: z.boolean().optional().default(true).describe("Whether to include the source code snippet (default: true)"),
-                    summary_only: z.boolean().optional().default(false).describe("If true, returns only basic metadata and metrics without relations or source code.")
-                })
-            },
-            async ({ qualified_name, include_source, summary_only }) => {
-                await this.waitUntilReady();
-                const node = this.graphEngine!.getNodeByQualifiedName(qualified_name);
-                if (!node || node.id === undefined) {
-                    return {
-                        isError: true,
-                        content: [{
-                            type: "text",
-                            text: JSON.stringify({
-                                error_code: CynapxErrorCode.SYMBOL_NOT_FOUND,
-                                message: `Symbol '${qualified_name}' not found.`,
-                                qualified_name
-                            }, null, 2)
-                        }]
-                    };
-                }
-
-                let text = `### Symbol: ${node.qualified_name}\n`;
-                text += `- **Type**: \`${node.symbol_type}\`\n`;
-                if (node.modifiers && node.modifiers.length > 0) text += `- **Modifiers**: \`${node.modifiers.join(', ')}\`\n`;
-                if (node.signature) text += `- **Signature**: \`${node.signature}\`\n`;
-                if (node.return_type) text += `- **Return Type**: \`${node.return_type}\`\n`;
-                if (node.field_type) text += `- **Field Type**: \`${node.field_type}\`\n`;
-                text += `- **File**: \`${node.file_path}\` (line ${node.start_line}-${node.end_line})\n`;
-                
-                if (node.remote_project_path) {
-                    text += `- **Remote Project**: \`${node.remote_project_path}\` (Boundaryless Discovery)\n`;
-                }
-                
-                if (node.tags && node.tags.length > 0) {
-                    text += `- **Structural Tags**: ${node.tags.map(t => `\`${t}\``).join(', ')}\n`;
-                }
-
-                if (node.history && node.history.length > 0) {
-                    text += `\n#### Historical Evidence:\n`;
-                    node.history.forEach(commit => {
-                        text += `- **[${commit.hash.substring(0, 7)}]** ${commit.message} (by *${commit.author}* on ${commit.date})\n`;
-                    });
-                }
-
-                text += `\n#### Metrics:\n`;
-                if (node.loc !== undefined) text += `- **LOC**: ${node.loc}\n`;
-                if (node.cyclomatic !== undefined) text += `- **Cyclomatic Complexity**: ${node.cyclomatic}\n`;
-                text += `- **Static Coupling**: Fan-in: ${node.fan_in || 0}, Fan-out: ${node.fan_out || 0}\n`;
-                text += `- **Dynamic Coupling**: Fan-in: ${node.fan_in_dynamic || 0}, Fan-out: ${node.fan_out_dynamic || 0}\n`;
-                
-                if (summary_only) {
-                    return { content: [{ type: "text", text }] };
-                }
-
-                const outgoing = this.graphEngine!.getOutgoingEdges(node.id);
-                const incoming = this.graphEngine!.getIncomingEdges(node.id);
-                
-                text += `\n#### Relationships:\n`;
-                text += `- **Outgoing Edges**: ${outgoing.length}\n`;
-                text += `- **Incoming Edges**: ${incoming.length}\n`;
-
-                if (include_source === false) {
-                    return { content: [{ type: "text", text }] };
-                }
-
-                // Read source code from file with Path Traversal Protection
-                try {
-                    if (this.securityProvider) {
-                        this.securityProvider.validatePath(node.file_path);
-                    }
-                    
-                        const content = fs.readFileSync(node.file_path, 'utf8');
-                        const lines = content.split('\n');
-                        const sourceCodeLines = lines.slice(node.start_line - 1, node.end_line);
-                        
-                        const lang = node.file_path.endsWith('.py') ? 'python' : 
-                                     (node.file_path.endsWith('.ts') || node.file_path.endsWith('.tsx')) ? 'typescript' : 'javascript';
-                        
-                        // Smart Pruning: if more than 100 lines, truncate to 50
-                        const displayCode = sourceCodeLines.length > 100 ? 
-                            sourceCodeLines.slice(0, 50).join('\n') + '\n\n// ... [Truncated for Token Optimization: Use read_file for full content] ...' :
-                            sourceCodeLines.join('\n');
-
-                        text += `\n#### Source Code Snippet:\n\`\`\`${lang}\n${displayCode}\n\`\`\`\n`;
-                } catch (err: any) {
-                    if (err.code === CynapxErrorCode.PATH_TRAVERSAL_DENIED) {
-                        text += `\n> [!CAUTION]\n> **Security Warning**: Access to file outside project directory denied. (ErrorCode: ${CynapxErrorCode.PATH_TRAVERSAL_DENIED})\n`;
-                    } else {
-                        text += `\n> [!WARNING]\n> Could not read source code: ${err}\n`;
-                    }
-                }
-
-                return {
-                    content: [{
-                        type: "text",
-                        text: text
-                    }]
-                };
-            }
-        );
-
-        // analyze_impact
-        this.sdkServer.registerTool(
-            "analyze_impact",
-            {
-                description: "Analyze the ripple effect of changing a symbol by identifying all other symbols that depend on it (transitively). Essential for risk assessment before refactoring.",
-                inputSchema: z.object({
-                    qualified_name: z.string().describe("The qualified name of the symbol to analyze"),
-                    max_depth: z.number().optional().default(3).describe("Maximum depth of impact analysis traversal"),
-                    use_cache: z.boolean().optional().default(true).describe("Whether to use cached results for faster response (default: true)")
-                })
-            },
-            async ({ qualified_name, max_depth, use_cache }) => {
-                await this.waitUntilReady();
-                const targetNode = this.graphEngine!.getNodeByQualifiedName(qualified_name);
-                if (!targetNode || targetNode.id === undefined) {
-                    return {
-                        isError: true,
-                        content: [{ type: "text", text: "Symbol not found" }]
-                    };
-                }
-                const results = this.graphEngine!.traverse(targetNode.id, 'BFS', {
-                    direction: 'incoming',
-                    maxDepth: max_depth || 3,
-                    useCache: use_cache
-                });
-
-                const formatted = results.map(r => {
-                    const pathSteps = [...r.path].reverse();
-                    const impactPath = pathSteps.map((step, index) => {
-                        const n = this.graphEngine!.getNodeById(step.nodeId);
-                        const qname = n ? n.qualified_name : 'unknown';
-                        if (index < pathSteps.length - 1) {
-                            const edge = step.edge;
-                            const lineInfo = edge?.call_site_line ? ` (line ${edge.call_site_line})` : '';
-                            return `${qname}${lineInfo}`;
-                        }
-                        return qname;
-                    });
-                    return {
-                        node: r.node.qualified_name,
-                        distance: r.distance,
-                        impact_path: impactPath.join(' -> ')
-                    };
-                });
-
-                return {
-                    content: [{ type: "text", text: JSON.stringify(formatted, null, 2) }]
-                };
-            }
-        );
-
-        // propose_refactor
-        this.sdkServer.registerTool(
-            "propose_refactor",
-            {
-                description: "Proposes a refactoring plan for a given symbol based on risk assessment (fan-in, complexity) and structural role.",
-                inputSchema: z.object({
-                    qualified_name: z.string().describe("The qualified name of the symbol to analyze for refactoring")
-                })
-            },
-            async ({ qualified_name }) => {
-                await this.waitUntilReady();
-                const proposal = await this.refactoringEngine.proposeRefactor(qualified_name);
-                if (!proposal) {
-                    return { isError: true, content: [{ type: "text", text: "Symbol not found or no impact detected." }] };
-                }
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(proposal, null, 2)
-                    }]
-                };
-            }
-        );
-
-        // get_risk_profile
-        this.sdkServer.registerTool(
-            "get_risk_profile",
-            {
-                description: "Calculates a comprehensive Risk Profile for a symbol, considering complexity, coupling, and historical churn.",
-                inputSchema: z.object({
-                    qualified_name: z.string().describe("The full qualified name of the symbol")
-                })
-            },
-            async ({ qualified_name }) => {
-                await this.waitUntilReady();
-                const profile = await this.refactoringEngine.getRiskProfile(qualified_name);
-                if (!profile) {
-                    return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-                }
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(profile, null, 2)
-                    }]
-                };
-            }
-        );
-
-        // get_hotspots
-        this.sdkServer.registerTool(
-            "get_hotspots",
-            {
-                description: "Identify potential technical debt or complex areas by finding symbols with high complexity or high coupling (fan-in/out).",
-                inputSchema: z.object({
-                    metric: z.enum(['cyclomatic', 'fan_in', 'fan_out', 'loc']).describe("The metric to use for identifying hotspots (cyclomatic: logic complexity, fan_in: high dependency, fan_out: high usage)"),
-                    threshold: z.number().optional().default(0).describe("Minimum metric value to filter results"),
-                    symbol_type: z.string().optional().describe("Filter results by symbol type (e.g., 'function', 'class')")
-                })
-            },
-            async ({ metric, threshold, symbol_type }) => {
-                await this.waitUntilReady();
-                const db = (this.graphEngine!.nodeRepo as any).db;
-                
-                // Whitelist allowed metrics to prevent SQL Injection
-                const allowedMetrics = ['cyclomatic', 'fan_in', 'fan_out', 'loc'];
-                if (!allowedMetrics.includes(metric)) {
-                    return { isError: true, content: [{ type: "text", text: "Invalid metric" }] };
-                }
-
-                const query = `
-                    SELECT * FROM nodes 
-                    WHERE ${metric} >= ? 
-                    ${symbol_type ? 'AND symbol_type = ?' : ''}
-                    ORDER BY ${metric} DESC
-                    LIMIT 20
-                `;
-                const stmt = db.prepare(query);
-                const params = symbol_type ? [threshold || 0, symbol_type] : [threshold || 0];
-                const rows = stmt.all(...params);
-                const hotspots = rows.map((row: any) => ({
-                    qualified_name: row.qualified_name,
-                    symbol_type: row.symbol_type,
-                    [metric]: row[metric]
-                }));
-                return {
-                    content: [{ type: "text", text: JSON.stringify(hotspots, null, 2) }]
-                };
-            }
-        );
-
-        // find_dead_code
-        this.sdkServer.registerTool(
-            "find_dead_code",
-            {
-                description: "Identifies potential dead code (unused symbols) in the knowledge graph. Excludes entry points, tests, and public interfaces.",
-                inputSchema: z.object({})
-            },
-            async () => {
-                await this.waitUntilReady();
-                const report = await this.optimizationEngine.findDeadCode();
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(report, null, 2)
-                    }]
-                };
-            }
-        );
-
-        // discover_latent_policies
-        this.sdkServer.registerTool(
-            "discover_latent_policies",
-            {
-                description: "Analyzes tag relationships to discover implicit architectural policies that are consistently followed in the codebase.",
-                inputSchema: z.object({
-                    threshold: z.number().optional().default(0.9).describe("Probability threshold for suggesting a policy (default: 0.9)"),
-                    min_count: z.number().optional().default(5).describe("Minimum occurrences required to suggest a policy (default: 5)")
-                })
-            },
-            async ({ threshold, min_count }) => {
-                await this.waitUntilReady();
-                const policies = await this.policyDiscoverer.discoverPolicies(threshold, min_count);
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(policies, null, 2)
-                    }]
-                };
-            }
-        );
-
-        // export_graph
-        this.sdkServer.registerTool(
-            "export_graph",
-            {
-                description: "Generate a Mermaid-compatible diagram representing a sub-graph of the code knowledge graph, centered around a root symbol.",
-                inputSchema: z.object({
-                    root_qname: z.string().optional().describe("The qualified name of the root symbol to start the export from"),
-                    max_depth: z.number().optional().default(2).describe("Maximum depth of relationships to include")
-                })
-            },
-            async ({ root_qname, max_depth }) => {
-                await this.waitUntilReady();
-                const mermaid = await this.graphEngine!.exportToMermaid({
-                    rootQName: root_qname,
-                    maxDepth: max_depth
-                });
-
-                const data = await this.graphEngine!.getGraphData({
-                    rootQName: root_qname,
-                    maxDepth: max_depth
-                });
-
-                let text = `### Knowledge Graph Visualization\n`;
-                if (root_qname) {
-                    text += `- **Root**: \`${root_qname}\`\n`;
-                }
-                text += `- **Max Depth**: ${max_depth}\n\n`;
-                text += `\`\`\`mermaid\n${mermaid}\n\`\`\``;
-
-                const summary = {
-                    node_count: data.nodes.length,
-                    edge_count: data.edges.length,
-                    nodes: data.nodes.map(n => ({ qname: n.qualified_name, type: n.symbol_type })),
-                    note: "This JSON summary provides a parsable structure of the graph shown above."
-                };
-
-                return {
-                    content: [
-                        { type: "text", text: text },
-                        { type: "text", text: `### Graph Data Summary\n\`\`\`json\n${JSON.stringify(summary, null, 2)}\n\`\`\`` }
-                    ]
-                };
-            }
-        );
-
-        // check_consistency
-        this.sdkServer.registerTool(
-            "check_consistency",
-            {
-                description: "Validate and optionally repair the integrity of the knowledge graph against the current state of the file system and Git history.",
-                inputSchema: z.object({
-                    repair: z.boolean().optional().default(false).describe("If true, attempts to re-index inconsistent files to fix the graph"),
-                    force: z.boolean().optional().default(false).describe("If true, forces a full re-index of all files in the project")
-                })
-            },
-            async ({ repair, force }) => {
-                await this.waitUntilReady();
-                if (!this.consistencyChecker) {
-                    return {
-                        isError: true,
-                        content: [{ type: "text", text: "Consistency checker not available in this session" }]
-                    };
-                }
-                if (this.isCheckingConsistency) {
-                    return {
-                        isError: true,
-                        content: [{ type: "text", text: "A consistency check is already in progress. Please wait." }]
-                    };
-                }
-                this.isCheckingConsistency = true;
-                try {
-                    const results = await this.consistencyChecker.validate(repair || false, force || false);
-                    return {
-                        content: [{ type: "text", text: JSON.stringify(results, null, 2) }]
-                    };
-                } finally {
-                    this.isCheckingConsistency = false;
-                }
-            }
-        );
-
-        // purge_index
-        this.sdkServer.registerTool(
-            "purge_index",
-            {
-                description: "Completely delete the local database index for the current project. Optionally remove the project from the central registry.",
-                inputSchema: z.object({
-                    confirm: z.boolean().optional().default(false).describe("Explicit confirmation to proceed with the deletion"),
-                    unregister: z.boolean().optional().default(false).describe("If true, also remove the project from the central registry")
-                })
-            },
-            async ({ confirm, unregister }) => {
-                // Wait for readyPromise but don't strictly require isInitialized to allow purging broken setups
-                await this.readyPromise; 
-
-                if (!confirm) {
-                    return {
-                        content: [{ 
-                            type: "text", 
-                            text: "WARNING: You are about to completely delete the index for this project. This cannot be undone. To proceed, please call this tool again with 'confirm: true'." 
-                        }]
-                    };
-                }
-
-                // Get current project path before purging
-                const currentPath = process.cwd();
-                const dbPath = getDatabasePath(currentPath);
-
-                try {
-                    console.error(`Purging database: ${dbPath}`);
-                    
-                    if (this.onPurgeCallback) {
-                        await this.onPurgeCallback();
-                    }
-
-                    // Wait a moment for OS to release file handles
-                    await new Promise(resolve => setTimeout(resolve, 500));
-
-                    // Reset internal state
-                    this.isInitialized = false;
-                    this.consistencyChecker = undefined;
-
-                    // Delete the physical files (Main DB + WAL + SHM)
-                    const filesToDelete = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
-                    for (const f of filesToDelete) {
-                        if (fs.existsSync(f)) {
-                            fs.unlinkSync(f);
-                        }
-                    }
-
-                    if (unregister) {
-                        const { removeFromRegistry } = require('../utils/paths');
-                        removeFromRegistry(currentPath);
-                    }
-
-                    return {
-                        content: [{ type: "text", text: `Successfully purged all index data. The database file at ${dbPath} has been deleted.${unregister ? ' Project removed from registry.' : ''} Server is now in PENDING mode.` }]
-                    };
-                } catch (err) {
-                    return { isError: true, content: [{ type: "text", text: `Failed to purge index: ${err}` }] };
-                }
-            }
-        );
-
-        // re_tag_project
-        this.sdkServer.registerTool(
-            "re_tag_project",
-            {
-                description: "Re-run structural characteristic tagging for all symbols in the current project. Useful after updating tagging logic.",
-                inputSchema: z.object({})
-            },
-            async () => {
-                await this.waitUntilReady();
-                const pipeline = (this as any).updatePipeline;
-                if (!pipeline) {
-                    return { isError: true, content: [{ type: "text", text: "Update pipeline not available in this session." }] };
-                }
-                try {
-                    await pipeline.reTagAllNodes();
-                    return { content: [{ type: "text", text: "Successfully re-tagged all nodes in the project." }] };
-                } catch (err) {
-                    return { isError: true, content: [{ type: "text", text: `Failed to re-tag nodes: ${err}` }] };
-                }
-            }
-        );
-
-        // backfill_history
-        this.sdkServer.registerTool(
-            "backfill_history",
-            {
-                description: "Fetch and associate Git commit history for all symbols in the current project. Essential for historical evidence mapping.",
-                inputSchema: z.object({})
-            },
-            async () => {
-                await this.waitUntilReady();
-                const pipeline = (this as any).updatePipeline;
-                if (!pipeline) {
-                    return { isError: true, content: [{ type: "text", text: "Update pipeline not available in this session." }] };
-                }
-                try {
-                    await pipeline.mapHistoryToProject();
-                    return { content: [{ type: "text", text: "Successfully backfilled Git history for all symbols." }] };
-                } catch (err) {
-                    return { isError: true, content: [{ type: "text", text: `Failed to backfill history: ${err}` }] };
-                }
-            }
-        );
-    }
-
     public async start() {
         const transport = new StdioServerTransport();
         await this.sdkServer.connect(transport);
-        console.error("Cynapx MCP Server started on stdio");
     }
 
     public async close() {
         await this.sdkServer.close();
-        console.error("Cynapx MCP Server closed");
     }
 
-    /**
-     * Connects a new transport to the MCP server.
-     * Used for SSE or other multi-connection transports.
-     */
     public async connectTransport(transport: any) {
         await this.sdkServer.connect(transport);
     }
 
     /**
-     * Executes a tool programmatically by name.
-     * This allows the CLI to reuse the same logic as the MCP handlers.
+     * Unified handler registration split into logical units
      */
-    public async executeTool(name: string, args: any): Promise<any> {
-        if (this.isTerminal && this.terminalCoordinator) {
-            return this.terminalCoordinator.forwardExecuteTool(name, args);
-        }
+    public registerHandlers() {
+        this.registerResources();
+        this.registerTools();
+        this.registerPrompts();
+    }
 
+    private registerResources() {
+        this.sdkServer.setRequestHandler(ListResourcesRequestSchema, async () => ({
+            resources: [
+                { uri: "graph://ledger", name: "Knowledge Graph Ledger", mimeType: "application/json", description: "Global call ledger and consistency metrics" },
+                { uri: "graph://summary", name: "Graph Summary", mimeType: "application/json", description: "Summary of nodes, edges and files" },
+                { uri: "graph://hotspots", name: "Graph Hotspots", mimeType: "application/json", description: "Technical debt hotspots (Complexity & Coupling)" },
+                { uri: "graph://clusters", name: "Logical Clusters", mimeType: "application/json", description: "Semantic groupings into logical modules" }
+            ]
+        }));
+
+        this.sdkServer.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+            await this.waitUntilReady();
+            const ctx = this.getContext();
+            const db = ctx.dbManager!.getDb();
+            const uri = request.params.uri;
+
+            if (uri === "graph://ledger") {
+                return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(ctx.metadataRepo!.getLedgerStats(), null, 2) }] };
+            }
+            if (uri === "graph://summary") {
+                const nodeCount = (db.prepare("SELECT COUNT(*) as count FROM nodes").get() as any).count;
+                const edgeCount = (db.prepare("SELECT COUNT(*) as count FROM edges").get() as any).count;
+                const fileCount = (db.prepare("SELECT COUNT(DISTINCT file_path) as count FROM nodes").get() as any).count;
+                return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ nodes: nodeCount, edges: edgeCount, files: fileCount, project: ctx.projectPath, last_updated: new Date().toISOString() }, null, 2) }] };
+            }
+            if (uri === "graph://hotspots") {
+                const topComplexity = db.prepare("SELECT qualified_name, symbol_type, cyclomatic FROM nodes ORDER BY cyclomatic DESC LIMIT 10").all();
+                const topFanIn = db.prepare("SELECT qualified_name, symbol_type, fan_in FROM nodes ORDER BY fan_in DESC LIMIT 10").all();
+                return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ by_complexity: topComplexity, by_fan_in: topFanIn, last_updated: new Date().toISOString() }, null, 2) }] };
+            }
+            if (uri === "graph://clusters") {
+                const clusters = db.prepare("SELECT * FROM logical_clusters").all();
+                const result = clusters.map((c: any) => {
+                    const count = (db.prepare("SELECT COUNT(*) as count FROM nodes WHERE cluster_id = ?").get(c.id) as any).count;
+                    return { ...c, node_count: count };
+                });
+                return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(result, null, 2) }] };
+            }
+            throw new McpError(ErrorCode.InvalidRequest, `Unknown resource: ${uri}`);
+        });
+    }
+
+    private registerTools() {
+        this.sdkServer.setRequestHandler(ListToolsRequestSchema, async () => ({
+            tools: [
+                {
+                    name: "get_setup_context",
+                    description: "Get project initialization status and registry info.",
+                    inputSchema: { type: "object", properties: {} }
+                },
+                {
+                    name: "initialize_project",
+                    description: "Initialize and register a project in the central registry.",
+                    inputSchema: {
+                        type: "object", 
+                        properties: {
+                            mode: { type: "string", enum: ["current", "existing", "custom"] },
+                            path: { type: "string" },
+                            zero_pollution: { type: "boolean", default: true }
+                        },
+                        required: ["mode"]
+                    }
+                },
+                {
+                    name: "search_symbols",
+                    description: "Search for symbols with semantic support.",
+                    inputSchema: {
+                        type: "object",
+                        properties: {
+                            query: { type: "string" }, 
+                            semantic: { type: "boolean" }, 
+                            limit: { type: "number" },
+                            symbol_type: { type: "string" }
+                        },
+                        required: ["query"]
+                    }
+                },
+                {
+                    name: "get_symbol_details",
+                    description: "Get comprehensive details, metrics, and pruned source code for a symbol.",
+                    inputSchema: {
+                        type: "object", 
+                        properties: {
+                            qualified_name: { type: "string" },
+                            include_source: { type: "boolean", default: true },
+                            summary_only: { type: "boolean", default: false }
+                        }, 
+                        required: ["qualified_name"]
+                    }
+                },
+                {
+                    name: "analyze_impact",
+                    description: "Identify all symbols that depend on this symbol (ripple effect).",
+                    inputSchema: {
+                        type: "object", 
+                        properties: {
+                            qualified_name: { type: "string" }, 
+                            max_depth: { type: "number", default: 3 },
+                            use_cache: { type: "boolean", default: true }
+                        },
+                        required: ["qualified_name"]
+                    }
+                },
+                {
+                    name: "get_callers",
+                    description: "Get direct callers of a symbol.",
+                    inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+                },
+                {
+                    name: "get_callees",
+                    description: "Get symbols called by a symbol.",
+                    inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+                },
+                {
+                    name: "get_related_tests",
+                    description: "Find associated test symbols for a production symbol.",
+                    inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+                },
+                {
+                    name: "check_architecture_violations",
+                    description: "Detect layer or role violations in the codebase.",
+                    inputSchema: { type: "object", properties: {} }
+                },
+                {
+                    name: "get_remediation_strategy",
+                    description: "Get structural guidance for fixing violations.",
+                    inputSchema: { type: "object", properties: { violation: { type: "object" } }, required: ["violation"] }
+                },
+                {
+                    name: "propose_refactor",
+                    description: "Get a risk-aware refactoring proposal.",
+                    inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+                },
+                {
+                    name: "get_risk_profile",
+                    description: "Calculate risk profile based on CC, churn and coupling.",
+                    inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+                },
+                {
+                    name: "get_hotspots",
+                    description: "Identify technical debt hotspots via specific metrics.",
+                    inputSchema: {
+                        type: "object", 
+                        properties: {
+                            metric: { type: "string", enum: ["cyclomatic", "fan_in", "fan_out", "loc"] },
+                            threshold: { type: "number", default: 0 }
+                        },
+                        required: ["metric"]
+                    }
+                },
+                {
+                    name: "find_dead_code",
+                    description: "Identify unreachable or unused symbols.",
+                    inputSchema: { type: "object", properties: {} }
+                },
+                {
+                    name: "export_graph",
+                    description: "Generate Mermaid visualization and structural summary.",
+                    inputSchema: {
+                        type: "object", 
+                        properties: {
+                            root_qname: { type: "string" }, 
+                            max_depth: { type: "number", default: 2 }
+                        }
+                    }
+                },
+                {
+                    name: "check_consistency",
+                    description: "Verify graph integrity against disk and Git.",
+                    inputSchema: {
+                        type: "object", 
+                        properties: {
+                            repair: { type: "boolean", default: false }, 
+                            force: { type: "boolean", default: false }
+                        }
+                    }
+                },
+                {
+                    name: "purge_index",
+                    description: "Completely delete local database index.",
+                    inputSchema: {
+                        type: "object", 
+                        properties: {
+                            confirm: { type: "boolean" },
+                            unregister: { type: "boolean" }
+                        },
+                        required: ["confirm"]
+                    }
+                },
+                {
+                    name: "re_tag_project",
+                    description: "Re-run structural characteristic tagging.",
+                    inputSchema: { type: "object", properties: {} }
+                },
+                {
+                    name: "backfill_history",
+                    description: "Fetch and map Git commit history.",
+                    inputSchema: { type: "object", properties: {} }
+                },
+                {
+                    name: "discover_latent_policies",
+                    description: "Discover implicit architectural patterns.",
+                    inputSchema: {
+                        type: "object", 
+                        properties: {
+                            threshold: { type: "number", default: 0.9 },
+                            min_count: { type: "number", default: 5 }
+                        }
+                    }
+                }
+            ]
+        }));
+
+        this.sdkServer.setRequestHandler(CallToolRequestSchema, async (request) => {
+            return this.executeTool(request.params.name, request.params.arguments);
+        });
+    }
+
+    private registerPrompts() {
+        this.sdkServer.setRequestHandler(ListPromptsRequestSchema, async () => ({
+            prompts: [
+                {
+                    name: "explain-impact", 
+                    description: "Explain ripple effect of changing a symbol", 
+                    arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
+                },
+                {
+                    name: "check-health", 
+                    description: "Check graph health and consistency"
+                },
+                {
+                    name: "refactor-safety", 
+                    description: "Perform a comprehensive safety check before refactoring a symbol", 
+                    arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
+                }
+            ]
+        }));
+
+        this.sdkServer.setRequestHandler(GetPromptRequestSchema, async (request) => {
+            await this.waitUntilReady();
+            const name = request.params.name;
+            const args = request.params.arguments || {};
+
+            if (name === "explain-impact") {
+                return {
+                    messages: [{
+                        role: "user", 
+                        content: {
+                            type: "text", 
+                            text: `Please analyze the impact of changing the symbol '${args.qualified_name}'. Use the 'analyze_impact' tool to find incoming dependencies and explain what might break.`
+                        } 
+                    }]
+                };
+            }
+            if (name === "check-health") {
+                return {
+                    messages: [{
+                        role: "user", 
+                        content: {
+                            type: "text", 
+                            text: "Please run a consistency check on the knowledge graph using the 'check_consistency' tool and report any issues found."
+                        }
+                    }]
+                };
+            }
+            if (name === "refactor-safety") {
+                return {
+                    messages: [{
+                        role: "user", 
+                        content: {
+                            type: "text", 
+                            text: `I am planning to refactor the symbol '${args.qualified_name}'. 
+Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the current index integrity.\n2. Use 'analyze_impact' with 'qualified_name: ${args.qualified_name}' to identify all incoming dependencies.\n3. Use 'get_symbol_details' to check the complexity and metrics of '${args.qualified_name}'.\n4. Provide a risk assessment summary: (Low/Medium/High risk) based on the number of dependencies and complexity.`
+                        }
+                    }]
+                };
+            }
+            throw new McpError(ErrorCode.InvalidRequest, `Unknown prompt: ${name}`);
+        });
+    }
+
+    public async executeTool(name: string, args: any): Promise<any> {
+        if (this.isTerminal && this.terminalCoordinator) return this.terminalCoordinator.forwardExecuteTool(name, args);
         await this.waitUntilReady();
 
-        // Map of tool names to their internal logic
-        // This is a simplified dispatcher to avoid complex SDK introspection
         switch (name) {
-            case 'search_symbols':
-                const nodes = this.graphEngine!.nodeRepo.searchSymbols(args.query, args.limit || 10, {
-                    symbol_type: args.symbol_type,
-                    language: args.language,
-                    visibility: args.visibility
-                });
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(nodes.map(n => ({
-                            qname: n.qualified_name,
-                            type: n.symbol_type,
-                            file: n.file_path,
-                            language: n.language
-                        })), null, 2)
-                    }]
-                };
-
-            case 'get_symbol_details':
-                const node = this.graphEngine!.getNodeByQualifiedName(args.qualified_name);
-                if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify(node, null, 2)
-                    }]
-                };
-
             case 'get_setup_context': {
                 const registry = readRegistry();
-                const currentPath = process.cwd();
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify({
-                            status: this.isInitialized ? "ALREADY_INITIALIZED" : "INITIALIZATION_REQUIRED",
-                            current_directory: currentPath,
-                            registered_projects: registry,
-                            instructions: "Choose to (1) Load an existing project, (2) Initialize at current directory, or (3) Initialize at custom path."
-                        }, null, 2)
-                    }]
-                };
+                return { content: [{ type: "text", text: JSON.stringify({ status: this.isInitialized ? "ALREADY_INITIALIZED" : "INITIALIZATION_REQUIRED", current_path: process.cwd(), registered_projects: registry }, null, 2) }] };
             }
+            case 'initialize_project': {
+                let target = args.path ? path.resolve(args.path) : process.cwd();
+                if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+                if (!args.zero_pollution) fs.writeFileSync(path.join(target, ANCHOR_FILE), JSON.stringify({ created_at: new Date().toISOString() }));
+                addToRegistry(target);
+                if (this.onInitializeCallback) await this.onInitializeCallback(target);
+                this.markReady(true);
+                return { content: [{ type: "text", text: `Successfully initialized project at ${target}. Analysis engine is now active.` }] };
+            }
+            case 'search_symbols': {
+                const limit = args.limit || 10;
+                const results = await Promise.all(this.workspaceManager.getAllContexts().map(async (ctx) => {
+                    const keywordNodes = ctx.graphEngine!.nodeRepo.searchSymbols(args.query, limit, { symbol_type: args.symbol_type });
+                    if (!args.semantic) return keywordNodes;
+                    try {
+                        const queryVector = await this.embeddingProvider.generate(args.query);
+                        const vectorResults = ctx.vectorRepo!.search(queryVector, limit);
+                        const vectorNodes = vectorResults.map(r => ctx.graphEngine!.getNodeById(r.id)).filter(n => n !== null);
+                        return this.mergeResultsRRF(keywordNodes, vectorNodes, limit);
+                    } catch { return keywordNodes; }
+                }));
+                const flat = results.flat().slice(0, limit);
+                return { content: [{ type: "text", text: JSON.stringify(flat.map(n => ({ qname: n.qualified_name, type: n.symbol_type, file: n.file_path, tags: n.tags })), null, 2) }] };
+            }
+            case 'get_symbol_details': {
+                const ctx = this.getContext();
+                const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+                if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                
+                if (args.summary_only) return { content: [{ type: "text", text: JSON.stringify({ qname: node.qualified_name, type: node.symbol_type, metrics: { loc: node.loc, cyclomatic: node.cyclomatic, fan_in: node.fan_in, fan_out: node.fan_out } }, null, 2) }] };
 
+                let text = `### Symbol: ${node.qualified_name}\n`;
+                text += `- **Type**: ${node.symbol_type}\n`;
+                if (node.signature) text += `- **Signature**: ${node.signature}\n`;
+                text += `- **File**: ${node.file_path} (line ${node.start_line}-${node.end_line})\n`;
+                
+                if (node.tags && node.tags.length > 0) {
+                    text += `- **Structural Tags**: ${Array.isArray(node.tags) ? node.tags.map(t => `${t}`).join(', ') : node.tags}\n`;
+                }
+
+                if (node.history && node.history.length > 0) {
+                    text += `\n#### Historical Evidence:\n`;
+                    node.history.slice(0, 3).forEach(commit => {
+                        text += `- **[${commit.hash.substring(0, 7)}]** ${commit.message} (by ${commit.author})\n`;
+                    });
+                }
+
+                text += `\n#### Metrics:\n- LOC: ${node.loc}, CC: ${node.cyclomatic}\n- Static Coupling: Fan-in: ${node.fan_in || 0}, Fan-out: ${node.fan_out || 0}\n`;
+
+                if (args.include_source !== false) {
+                    try {
+                        const security = (ctx as any).securityProvider as SecurityProvider;
+                        if (security) security.validatePath(node.file_path);
+                        const content = fs.readFileSync(node.file_path, 'utf8').split('\n');
+                        const snippet = content.slice(node.start_line - 1, node.end_line);
+                        const display = snippet.length > 100 ? 
+                            snippet.slice(0, 50).join('\n') + "\n\n// ... [Truncated for Token Optimization: Use read_file for full content] ..." : 
+                            snippet.join('\n');
+                        text += '\n#### Source Code Snippet:\n```\n' + display + '\n```\n';
+                    } catch (e) { text += `\n> [!WARNING] Source unavailable: ${e}`; }
+                }
+                return { content: [{ type: "text", text }] };
+            }
+            case 'analyze_impact': {
+                const ctx = this.getContext();
+                const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+                if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                const results = ctx.graphEngine!.traverse(node.id!, 'BFS', { direction: 'incoming', maxDepth: args.max_depth || 3, useCache: args.use_cache });
+                const formatted = results.map(r => ({
+                    node: r.node.qualified_name,
+                    distance: r.distance,
+                    impact_path: r.path.map(step => ctx.graphEngine!.getNodeById(step.nodeId)?.qualified_name).reverse().join(' -> ')
+                }));
+                return { content: [{ type: "text", text: JSON.stringify(formatted, null, 2) }] };
+            }
             case 'get_callers': {
-                const node = this.graphEngine!.getNodeByQualifiedName(args.qualified_name);
-                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-                const edges = this.graphEngine!.getIncomingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
-                const callers = edges.map(e => {
-                    const callerNode = this.graphEngine!.getNodeById(e.from_id);
-                    return { qname: callerNode?.qualified_name, type: callerNode?.symbol_type, line: e.call_site_line };
-                });
+                const ctx = this.getContext();
+                const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+                if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                const callers = ctx.graphEngine!.getIncomingEdges(node.id!).map(e => ({ qname: ctx.graphEngine!.getNodeById(e.from_id)?.qualified_name, line: e.call_site_line }));
                 return { content: [{ type: "text", text: JSON.stringify(callers, null, 2) }] };
             }
-
             case 'get_callees': {
-                const node = this.graphEngine!.getNodeByQualifiedName(args.qualified_name);
-                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-                const edges = this.graphEngine!.getOutgoingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
-                const callees = edges.map(e => {
-                    const calleeNode = this.graphEngine!.getNodeById(e.to_id);
-                    return { qname: calleeNode?.qualified_name, type: calleeNode?.symbol_type, line: e.call_site_line };
-                });
+                const ctx = this.getContext();
+                const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+                if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                const callees = ctx.graphEngine!.getOutgoingEdges(node.id!).map(e => ({ qname: ctx.graphEngine!.getNodeById(e.to_id)?.qualified_name, line: e.call_site_line }));
                 return { content: [{ type: "text", text: JSON.stringify(callees, null, 2) }] };
             }
-
             case 'get_related_tests': {
-                const node = this.graphEngine!.getNodeByQualifiedName(args.qualified_name);
-                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-                const incomingTests = this.graphEngine!.getIncomingEdges(node.id).filter(e => e.edge_type === 'tests');
-                const outgoingTests = this.graphEngine!.getOutgoingEdges(node.id).filter(e => e.edge_type === 'tests');
-                const testNodes = [...incomingTests, ...outgoingTests].map(e => {
-                    const testId = e.edge_type === 'tests' ? (incomingTests.includes(e) ? e.from_id : e.to_id) : -1;
-                    const testNode = this.graphEngine!.getNodeById(testId);
-                    return { qname: testNode?.qualified_name, type: testNode?.symbol_type };
-                }).filter(n => n.qname !== undefined);
-                return { content: [{ type: "text", text: JSON.stringify(testNodes, null, 2) }] };
+                const ctx = this.getContext();
+                const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+                if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                const tests = ctx.graphEngine!.getIncomingEdges(node.id!).filter(e => e.edge_type === 'tests').map(e => ctx.graphEngine!.getNodeById(e.from_id)?.qualified_name);
+                return { content: [{ type: "text", text: JSON.stringify(tests, null, 2) }] };
             }
-
-            case 'perform_clustering':
-                const clusters = await this.graphEngine!.performClustering();
-                return { content: [{ type: "text", text: JSON.stringify(clusters, null, 2) }] };
-
-            case 'get_risk_profile':
-                const profile = await this.refactoringEngine.getRiskProfile(args.qualified_name);
-                return profile ? { content: [{ type: "text", text: JSON.stringify(profile, null, 2) }] } : { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-
-            case 'get_hotspots':
-                const db = (this.graphEngine!.nodeRepo as any).db;
+            case 'check_architecture_violations': {
+                const violations = await this.getContext().archEngine!.checkViolations();
+                return { content: [{ type: "text", text: JSON.stringify(violations, null, 2) }] };
+            }
+            case 'get_remediation_strategy': {
+                const strategy = this.remediationEngine.getRemediationStrategy(args.violation);
+                return { content: [{ type: "text", text: JSON.stringify(strategy, null, 2) }] };
+            }
+            case 'propose_refactor': {
+                const proposal = await this.getContext().refactorEngine!.proposeRefactor(args.qualified_name);
+                return { content: [{ type: "text", text: JSON.stringify(proposal, null, 2) }] };
+            }
+            case 'get_risk_profile': {
+                const profile = await this.getContext().refactorEngine!.getRiskProfile(args.qualified_name);
+                return { content: [{ type: "text", text: JSON.stringify(profile, null, 2) }] };
+            }
+            case 'get_hotspots': {
+                const ctx = this.getContext();
+                const db = ctx.dbManager!.getDb();
                 const hotspots = db.prepare(`SELECT qualified_name, symbol_type, ${args.metric} FROM nodes WHERE ${args.metric} >= ? ORDER BY ${args.metric} DESC LIMIT 20`).all(args.threshold || 0);
                 return { content: [{ type: "text", text: JSON.stringify(hotspots, null, 2) }] };
-
-            case 'check_architecture_violations':
-                const violations = await this.architectureEngine.checkViolations();
-                return {
-                    content: [{
-                        type: "text",
-                        text: JSON.stringify({
-                            status: "SUCCESS",
-                            violation_count: violations.length,
-                            violations: violations.map(v => ({
-                                policy_id: v.policyId,
-                                description: v.description,
-                                source: { qname: v.source.qualified_name, tags: v.source.tags },
-                                target: { qname: v.target.qualified_name, tags: v.target.tags },
-                                edge_type: v.edge.edge_type
-                            }))
-                        }, null, 2)
-                    }]
-                };
-
-            case 'propose_refactor':
-                const proposal = await this.refactoringEngine.proposeRefactor(args.qualified_name);
-                return proposal ? {
-                    content: [{ type: "text", text: JSON.stringify(proposal, null, 2) }]
-                } : { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-
-            case 'find_dead_code':
-                const report = await this.optimizationEngine.findDeadCode();
-                return {
-                    content: [{ type: "text", text: JSON.stringify(report, null, 2) }]
-                };
-
-            case 'get_remediation_strategy':
-                const strategy = this.remediationEngine.getRemediationStrategy(args.violation);
-                return {
-                    content: [{ type: "text", text: JSON.stringify(strategy, null, 2) }]
-                };
-
-            case 'export_graph':
-                const mermaid = await this.graphEngine!.exportToMermaid({
-                    rootQName: args.root_qname,
-                    maxDepth: args.max_depth
-                });
-                const graphData = await this.graphEngine!.getGraphData({
-                    rootQName: args.root_qname,
-                    maxDepth: args.max_depth
-                });
-                const summary = {
-                    node_count: graphData.nodes.length,
-                    edge_count: graphData.edges.length,
-                    nodes: graphData.nodes.map(n => ({ qname: n.qualified_name, type: n.symbol_type }))
-                };
-                return {
-                    content: [
-                        { type: "text", text: mermaid },
-                        { type: "text", text: JSON.stringify(summary, null, 2) }
-                    ]
-                };
-
-            case 're_tag_project':
-                const pipeline = (this as any).updatePipeline;
-                if (!pipeline) throw new Error("Update pipeline not available in CLI mode.");
-                await pipeline.reTagAllNodes();
-                return { content: [{ type: "text", text: "Successfully re-tagged all nodes." }] };
-
-            case 'discover_latent_policies':
-                const policies = await this.policyDiscoverer.discoverPolicies(args.threshold, args.min_count);
-                return {
-                    content: [{ type: "text", text: JSON.stringify(policies, null, 2) }]
-                };
-
-            case 'check_consistency':
-                if (!this.consistencyChecker) throw new Error("Consistency checker not available in CLI mode.");
-                const results = await this.consistencyChecker.validate(args.repair || false, args.force || false);
-                return {
-                    content: [{ type: "text", text: JSON.stringify(results, null, 2) }]
-                };
-
-            case 'backfill_history':
-                const historyPipeline = (this as any).updatePipeline;
-                if (!historyPipeline) throw new Error("Update pipeline not available in CLI mode.");
-                await historyPipeline.mapHistoryToProject();
-                return { content: [{ type: "text", text: "Successfully backfilled history." }] };
-
+            }
+            case 'find_dead_code': {
+                const report = await this.getContext().optEngine!.findDeadCode();
+                return { content: [{ type: "text", text: JSON.stringify(report, null, 2) }] };
+            }
+            case 'export_graph': {
+                const ctx = this.getContext();
+                const mermaid = await ctx.graphEngine!.exportToMermaid({ rootQName: args.root_qname, maxDepth: args.max_depth || 2 });
+                const data = await ctx.graphEngine!.getGraphData({ rootQName: args.root_qname, maxDepth: args.max_depth || 2 });
+                const summary = `### Graph Export: ${args.root_qname || 'Root'}\n- Nodes: ${data.nodes.length}\n- Edges: ${data.edges.length}\n\n${mermaid}\n`;
+                return { content: [{ type: "text", text: summary }] };
+            }
+            case 'check_consistency': {
+                const ctx = this.getContext();
+                const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, (ctx as any).gitService, (ctx as any).updatePipeline, ctx.projectPath);
+                const results = await checker.validate(args.repair, args.force);
+                return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+            }
             case 'purge_index': {
-                if (!args.confirm) return { content: [{ type: "text", text: "Please confirm purge." }] };
-                const currentPath = process.cwd();
-                const dbPath = getDatabasePath(currentPath);
+                if (!args.confirm) return { content: [{ type: "text", text: "WARNING: This deletes all index data. Confirm with 'confirm: true'" }] };
+                const ctx = this.getContext();
+                const dbPath = getDatabasePath(ctx.projectPath);
                 if (this.onPurgeCallback) await this.onPurgeCallback();
                 this.isInitialized = false;
-                const filesToDelete = [dbPath, `${dbPath}-wal`, `${dbPath}-shm`];
-                filesToDelete.forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
-                return { content: [{ type: "text", text: "Index purged successfully." }] };
+                [dbPath, `${dbPath}-wal`, `${dbPath}-shm`].forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
+                if (args.unregister) require('../utils/paths').removeFromRegistry(ctx.projectPath);
+                return { content: [{ type: "text", text: "Project index purged successfully. Server in PENDING mode." }] };
             }
-
-            case 'initialize_project': {
-                let projectPath = process.cwd();
-                if (args.mode === 'existing' || args.mode === 'custom') {
-                    if (!args.path) throw new Error("Path required for custom initialization.");
-                    projectPath = path.resolve(args.path);
-                }
-                addToRegistry(projectPath);
-                if (this.onInitializeCallback) await this.onInitializeCallback(projectPath);
-                this.markReady(true);
-                return { content: [{ type: "text", text: `Initialized project at ${projectPath}` }] };
+            case 're_tag_project': {
+                const pipeline = (this.getContext() as any).updatePipeline;
+                await pipeline.reTagAllNodes();
+                return { content: [{ type: "text", text: "Successfully re-tagged all nodes." }] };
             }
-
-            default:
-                // For other tools, we could either implement them here or throw
-                throw new Error(`Tool '${name}' is not yet supported in CLI mode.`);
+            case 'backfill_history': {
+                const pipeline = (this.getContext() as any).updatePipeline;
+                await pipeline.mapHistoryToProject();
+                return { content: [{ type: "text", text: "Successfully backfilled Git history." }] };
+            }
+            case 'discover_latent_policies': {
+                const policies = await this.getContext().policyDiscoverer!.discoverPolicies(args.threshold, args.min_count);
+                return { content: [{ type: "text", text: JSON.stringify(policies, null, 2) }] };
+            }
+            default: throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
         }
+    }
+
+    private mergeResultsRRF(keywordNodes: any[], vectorNodes: any[], limit: number): any[] {
+        const k = 60;
+        const scores = new Map<number, number>();
+        const nodeMap = new Map<number, any>();
+        const applyRRF = (nodes: any[]) => {
+            nodes.forEach((node, rank) => {
+                const id = node.id!;
+                nodeMap.set(id, node);
+                scores.set(id, (scores.get(id) || 0) + (1 / (k + rank + 1)));
+            });
+        };
+        applyRRF(keywordNodes);
+        applyRRF(vectorNodes);
+        return Array.from(scores.entries()).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id]) => nodeMap.get(id));
     }
 }

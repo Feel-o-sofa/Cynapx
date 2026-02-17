@@ -115,7 +115,7 @@ export function getProjectHash(projectPath: string): string {
 export function getDatabasePath(projectPath: string): string {
     const storageDir = getCentralStorageDir();
     const hash = getProjectHash(projectPath);
-    return path.join(storageDir, `${hash}.db`);
+    return path.join(storageDir, `${hash}_v2.db`);
 }
 
 export function toCanonical(s: string): string {

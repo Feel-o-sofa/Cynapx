@@ -1,455 +1,255 @@
-#!/usr/bin/env node
 /**
  * Copyright (c) 2026 Cynapx Contributors
  * Licensed under the MIT License (MIT).
- * See LICENSE in the project root for license information.
+ * See LICENSE in the project root for license information. 
  */
-
-import { DatabaseManager } from './db/database';
-import { NodeRepository } from './db/node-repository';
-import { EdgeRepository } from './db/edge-repository';
-import { MetadataRepository } from './db/metadata-repository';
-import { GraphEngine } from './graph/graph-engine';
-import { UpdatePipeline } from './indexer/update-pipeline';
-import { TypeScriptParser } from './indexer/typescript-parser';
-import { TreeSitterParser } from './indexer/tree-sitter-parser';
-import { DependencyParser } from './indexer/dependency-parser';
-import { CompositeParser } from './indexer/composite-parser';
-import { WorkerPool } from './indexer/worker-pool';
-import { GitService } from './indexer/git-service';
-import { ConsistencyChecker } from './indexer/consistency-checker';
-import { ApiServer } from './server/api-server';
-import { McpServer } from './server/mcp-server';
-import { InteractiveShell } from './server/interactive-shell';
-import { FileWatcher } from './watcher/file-watcher';
-import { LifecycleManager } from './utils/lifecycle-manager';
-import { SecurityProvider } from './utils/security';
-import { CertificateGenerator } from './utils/certificate-generator';
-import { getDatabasePath, findProjectAnchor } from './utils/paths';
-import { LockManager } from './utils/lock-manager';
-import { IpcCoordinator } from './server/ipc-coordinator';
-import { FileFilter } from './utils/file-filter';
-import * as fs from 'fs';
+import { Command } from 'commander';
 import * as path from 'path';
 import * as os from 'os';
+import * as fs from 'fs';
+import { McpServer } from './server/mcp-server';
+import { IpcCoordinator } from './server/ipc-coordinator';
+import { LockManager } from './utils/lock-manager';
+import { findProjectAnchor, addToRegistry, getDatabasePath } from './utils/paths';
+import { InteractiveShell } from './server/interactive-shell';
+import { WorkspaceManager, EngineContext } from './server/workspace-manager';
+import { LanguageRegistry } from './indexer/language-registry';
+import { TreeSitterParser } from './indexer/tree-sitter-parser';
+import { TypeScriptParser } from './indexer/typescript-parser';
+import { CompositeParser } from './indexer/composite-parser';
+import { GitService } from './indexer/git-service';
+import { UpdatePipeline } from './indexer/update-pipeline';
+import { FileWatcher } from './watcher/file-watcher';
+import { ApiServer } from './server/api-server';
+import { LifecycleManager } from './utils/lifecycle-manager';
+import { SecurityProvider } from './utils/security';
+import { WorkerPool } from './indexer/worker-pool';
+import { CertificateGenerator } from './utils/certificate-generator';
 
-/**
- * The Bootstrap class initializes and wires all components of Cynapx.
- */
 async function bootstrap() {
-    const isMcpMode = process.env.MCP_MODE === 'true';
-    
+    const program = new Command();
+    program
+        .name('cynapx')
+        .description('High-performance isolated code knowledge engine for AI agents')
+        .version('1.0.5')
+        .option('-p, --path <paths...>', 'Project paths to analyze', [process.cwd()])
+        .option('--api-port <number>', 'Port for the REST API server', '3000')
+        .option('--no-index', 'Disable initial indexing')
+        .option('--no-watch', 'Disable file watching')
+        .option('--interactive', 'Start in interactive REPL mode', false)
+        .option('--api', 'Start the REST API server', false)
+        .option('--https', 'Enable ephemeral HTTPS for API server', false)
+        .option('--force', 'Force full re-index', false)
+        .parse(process.argv);
+
+    const options = program.opts();
+    const args = process.argv.slice(2);
+
+    // [Restoration 1] MCP Mode Logging Protection
+    const isMcpMode = !options.api && !options.interactive && !args.some(a => !a.startsWith('-'));
     if (isMcpMode) {
         console.log = console.error;
         console.info = console.error;
-        console.debug = console.error;
         console.warn = console.error;
     }
-    
-    const log = isMcpMode ? console.error : console.log;
 
-    const args = process.argv.slice(2);
-    
-    // Command identification (anything that doesn't start with -- and is not a value for a known option)
-    let command: string | undefined;
-    for (let i = 0; i < args.length; i++) {
-        if (!args[i].startsWith('--')) {
-            // Check if it's a value for the previous option
-            if (i > 0 && args[i - 1] === '--path') {
-                continue;
-            }
-            command = args[i];
-            break;
-        }
-    }
-    const isOneShot = !isMcpMode && !!command;
-
-    if (args.includes('--help') || args.includes('-h')) {
-        log(`
-Cynapx: High-Performance Isolated Code Knowledge Engine
-
-Usage:
-  cynapx [command] [options]
-
-Commands:
-  search_symbols        Search for symbols in the knowledge graph
-  get_symbol_details    Get details and source for a specific symbol
-  analyze_impact        Analyze the impact of changing a symbol
-  check_architecture_violations  Detect architectural policy violations
-  propose_refactor      Get a refactoring proposal for a symbol
-  find_dead_code        Identify potential dead code
-  get_setup_context     Get project status and registry info
-  ... (all other MCP tools are available as commands)
-
-Options:
-  --path <dir>    Path to the project directory to analyze (default: current directory)
-  --https         Enable ephemeral HTTPS for the API server (API Mode only)
-  --help, -h      Show this help message
-
-Environment Variables:
-  MCP_MODE=true   Start in MCP (Model Context Protocol) mode via stdio
-  PORT=<number>   Port for the HTTP API server (default: 3000)
-        `);
-        process.exit(0);
-    }
-
-    const pathIndex = args.indexOf('--path');
-    const startPath = pathIndex !== -1 && args[pathIndex + 1] 
-        ? path.resolve(args[pathIndex + 1]) 
-        : process.cwd();
-
-    const useHttps = args.includes('--https');
-
-    const anchorPath = findProjectAnchor(startPath);
-    const initialProjectPath = anchorPath || startPath;
-
-    // Load version from package.json
-    let version = 'unknown';
-    try {
-        const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
-        version = pkg.version;
-    } catch (e) {
-        // Fallback for production/dist where package.json might be in a different relative path
-        try {
-            const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-            version = pkg.version;
-        } catch (e2) {}
-    }
-
-    log(`--- Starting Cynapx v${version} (Parallel Mode) ---`);
-    log(`Start Directory: ${startPath}`);
-    if (anchorPath) log(`Detected Anchor at: ${anchorPath}`);
+    console.error(`\x1b[36m
+   ______                            __  __
+  / ____/_  ______  ____ _____  _  _| |/ /
+ / /   / / / / __ \/ __ \`/ __ \| |/_/   / 
+/ /___/ /_/ / / / / /_/ / /_/ />  < /   |  
+\____/\__, /_/ /_/\__,_/ .___/_/|_/_/|_|  
+     /____/           /_/
+    \x1b[0m`);
 
     const lifecycle = new LifecycleManager();
+    const workspaceManager = lifecycle.track(new WorkspaceManager());
+    const projectPaths: string[] = options.path.map((p: string) => path.resolve(p));
 
-    // Shared components (declared in outer scope for failover access)
-    let dbManager: DatabaseManager | undefined;
-    let nodeRepo: NodeRepository | undefined;
-    let edgeRepo: EdgeRepository | undefined;
-    let metadataRepo: MetadataRepository | undefined;
-    let graphEngine: GraphEngine | undefined;
-    let updatePipeline: UpdatePipeline | undefined;
-    let consistencyChecker: ConsistencyChecker | undefined;
-    let workerPool: WorkerPool | undefined;
-    let watcher: FileWatcher | undefined;
-
-    // Initialize core engine functionality
-    const initializeEngine = async (projectPath: string) => {
-        log(`Initializing Engine for: ${projectPath}`);
-        const dbPath = getDatabasePath(projectPath);
-        dbManager = lifecycle.track(new DatabaseManager(dbPath));
-        const db = dbManager.getDb();
-        nodeRepo = new NodeRepository(db);
-        edgeRepo = new EdgeRepository(db);
-        metadataRepo = new MetadataRepository(db);
-        graphEngine = new GraphEngine(nodeRepo, edgeRepo);
-
-        const gitService = new GitService(projectPath);
-        const tsParser = new TypeScriptParser();
-        const treeSitterParser = new TreeSitterParser();
-        const depParser = new DependencyParser();
-        const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
-
-        const workerPoolSize = Math.min(os.cpus().length, 4);
-        workerPool = lifecycle.track(new WorkerPool(workerPoolSize));
-        updatePipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, compositeParser, metadataRepo, gitService, workerPool, projectPath);
-        consistencyChecker = new ConsistencyChecker(nodeRepo, gitService, updatePipeline, projectPath);
-
-        log('Synchronizing index with Project state...');
-        await consistencyChecker.validate(true);
-        log('Synchronization Complete.');
-
-        watcher = lifecycle.track(new FileWatcher(updatePipeline, projectPath));
-        watcher.start(projectPath);
-        
-        const securityProvider = new SecurityProvider(projectPath);
-        
-        return { graphEngine, consistencyChecker, metadataRepo, securityProvider };
-    };
-
-    try {
-        // Coordination Logic
-        const projectPath = anchorPath || startPath;
-        const lockManager = new LockManager(projectPath);
-        const ipcCoordinator = new IpcCoordinator();
-        
-        let isTerminal = false;
-        const existingLock = await lockManager.getValidLock();
-        if (existingLock) {
-            log(`Existing Host found (PID: ${existingLock.pid}). Attempting Terminal connection...`);
-            try {
-                await ipcCoordinator.connectToHost(existingLock.ipcPort);
-                isTerminal = true;
-                log('Terminal mode active. Forwarding all calls to Host.');
-            } catch (err) {
-                log(`Failed to connect to Host. Stale lock? Continuing as Host.`);
-            }
+    // Mount projects (Registration ONLY, no DB open yet)
+    for (const p of projectPaths) {
+        const anchor = findProjectAnchor(p);
+        if (anchor) {
+            console.error(`[*] Mounting Workspace: ${anchor}`);
+            await workspaceManager.mountProject(anchor);
+            addToRegistry(anchor);
         }
+    }
 
-        let currentGraphEngine: GraphEngine | undefined;
-        let currentConsistencyChecker: ConsistencyChecker | undefined;
-        let currentSecurityProvider: SecurityProvider | undefined;
-
-        if (!isTerminal) {
-            if (anchorPath) {
-                const result = await initializeEngine(anchorPath);
-                currentGraphEngine = result.graphEngine;
-                currentConsistencyChecker = result.consistencyChecker;
-                currentSecurityProvider = result.securityProvider;
-            } else {
-                // Placeholder graph engine if not initialized
-                const dbPath = getDatabasePath(startPath); // Temporary or default
-                const tempDbManager = new DatabaseManager(dbPath);
-                const tempDb = tempDbManager.getDb();
-                nodeRepo = new NodeRepository(tempDb);
-                edgeRepo = new EdgeRepository(tempDb);
-                metadataRepo = new MetadataRepository(tempDb);
-                currentGraphEngine = new GraphEngine(nodeRepo, edgeRepo);
-            }
-        }
-
-        // Initialize MCP Server (always needed)
-        const mcpServer = new McpServer(currentGraphEngine, metadataRepo, currentConsistencyChecker);
-        if (updatePipeline) {
-            mcpServer.setUpdatePipeline(updatePipeline);
-        }
-        // Important: Register default handlers for Stdio/Single-mode
-        mcpServer.registerHandlers();
-        
-        if (currentSecurityProvider) {
-            mcpServer.setSecurityProvider(currentSecurityProvider);
-        }
-
-        const attemptFailover = async () => {
-            log('Starting failover process...');
-            // Jitter to avoid race condition among multiple terminals
-            const jitter = 500 + Math.random() * 3000;
-            await new Promise(r => setTimeout(r, jitter));
-
-            const lock = await lockManager.getValidLock();
-            if (!lock) {
-                log('No valid Host found. Attempting to acquire lock for promotion...');
-                try {
-                    // Try to start IPC server first to get a port
-                    const ipcPort = await ipcCoordinator.startHost();
-                    
-                    // ATOMIC CHECK & ACQUIRE: This is where we prevent multiple hosts.
-                    // LockManager.acquire will overwrite, but we should check again.
-                    const finalCheck = await lockManager.getValidLock();
-                    if (finalCheck) {
-                        log('Another session acquired the lock during jitter. Reconnecting...');
-                        await ipcCoordinator.connectToHost(finalCheck.ipcPort);
-                        return;
-                    }
-                    
-                    await lockManager.acquire(ipcPort);
-                    log('Lock acquired. Promoting this Terminal to Host...');
-
-                    const result = await initializeEngine(projectPath);
-                    ipcCoordinator.setMcpServer(mcpServer);
-
-                    mcpServer.promoteToHost(
-                        result.graphEngine,
-                        result.metadataRepo,
-                        result.consistencyChecker,
-                        updatePipeline
-                    );
-                    
-                    isTerminal = false;
-                    
-                    const heartbeatTimer = setInterval(() => lockManager.heartbeat(), 30000);
-                    lifecycle.track({ dispose: () => clearInterval(heartbeatTimer) });
-                    log('Promotion complete. This session is now the Host.');
-                } catch (err) {
-                    log(`Failed to promote to Host: ${err}. Retrying failover...`);
-                    await attemptFailover();
-                }
-            } else {
-                log(`New Host discovered (PID: ${lock.pid}). Reconnecting as Terminal...`);
-                try {
-                    await ipcCoordinator.connectToHost(lock.ipcPort);
-                    log('Reconnection successful.');
-                } catch (err) {
-                    log(`Failed to reconnect to new Host: ${err}. Retrying failover...`);
-                    await attemptFailover();
-                }
-            }
-        };
-
-        if (isTerminal) {
-            mcpServer.setTerminal(ipcCoordinator);
-            ipcCoordinator.on('disconnected', () => {
-                log('Host connection lost. Triggering failover...');
-                attemptFailover().catch(err => {
-                    log(`Failover failed FATALLY: ${err}`);
-                    process.emit('SIGINT');
-                });
-            });
-        } else {
-            // We are Host. Start IPC Server.
-            const ipcPort = await ipcCoordinator.startHost();
-            ipcCoordinator.setMcpServer(mcpServer);
-            await lockManager.acquire(ipcPort);
-            
-            // Heartbeat
-            const heartbeatTimer = setInterval(() => lockManager.heartbeat(), 30000);
-            lifecycle.track({ dispose: () => clearInterval(heartbeatTimer) });
-        }
-
-        // Start MCP Server (Stdio Mode)
-        if (isMcpMode) {
-            // Handle deferred initialization
-            mcpServer.setOnInitialize(async (newPath) => {
-                if (isTerminal) {
-                    log('Deferred initialization in Terminal mode is handled by Host.');
-                    return;
-                }
-                // Clear old resources before switching
-                await lifecycle.disposeAll();
-                await lockManager.release();
-                
-                // Switch LockManager to new project
-                const newLockManager = new LockManager(newPath);
-                const result = await initializeEngine(newPath);
-                
-                // Re-acquire lock for new project
-                const newIpcPort = await ipcCoordinator.startHost();
-                await newLockManager.acquire(newIpcPort);
-                
-                // Update references
-                mcpServer.setGraphEngine(result.graphEngine);
-                (mcpServer as any).metadataRepo = result.metadataRepo;
-                mcpServer.setUpdatePipeline(updatePipeline);
-                mcpServer!.setConsistencyChecker(result.consistencyChecker);
-                mcpServer!.setSecurityProvider(result.securityProvider);
-            });
-
-            // Handle index purging
-            mcpServer.setOnPurge(async () => {
-                log('Purging engine resources...');
-                await lifecycle.disposeAll();
-                await lockManager.release();
-                
-                // Reset local references (they will be re-initialized if needed)
-                dbManager = undefined;
-                updatePipeline = undefined;
-                consistencyChecker = undefined;
-            });
-
-            await mcpServer.start();
-            log('MCP Server handshake active on stdio.');
-            
-            if (anchorPath) {
-                mcpServer.markReady(true);
-            } else {
-                log('!!! NO .cynapx-config FOUND !!!');
-                log('Server is in PENDING mode. Please initialize via MCP tool.');
-                mcpServer.markReady(false);
-            }
-        } else if (anchorPath) {
-            // CLI/API Mode
-            let httpsOptions;
-            
-            if (useHttps) {
-                try {
-                    log('Generating ephemeral SSL certificates for purely volatile mode...');
-                    httpsOptions = CertificateGenerator.generate();
-                    log('Ephemeral SSL certificates generated and loaded into memory.');
-                } catch (err) {
-                    log(`Error generating ephemeral certificates: ${err}. Falling back to HTTP.`);
-                }
-            } else if (process.env.SSL_KEY_PATH && process.env.SSL_CERT_PATH) {
-                try {
-                    httpsOptions = {
-                        key: fs.readFileSync(process.env.SSL_KEY_PATH),
-                        cert: fs.readFileSync(process.env.SSL_CERT_PATH)
-                    };
-                    log('Manual SSL Certificates loaded successfully.');
-                } catch (err) {
-                    log(`Warning: Failed to load SSL certificates from ${process.env.SSL_KEY_PATH} or ${process.env.SSL_CERT_PATH}. Falling back to HTTP.`);
-                }
-            }
-
-            const apiServer = new ApiServer(currentGraphEngine!, httpsOptions);
-            // Attach MCP Server for SSE support
-            apiServer.setMcpServer(mcpServer);
-            mcpServer.markReady(true); // Standalone server is ready if anchor exists
-
-            const port = parseInt(process.env.PORT || '3000', 10);
-            apiServer.start(port);
-            log(`Cynapx API listening on port ${port}`);
-        } else {
-            log('Error: .cynapx-config not found and not in MCP mode. Cannot start analysis.');
-            process.exit(1);
-        }
-
-        log('--- Startup Sequence Complete ---');
-
-        let shell: InteractiveShell | undefined;
-        if (!isMcpMode && !isOneShot) {
-            shell = new InteractiveShell(mcpServer);
-            shell.start();
-        }
-
-        // Handle One-Shot CLI Command
-        if (isOneShot && command) {
-            log(`\nExecuting CLI Command: ${command}`);
-            try {
-                // Parse remaining args as tool input (basic key-value pairs)
-                const input: any = {};
-                for (let i = 0; i < args.length; i++) {
-                    if (args[i].startsWith('--') && args[i] !== '--path' && args[i] !== '--https') {
-                        const key = args[i].replace('--', '');
-                        const value = args[i+1];
-                        if (value && !value.startsWith('--')) {
-                            input[key] = isNaN(Number(value)) ? value : Number(value);
-                            i++;
-                        } else {
-                            input[key] = true;
-                        }
-                    }
-                }
-
-                // Execute via McpServer's new public method
-                const result = await mcpServer.executeTool(command, input);
-
-                if (result.isError) {
-                    console.error('\n❌ Command Failed:');
-                    console.error(JSON.stringify(result.content, null, 2));
-                    process.exit(1);
-                } else {
-                    console.log('\n✅ Command Result:');
-                    console.log(result.content.map((c: any) => c.text || JSON.stringify(c)).join('\n'));
-                    process.exit(0);
-                }
-            } catch (err) {
-                console.error(`\n❌ Error executing command '${command}': ${err}`);
-                process.exit(1);
-            }
-        }
-
-        if (isMcpMode) {
-            process.stdin.on('end', () => {
-                log('STDIN closed, triggering graceful shutdown...');
-                process.emit('SIGINT');
-            });
-        }
-
-        process.on('SIGINT', async () => {
-            log('Shutting down...');
-            if (shell) shell.stop();
-            if (!isTerminal) await lockManager.signalShutdown();
-            if (mcpServer) await mcpServer.close();
-            ipcCoordinator.close();
-            await lockManager.release();
-            await lifecycle.disposeAll();
-            process.exit(0);
-        });
-
-    } catch (error) {
-        console.error('Fatal error during startup:', error);
+    if (workspaceManager.getAllContexts().length === 0) {
+        console.error("[Fatal] No valid projects found. Exiting.");
         process.exit(1);
     }
+
+    const primaryContext = workspaceManager.getActiveContext()!;
+    // Use the auto-cleaning LockManager
+    const lockManager = new LockManager(primaryContext.projectPath);
+    const mcpServer = new McpServer(workspaceManager);
+    const ipcCoordinator = new IpcCoordinator(mcpServer);
+
+    // Helper: Starts heavy services only for Host
+    const startHostServices = async () => {
+        for (const ctx of workspaceManager.getAllContexts()) {
+            console.error(`[*] Initializing Host Engine for: ${ctx.projectPath}`);
+            // This now opens the DB
+            await workspaceManager.initializeEngine(ctx.projectHash);
+            
+            const treeSitterParser = new TreeSitterParser();
+            const typescriptParser = new TypeScriptParser();
+            const compositeParser = new CompositeParser([typescriptParser, treeSitterParser]);
+            const gitService = new GitService(ctx.projectPath);
+            const workerPool = lifecycle.track(new WorkerPool(Math.min(os.cpus().length, 4)));
+            
+            const updatePipeline = new UpdatePipeline(
+                ctx.dbManager!.getDb(),
+                ctx.graphEngine!.nodeRepo,
+                (ctx.graphEngine! as any).edgeRepo,
+                compositeParser,
+                ctx.metadataRepo!,
+                gitService,
+                workerPool,
+                ctx.projectPath
+            );
+
+            (ctx as any).gitService = gitService;
+            (ctx as any).updatePipeline = updatePipeline;
+            (ctx as any).securityProvider = new SecurityProvider(ctx.projectPath);
+
+            if (!options.noIndex) {
+                const head = await gitService.getCurrentHead();
+                const last = ctx.metadataRepo!.getLastIndexedCommit();
+                if (head !== last || options.force) {
+                    console.error(`[*] Synchronizing index...`);
+                    await updatePipeline.syncWithGit(ctx.projectPath);
+                }
+            }
+
+            if (!options.noWatch) {
+                const watcher = lifecycle.track(new FileWatcher(updatePipeline, ctx.projectPath));
+                watcher.start(ctx.projectPath);
+            }
+        }
+    };
+
+    // [Restoration 2] Robust Failover with Double-Check
+    const attemptFailover = async () => {
+        const jitter = 500 + Math.random() * 3000;
+        await new Promise(r => setTimeout(r, jitter));
+        
+        const lock = await lockManager.getValidLock();
+        if (!lock) {
+            console.error(`[*] Host lost. Attempting promotion...`);
+            const ipcPort = await ipcCoordinator.startHost();
+            
+            // Atomic re-check
+            const finalCheck = await lockManager.getValidLock();
+            if (finalCheck) {
+                await ipcCoordinator.connectToHost(finalCheck.ipcPort);
+                return;
+            }
+
+            await lockManager.acquire(ipcPort);
+            mcpServer.promoteToHost();
+            
+            // Re-start services for all contexts
+            await startHostServices();
+            mcpServer.markReady(true);
+        } else {
+            await ipcCoordinator.connectToHost(lock.ipcPort);
+        }
+    };
+
+    const acquireAndRun = async () => {
+        const lock = await lockManager.getValidLock();
+        if (lock && lock.pid !== process.pid) {
+            console.error(`[*] Found Host (PID: ${lock.pid}). Starting Terminal mode...`);
+            try {
+                await ipcCoordinator.connectToHost(lock.ipcPort); 
+                mcpServer.setTerminal(ipcCoordinator);
+                ipcCoordinator.on('disconnected', () => { 
+                    console.error("[!] Connection lost. Retrying failover...");
+                    attemptFailover().catch(() => process.exit(1)); 
+                });
+            } catch (err) {
+                console.error(`[!] Stale lock? Retrying...`);
+                setTimeout(acquireAndRun, 2000);
+                return;
+            }
+        } else {
+            const port = await ipcCoordinator.startHost();
+            await lockManager.acquire(port);
+            console.error(`[*] Host mode active (Singleton Lock Acquired)`);
+            
+            await startHostServices();
+
+            const heartbeatTimer = setInterval(() => lockManager.heartbeat(), 30000);
+            lifecycle.track({ dispose: () => clearInterval(heartbeatTimer) });
+            mcpServer.markReady(true);
+        }
+    };
+
+    await acquireAndRun();
+
+    // [Restoration 3] Dynamic One-Shot CLI Argument Parsing
+    let command: string | undefined;
+    const commandArgs: any = {};
+    for (let i = 0; i < args.length; i++) {
+        if (!args[i].startsWith('-')) {
+            if (i > 0 && (args[i-1] === '--path' || args[i-1] === '-p')) continue;
+            command = args[i];
+        } else if (args[i].startsWith('--')) {
+            const key = args[i].substring(2);
+            const val = args[i+1];
+            if (val && !val.startsWith('-')) {
+                commandArgs[key] = isNaN(Number(val)) ? val : Number(val);
+                i++;
+            } else { commandArgs[key] = true; }
+        }
+    }
+
+    if (command && !options.interactive && !options.api) {
+        console.error(`[*] One-Shot CLI: ${command}`);
+        try {
+            const result = await mcpServer.executeTool(command, commandArgs);
+            if (result.isError) {
+                console.error("❌ Failed:");
+                console.log(JSON.stringify(result.content, null, 2));
+                process.exit(1);
+            } else {
+                result.content.forEach((c: any) => console.log(c.text || JSON.stringify(c, null, 2)));
+                process.exit(0);
+            }
+        } catch (e) { console.error(`[Error] ${e}`); process.exit(1); }
+    }
+
+    // Start Interfaces
+    if (options.api) {
+        let httpsOptions;
+        if (options.https) {
+            try { httpsOptions = CertificateGenerator.generate(); } catch(e) { console.error("[!] SSL generation failed."); }
+        }
+        const apiServer = new ApiServer(httpsOptions);
+        apiServer.setMcpServer(mcpServer);
+        apiServer.start(parseInt(options.apiPort, 10));
+    }
+
+    if (options.interactive) {
+        const shell = new InteractiveShell(mcpServer);
+        await shell.start();
+    } else if (!options.api && !command) {
+        await mcpServer.start();
+        console.error("[*] MCP Server ready on stdio.");
+    }
+
+    process.on('SIGINT', async () => {
+        console.error("\n[*] Shutting down gracefully...");
+        await lifecycle.disposeAll();
+        await lockManager.release();
+        process.exit(0);
+    });
 }
 
-bootstrap();
+bootstrap().catch(err => {
+    console.error(`[Fatal] Bootstrap failed: ${err.stack}`);
+    process.exit(1);
+});

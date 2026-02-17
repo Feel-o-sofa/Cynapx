@@ -72,6 +72,13 @@ export class InteractiveShell {
                 return;
             }
 
+            if (trimmed.startsWith('.semantic ')) {
+                const query = trimmed.substring(10).trim();
+                await this.handleCommand(`search_symbols {"query": "${query}", "semantic": true}`);
+                this.rl?.prompt();
+                return;
+            }
+
             // Execute command
             await this.handleCommand(trimmed);
             
