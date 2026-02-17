@@ -20,6 +20,7 @@ import { GitService } from './indexer/git-service';
 import { ConsistencyChecker } from './indexer/consistency-checker';
 import { ApiServer } from './server/api-server';
 import { McpServer } from './server/mcp-server';
+import { InteractiveShell } from './server/interactive-shell';
 import { FileWatcher } from './watcher/file-watcher';
 import { LifecycleManager } from './utils/lifecycle-manager';
 import { SecurityProvider } from './utils/security';
@@ -384,6 +385,12 @@ Environment Variables:
 
         log('--- Startup Sequence Complete ---');
 
+        let shell: InteractiveShell | undefined;
+        if (!isMcpMode && !isOneShot) {
+            shell = new InteractiveShell(mcpServer);
+            shell.start();
+        }
+
         // Handle One-Shot CLI Command
         if (isOneShot && command) {
             log(`\nExecuting CLI Command: ${command}`);
@@ -430,6 +437,7 @@ Environment Variables:
 
         process.on('SIGINT', async () => {
             log('Shutting down...');
+            if (shell) shell.stop();
             if (!isTerminal) await lockManager.signalShutdown();
             if (mcpServer) await mcpServer.close();
             ipcCoordinator.close();

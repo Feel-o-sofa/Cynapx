@@ -1314,6 +1314,54 @@ Please follow this safety protocol:
                 };
             }
 
+            case 'get_callers': {
+                const node = this.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                const edges = this.graphEngine!.getIncomingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
+                const callers = edges.map(e => {
+                    const callerNode = this.graphEngine!.getNodeById(e.from_id);
+                    return { qname: callerNode?.qualified_name, type: callerNode?.symbol_type, line: e.call_site_line };
+                });
+                return { content: [{ type: "text", text: JSON.stringify(callers, null, 2) }] };
+            }
+
+            case 'get_callees': {
+                const node = this.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                const edges = this.graphEngine!.getOutgoingEdges(node.id).filter(e => e.edge_type === 'calls' || e.edge_type === 'dynamic_calls');
+                const callees = edges.map(e => {
+                    const calleeNode = this.graphEngine!.getNodeById(e.to_id);
+                    return { qname: calleeNode?.qualified_name, type: calleeNode?.symbol_type, line: e.call_site_line };
+                });
+                return { content: [{ type: "text", text: JSON.stringify(callees, null, 2) }] };
+            }
+
+            case 'get_related_tests': {
+                const node = this.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+                if (!node || node.id === undefined) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+                const incomingTests = this.graphEngine!.getIncomingEdges(node.id).filter(e => e.edge_type === 'tests');
+                const outgoingTests = this.graphEngine!.getOutgoingEdges(node.id).filter(e => e.edge_type === 'tests');
+                const testNodes = [...incomingTests, ...outgoingTests].map(e => {
+                    const testId = e.edge_type === 'tests' ? (incomingTests.includes(e) ? e.from_id : e.to_id) : -1;
+                    const testNode = this.graphEngine!.getNodeById(testId);
+                    return { qname: testNode?.qualified_name, type: testNode?.symbol_type };
+                }).filter(n => n.qname !== undefined);
+                return { content: [{ type: "text", text: JSON.stringify(testNodes, null, 2) }] };
+            }
+
+            case 'perform_clustering':
+                const clusters = await this.graphEngine!.performClustering();
+                return { content: [{ type: "text", text: JSON.stringify(clusters, null, 2) }] };
+
+            case 'get_risk_profile':
+                const profile = await this.refactoringEngine.getRiskProfile(args.qualified_name);
+                return profile ? { content: [{ type: "text", text: JSON.stringify(profile, null, 2) }] } : { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
+
+            case 'get_hotspots':
+                const db = (this.graphEngine!.nodeRepo as any).db;
+                const hotspots = db.prepare(`SELECT qualified_name, symbol_type, ${args.metric} FROM nodes WHERE ${args.metric} >= ? ORDER BY ${args.metric} DESC LIMIT 20`).all(args.threshold || 0);
+                return { content: [{ type: "text", text: JSON.stringify(hotspots, null, 2) }] };
+
             case 'check_architecture_violations':
                 const violations = await this.architectureEngine.checkViolations();
                 return {
