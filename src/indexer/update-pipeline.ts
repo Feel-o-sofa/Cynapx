@@ -322,7 +322,7 @@ export class UpdatePipeline {
         // If not found locally, search across other registered projects
         if (side === 'to' && this.projectPath) {
             const registry = readRegistry();
-            const otherProjects = registry.filter(p => p.path.toLowerCase() !== this.projectPath!.toLowerCase());
+            const otherProjects = registry.filter(p => toCanonical(p.path) !== toCanonical(this.projectPath!));
             
             // Extract pure symbol name if it contains # (e.g. "path/to/file.ts#MyClass" -> "MyClass")
             const symbolName = qname.includes('#') ? qname.split('#').pop()! : qname;

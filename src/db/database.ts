@@ -15,6 +15,7 @@ import { Disposable } from '../types';
  */
 export class DatabaseManager implements Disposable {
     private db: Database.Database;
+    private _closed: boolean = false;
 
     constructor(dbPath: string) {
         // Ensure the database file's directory exists
@@ -65,6 +66,8 @@ export class DatabaseManager implements Disposable {
      * Closes the database connection.
      */
     public dispose(): void {
+        if (this._closed) return;
+        this._closed = true;
         this.db.close();
     }
 }

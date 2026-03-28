@@ -14,8 +14,20 @@ export class RemediationEngine {
      * Generates a remediation recipe for a specific violation.
      */
     public getRemediationStrategy(violation: ArchitectureViolation): RemediationRecipe {
-        const fromTags = violation.source.tags || [];
-        const toTags = violation.target.tags || [];
+        if (!violation.source || !violation.target) {
+            return {
+                strategy: 'Insufficient Violation Data',
+                rationale: 'The violation object is missing source or target node information.',
+                steps: [
+                    '1. Ensure the violation was produced by check_architecture_violations.',
+                    '2. Verify that both source and target symbols exist in the knowledge graph.',
+                    '3. Re-run check_architecture_violations and pass one of the returned violation objects directly.'
+                ]
+            };
+        }
+
+        const fromTags = violation.source?.tags || [];
+        const toTags = violation.target?.tags || [];
 
         // 1. Circular Dependency
         if (violation.policyId === 'circular-dependency') {
@@ -73,7 +85,7 @@ export class RemediationEngine {
         }
 
         // 5. Fat Component / High Complexity (God Object)
-        if ((violation.source.cyclomatic || 0) > 30 || (violation.source.loc || 0) > 500) {
+        if ((violation.source?.cyclomatic || 0) > 30 || (violation.source?.loc || 0) > 500) {
             return {
                 strategy: 'Single Responsibility Principle (SRP) Decomposition',
                 rationale: 'The component is too large and handles too many responsibilities (God Object).',
@@ -91,7 +103,7 @@ export class RemediationEngine {
             strategy: 'Architectural Decoupling',
             rationale: `Illegal relationship detected: ${violation.description}.`,
             steps: [
-                `1. Analyze the intent of the relationship between '${violation.source.qualified_name}' and '${violation.target.qualified_name}'.`,
+                `1. Analyze the intent of the relationship between '${violation.source?.qualified_name}' and '${violation.target?.qualified_name}'.`,
                 `2. Identify if the dependency can be reversed using DIP.`,
                 `3. Check if the logic can be moved to a more appropriate layer/module.`,
                 `4. If the relationship is notification-based, use an Observer or Pub/Sub pattern.`

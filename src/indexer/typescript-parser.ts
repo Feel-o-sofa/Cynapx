@@ -80,6 +80,52 @@ export class TypeScriptParser implements CodeParser {
                         dynamic: false
                     });
 
+                    // Edge: class -> method/property (contains)
+                    if (ts.isMethodDeclaration(node) &&
+                        (ts.isClassDeclaration(node.parent) || ts.isClassExpression(node.parent))) {
+                        const parentClass = node.parent;
+                        if ((parentClass as any).name) {
+                            const classSymbol = this.typeChecker?.getSymbolAtLocation((parentClass as any).name);
+                            if (classSymbol) {
+                                const classQName = toCanonical(this.getName(classSymbol));
+                                edges.push({
+                                    from_qname: classQName,
+                                    to_qname: qname,
+                                    edge_type: 'contains',
+                                    dynamic: false
+                                });
+                            }
+                        }
+
+                        // Edge: method -> parent method (overrides)
+                        const heritageClause = parentClass.heritageClauses?.find(
+                            c => c.token === ts.SyntaxKind.ExtendsKeyword
+                        );
+                        if (heritageClause && heritageClause.types.length > 0) {
+                            const methodName = (node.name as ts.Identifier).text;
+                            const parentType = this.typeChecker?.getTypeAtLocation(heritageClause.types[0]);
+                            const parentPropSymbol = parentType?.getProperty(methodName);
+                            if (parentPropSymbol) {
+                                const parentDecl = parentPropSymbol.valueDeclaration ?? parentPropSymbol.declarations?.[0];
+                                if (parentDecl) {
+                                    const parentFile = parentDecl.getSourceFile().fileName;
+                                    const parentClassSymbol = parentType?.symbol;
+                                    if (parentClassSymbol) {
+                                        const parentClassQName = toCanonical(this.getName(parentClassSymbol));
+                                        const parentMethodQName = `${parentClassQName}.${methodName}`;
+                                        edges.push({
+                                            from_qname: qname,
+                                            to_qname: parentMethodQName,
+                                            edge_type: 'overrides',
+                                            dynamic: false,
+                                            target_file_hint: parentFile
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     // OOP Relationships (inherits / implements)
                     if (ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node)) {
                         if (node.heritageClauses) {
@@ -132,7 +178,34 @@ export class TypeScriptParser implements CodeParser {
             if (ts.isCallExpression(node)) {
                 const centerNode = this.findParentSymbol(node);
                 const fromQName = centerNode ? toCanonical(this.getName(centerNode)) : canonicalFilePath;
-                this.resolveCall(node, sourceFile, fromQName, edges);
+
+                // Detect `something.method.bind(this)` pattern.
+                // The outer call is to Function.prototype.bind; the actual callee is
+                // the property access expression that precedes `.bind`.  We resolve
+                // that inner expression instead so a proper `calls` edge is emitted.
+                if (
+                    ts.isPropertyAccessExpression(node.expression) &&
+                    node.expression.name.text === 'bind' &&
+                    ts.isPropertyAccessExpression(node.expression.expression)
+                ) {
+                    const actualCallee = node.expression.expression;
+                    const symbol = this.typeChecker?.getSymbolAtLocation(actualCallee);
+                    if (symbol) {
+                        const declaration = symbol.valueDeclaration || symbol.declarations?.[0];
+                        if (declaration) {
+                            edges.push({
+                                from_qname: fromQName,
+                                to_qname: toCanonical(this.getName(symbol)),
+                                edge_type: 'calls',
+                                dynamic: false,
+                                call_site_line: sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1,
+                                target_file_hint: declaration.getSourceFile().fileName
+                            });
+                        }
+                    }
+                } else {
+                    this.resolveCall(node, sourceFile, fromQName, edges);
+                }
             }
 
             ts.forEachChild(node, visit);
