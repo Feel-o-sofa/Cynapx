@@ -22,13 +22,21 @@ export class ApiServer {
 
     constructor(private httpsOptions?: https.ServerOptions) {
         this.app = express();
-        this.app.use(express.json());
+        this.app.use(express.json({ limit: '1mb' }));
         this.setupMiddleware();
         this.setupRoutes();
     }
 
     private setupMiddleware(): void {
-        const AUTH_TOKEN = process.env.KNOWLEDGE_TOOL_TOKEN || 'dev-token-1234';
+        const envToken = process.env.KNOWLEDGE_TOOL_TOKEN;
+        let AUTH_TOKEN: string;
+        if (envToken) {
+            AUTH_TOKEN = envToken;
+        } else {
+            const generatedToken = crypto.randomBytes(32).toString('hex');
+            console.error('[cynapx] WARNING: No KNOWLEDGE_TOOL_TOKEN set. Generated temporary token:', generatedToken);
+            AUTH_TOKEN = generatedToken;
+        }
         
         // Advanced Request Logger Restoration
         this.app.use((req, res, next) => {
@@ -208,9 +216,20 @@ export class ApiServer {
             const ctx = this.getActiveContext();
             const { metric, threshold, symbol_type } = req.body;
             const db = ctx.dbManager!.getDb();
-            // Restoration: Type filtering support
-            const typeFilter = symbol_type ? `AND symbol_type = '${symbol_type}'` : '';
-            const hotspots = db.prepare(`SELECT * FROM nodes WHERE ${metric} >= ? ${typeFilter} ORDER BY ${metric} DESC LIMIT 100`).all(threshold || 0);
+
+            const allowedMetrics = ['loc', 'cyclomatic', 'fan_in', 'fan_out', 'fan_in_dynamic', 'fan_out_dynamic'];
+            if (!metric || !allowedMetrics.includes(metric)) {
+                return res.status(400).json({ error_code: 'INVALID_PARAMETER', message: `Invalid metric. Allowed: ${allowedMetrics.join(', ')}` });
+            }
+
+            const params: any[] = [threshold || 0];
+            let typeFilter = '';
+            if (symbol_type) {
+                typeFilter = 'AND symbol_type = ?';
+                params.push(symbol_type);
+            }
+
+            const hotspots = db.prepare(`SELECT * FROM nodes WHERE ${metric} >= ? ${typeFilter} ORDER BY ${metric} DESC LIMIT 100`).all(...params);
             res.json({ hotspots: hotspots.map((h: any) => ({ node: this.mapToGraphNode(ctx.graphEngine!.nodeRepo.mapRowToNode(h)), metric_value: h[metric] })) });
         } catch (e: any) {
             res.status(500).json({ error_code: 'INTERNAL_ERROR', message: e.message });

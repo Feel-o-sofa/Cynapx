@@ -52,7 +52,7 @@ export class LockManager {
                 if (fs.existsSync(this.lockPath)) fs.unlinkSync(this.lockPath);
 
                 // 2. Clear residual DB journal files that might keep the DB locked
-                const dbPath = this.lockPath.replace('.lock', '.db').replace('locks\\', '');
+                const dbPath = this.lockPath.replace('.lock', '.db').replace('locks' + path.sep, '');
                 // The lock is in ~/.cynapx/locks/<hash>.lock, DB is in ~/.cynapx/<hash>.db
                 const dbBase = this.lockPath.replace(path.join('locks', path.basename(this.lockPath)), path.basename(this.lockPath, '.lock'));
                 const dir = path.dirname(path.dirname(this.lockPath));

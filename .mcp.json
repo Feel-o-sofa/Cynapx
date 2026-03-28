@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cynapx": {
+      "command": "npx",
+      "args": ["ts-node", "src/bootstrap.ts", "--path", "."]
+    }
+  }
+}

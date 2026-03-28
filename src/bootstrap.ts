@@ -27,11 +27,12 @@ import { WorkerPool } from './indexer/worker-pool';
 import { CertificateGenerator } from './utils/certificate-generator';
 
 async function bootstrap() {
+    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
     const program = new Command();
     program
         .name('cynapx')
         .description('High-performance isolated code knowledge engine for AI agents')
-        .version('1.0.5')
+        .version(pkg.version)
         .option('-p, --path <paths...>', 'Project paths to analyze', [process.cwd()])
         .option('--api-port <number>', 'Port for the REST API server', '3000')
         .option('--no-index', 'Disable initial indexing')

@@ -5,6 +5,7 @@
  */
 import * as net from 'net';
 import * as readline from 'readline';
+import * as crypto from 'crypto';
 import { McpServer } from './mcp-server';
 import { EventEmitter } from 'events';
 
@@ -132,7 +133,7 @@ export class IpcCoordinator extends EventEmitter {
     public async forwardExecuteTool(name: string, args: any): Promise<any> {
         if (!this.client) throw new Error('Not connected to Host');
 
-        const id = Math.random().toString(36).substring(7);
+        const id = crypto.randomUUID();
         const req: IpcRequest = {
             id,
             method: 'executeTool',

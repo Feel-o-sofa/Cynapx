@@ -35,15 +35,10 @@ src-native/index.d.ts
 *temp_*
 *verify_*
 *coverage_*
-*.test.*
-*.spec.*
-tests/
-__tests__/
 scripts/
 switch-env.js
 
 # AI Agent Context & Internal Docs (Exempt from Repo)
 .gemini/
-agent_docs/
 reports/
 GEMINI.md

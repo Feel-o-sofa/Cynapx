@@ -1,0 +1,33 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Dev Server (auto-restart)",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node-dev", "--respawn", "src/bootstrap.ts"],
+      "port": 3000
+    },
+    {
+      "name": "MCP Server (stdio)",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "src/bootstrap.ts"]
+    },
+    {
+      "name": "REST API Server",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "src/bootstrap.ts", "--api", "--api-port", "3001"],
+      "port": 3001
+    },
+    {
+      "name": "REST API Server (HTTPS)",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "src/bootstrap.ts", "--api", "--api-port", "3000", "--https"],
+      "port": 3000
+    },
+    {
+      "name": "Interactive REPL",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["ts-node", "src/bootstrap.ts", "--interactive"]
+    }
+  ]
+}
