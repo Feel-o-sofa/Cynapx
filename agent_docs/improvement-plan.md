@@ -265,4 +265,202 @@ Week 7+: C-3 Phase 3-4 + Medium/Low 항목 순차 진행
 
 ---
 
-> 이 문서는 2026-03-28 시점의 진단 결과입니다. 각 항목의 구현 완료 시 상태를 업데이트하세요.
+## 7. Cynapx 분석 엔진 개선 계획
+
+> 2026-03-29 MCP 검증 테스트 결과 기반 추가
+
+### 7.1 검증 테스트 결과 요약
+
+Cynapx MCP 20개 도구 전체를 실행하여 분석 결과의 정확성을 검증한 결과:
+
+| 검증 항목 | 평가 |
+|-----------|------|
+| McpServer.executeTool 메트릭 (LOC/라인/호출자) | **부분 정확** — CC 다소 과대 |
+| GraphEngine 클래스 구조 분석 | **부분 정확** — impactCache TTL 미반영 |
+| Dead Code 탐지 (224개 보고) | **부분 정확** — 60-70% false positive |
+| Latent Policies (7개) | **정확** |
+| Architecture Violations (0건) | **부분 정확** — 관대한 정책 반영 |
+| CRITICAL 리스크 평가 | **정확** |
+
+### 7.2 근본 원인 분석
+
+#### E-1. Dead Code False Positive (CRITICAL)
+
+**근본 원인**: `optimization-engine.ts`의 dead code 판정이 `fan_in = 0` 단일 조건에 의존
+
+**영향받는 패턴 3가지**:
+
+1. **인터페이스 디스패치 미추적** — `LanguageProvider` 인터페이스의 5개 메서드 × 12개 언어 = 60개 false positive
+   - `implements` 엣지는 TypeScript 파서가 이미 생성하지만, dead code 판정 시 미활용
+   - 클래스가 인터페이스를 `implements`하면 해당 메서드는 간접 호출 가능 → dead 아님
+
+2. **Express `.bind(this)` 미추적** — `ApiServer`의 8개 핸들러 전부 false positive
+   - `typescript-parser.ts`의 `resolveCall`이 `.bind()` 호출을 `Function.prototype.bind`로 해석
+   - 원본 함수(`this.handleMcp` 등)에 대한 call 엣지 미생성
+
+3. **`Disposable` 인터페이스 간접 호출** — `WorkerPool.dispose` 등 false positive
+   - `LifecycleManager.disposeAll()`이 추적된 `Disposable` 객체들의 `.dispose()` 호출
+   - 동적 인터페이스 디스패치이므로 정적 분석에서 미추적
+
+**수정 대상 파일**:
+- `src/graph/optimization-engine.ts` — `implements` 엣지가 존재하는 클래스의 메서드는 dead code에서 제외
+- `src/indexer/typescript-parser.ts` — `.bind(this)` 패턴 인식, `contains` 엣지 발행
+
+**수정 방안**:
+```
+optimization-engine.ts 변경:
+  현재: fan_in = 0 AND (기본 제외 조건)
+  변경: fan_in = 0
+        AND (기본 제외 조건)
+        AND NOT EXISTS (
+          SELECT 1 FROM edges e
+          JOIN nodes parent ON parent.id = e.from_id
+          JOIN edges impl ON impl.from_id = parent.id AND impl.edge_type = 'implements'
+          WHERE e.to_id = parent.id AND e.edge_type = 'defines'
+          AND nodes.qualified_name LIKE parent.qualified_name || '.%'
+        )
+
+typescript-parser.ts 변경:
+  resolveCall()에서 .bind() 패턴 감지:
+  - node.expression이 PropertyAccessExpression이고 .name === 'bind'일 때
+  - node.expression.expression (원본 함수)에서 심볼 해석
+  - 원본 함수에 대한 'calls' 엣지 생성
+```
+
+**노력 수준**: M
+**의존성**: 없음
+
+---
+
+#### E-2. CC (Cyclomatic Complexity) 과대 계산 (HIGH)
+
+**근본 원인**: `metrics-calculator.ts`의 Native path와 JS path 결과 불일치
+
+- **JS path**: TypeScript AST 노드 타입으로 구조적 분석 (정확)
+- **Native path**: 키워드 문자열 매칭 (`'if'`, `'for'`, `'&&'` 등) → 문자열 리터럴/주석 내 키워드도 카운트 가능
+
+**추가 문제**:
+- `NullishCoalescing` (`??`), Optional Chaining (`?.`)이 decision point로 미카운트
+- `SwitchCase`의 카운트 방식이 과도할 수 있음 (case문 자체 vs case 내 분기)
+
+**수정 대상 파일**: `src/indexer/metrics-calculator.ts`
+
+**수정 방안**:
+- Native path 사용 시에도 AST 기반 decision point 리스트를 전달하도록 변경
+- 또는 Native path를 제거하고 JS path만 사용 (일관성 우선)
+- `??`와 `?.`를 decision point에 추가
+
+**노력 수준**: M
+**의존성**: 없음
+
+---
+
+#### E-3. `purge_index` EBUSY 오류 (HIGH)
+
+**근본 원인**: MCP 서버가 DB 연결을 유지한 채 `fs.unlinkSync(dbPath)` 시도
+
+**수정 대상 파일**: `src/server/mcp-server.ts` (purge_index case) + `src/db/database.ts`
+
+**수정 방안**:
+- purge 시 `DatabaseManager.dispose()` 호출하여 DB 연결 종료 후 파일 삭제
+- `database.ts`에 `isOpen` 플래그 추가하여 이중 close 방지
+- purge 후 필요 시 DB 재생성
+
+**노력 수준**: S
+**의존성**: 없음
+
+---
+
+#### E-4. `get_remediation_strategy` 크래시 (HIGH)
+
+**근본 원인**: `violation.source` 또는 `violation.target`가 undefined일 때 `.tags` 접근
+
+**수정 대상 파일**: `src/graph/remediation-engine.ts`
+
+**수정 방안**:
+- `violation.source?.tags || []` 및 `violation.target?.tags || []` 으로 optional chaining 적용
+- `getRemediationStrategy` 진입부에서 source/target 유효성 검증 추가
+
+**노력 수준**: S
+**의존성**: 없음
+
+---
+
+#### E-5. Worktree 중복 인덱싱 (MEDIUM)
+
+**근본 원인**: `update-pipeline.ts:325`에서 경로 비교 시 `toCanonical()` 미사용
+
+**현재 코드**: `p.path.toLowerCase()` vs `this.projectPath.toLowerCase()`
+**문제**: 경로 구분자(`\` vs `/`), trailing slash, 심볼릭 링크 등 미처리
+
+**수정 대상 파일**: `src/indexer/update-pipeline.ts`
+
+**수정 방안**:
+- 경로 비교를 `toCanonical(p.path) === toCanonical(this.projectPath)` 로 변경
+- `toCanonical()`이 이미 import되어 있으므로 1줄 수정
+
+**노력 수준**: S
+**의존성**: 없음
+
+---
+
+#### E-6. 미발행 엣지 타입 (MEDIUM)
+
+**현황**: `types/index.ts`에 정의되었으나 파서가 발행하지 않는 엣지 타입:
+
+| 엣지 타입 | 정의됨 | 발행됨 | 용도 |
+|-----------|--------|--------|------|
+| `contains` | O | X | class → method 포함 관계 |
+| `overrides` | O | X | 메서드 오버라이드 |
+| `dynamic_calls` | O | X (대신 `calls` + `dynamic:true`) | 동적 호출 |
+| `implements_trait` | O | X | Rust/Go trait 구현 |
+
+**수정 대상 파일**: `src/indexer/typescript-parser.ts`, `src/indexer/tree-sitter-parser.ts`
+
+**수정 방안**:
+- TypeScript 파서: class 내부 메서드 발견 시 `contains` 엣지 추가
+- TypeScript 파서: 부모 클래스와 동일 이름의 메서드 발견 시 `overrides` 엣지 추가
+- Tree-sitter 파서: 동적 호출 감지 시 `dynamic_calls` 타입 사용 (`calls` + `dynamic:true` 대신)
+
+**노력 수준**: M
+**의존성**: E-1과 병행 가능
+
+---
+
+### 7.3 엔진 개선 실행 순서
+
+```
+Phase 1 (Week 1 — Bug Fixes, 병렬):
+  E-3: purge_index EBUSY 수정 (S)
+  E-4: get_remediation_strategy null 가드 (S)
+  E-5: Worktree 경로 정규화 (S)
+
+Phase 2 (Week 2-3 — 핵심 정확도, 병렬):
+  E-1: Dead code false positive 감소 (M)
+    - optimization-engine.ts: implements 엣지 기반 제외
+    - typescript-parser.ts: .bind(this) 패턴 + contains 엣지
+  E-2: CC 계산 일관성 (M)
+    - metrics-calculator.ts: native/JS path 통일
+
+Phase 3 (Week 3-4 — 그래프 완성도):
+  E-6: 미발행 엣지 타입 구현 (M)
+
+Phase 4 (Week 4 — 재검증):
+  MCP 전체 도구 재실행 → dead code false positive 비율 측정
+  목표: false positive 비율 60-70% → 20% 이하
+```
+
+### 7.4 예상 효과
+
+| 개선 항목 | 현재 | 목표 |
+|-----------|------|------|
+| Dead code false positive | ~60-70% | <20% |
+| CC 정확도 | Native/JS 불일치 | 단일 경로, ±5% 이내 |
+| purge_index 성공률 | MCP 실행 중 실패 | 항상 성공 |
+| Worktree 중복 노드 | 2× 카운트 | 1× 카운트 |
+| 엣지 타입 활용률 | 6/15 (40%) | 10/15 (67%) |
+
+---
+
+> 이 문서는 2026-03-28 시점의 진단 결과 + 2026-03-29 MCP 검증 테스트 결과를 반영합니다.
+> 각 항목의 구현 완료 시 상태를 업데이트하세요.
