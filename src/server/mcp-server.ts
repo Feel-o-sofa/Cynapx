@@ -589,6 +589,12 @@ Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the curr
                 return { content: [{ type: "text", text: JSON.stringify(violations, null, 2) }] };
             }
             case 'get_remediation_strategy': {
+                if (!args.violation) {
+                    return { isError: true, content: [{ type: "text", text: "Missing required argument: violation" }] };
+                }
+                if (!args.violation.source || !args.violation.target) {
+                    return { isError: true, content: [{ type: "text", text: "Invalid violation object: 'source' and 'target' nodes are required. Pass a violation object returned by check_architecture_violations." }] };
+                }
                 const strategy = this.remediationEngine.getRemediationStrategy(args.violation);
                 return { content: [{ type: "text", text: JSON.stringify(strategy, null, 2) }] };
             }
@@ -628,6 +634,7 @@ Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the curr
                 const ctx = this.getContext();
                 const dbPath = getDatabasePath(ctx.projectPath);
                 if (this.onPurgeCallback) await this.onPurgeCallback();
+                ctx.dbManager?.dispose();
                 this.isInitialized = false;
                 [dbPath, `${dbPath}-wal`, `${dbPath}-shm`].forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
                 if (args.unregister) require('../utils/paths').removeFromRegistry(ctx.projectPath);

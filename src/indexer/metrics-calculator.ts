@@ -42,7 +42,7 @@ export class MetricsCalculator {
     public static calculateCyclomaticComplexity(node: any, sourceCode?: string): number {
         // Use native acceleration if available and source code is provided
         if (nativeModule && sourceCode) {
-            const decisionPoints = ['if', 'for', 'while', 'case', 'catch', '&&', '||'];
+            const decisionPoints = ['if', 'for', 'while', 'case', 'catch', '&&', '||', '??'];
             return nativeModule.calculateCyclomaticComplexityNative(sourceCode, decisionPoints);
         }
 
@@ -62,7 +62,8 @@ export class MetricsCalculator {
                 case ts.SyntaxKind.BinaryExpression:
                     const binaryExpr = n as ts.BinaryExpression;
                     if (binaryExpr.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
-                        binaryExpr.operatorToken.kind === ts.SyntaxKind.BarBarToken) {
+                        binaryExpr.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+                        binaryExpr.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) {
                         complexity++;
                     }
                     break;
