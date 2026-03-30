@@ -11,7 +11,7 @@
     "start": "ts-node src/bootstrap.ts",
     "build": "npm run build:ts && npm run build:copy",
     "build:ts": "tsc",
-    "build:copy": "powershell -NoProfile -Command \"Copy-Item -Path 'src/indexer/languages/queries' -Destination 'dist/indexer/languages/' -Recurse -Force ; If (Test-Path 'src-native/*.node') { Copy-Item -Path 'src-native/*.node' -Destination 'dist/' -Force }\"",
+    "build:copy": "node -e \"const fs=require('fs'),path=require('path');fs.cpSync('src/indexer/languages/queries','dist/indexer/languages/queries',{recursive:true});try{fs.readdirSync('src-native').filter(f=>f.endsWith('.node')).forEach(f=>fs.copyFileSync(path.join('src-native',f),path.join('dist',f)));}catch(e){}\"",
     "build:native": "npm run build --prefix src-native",
     "dev": "ts-node-dev --respawn src/bootstrap.ts",
     "prepare": "npm run build",
