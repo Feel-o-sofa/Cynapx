@@ -29,9 +29,22 @@ export class OptimizationEngine {
         
         // Find nodes with no incoming edges (fan_in = 0)
         // Exclude files, tests, entrypoints, and public interfaces.
-        // Also exclude methods that belong to a class which implements an interface,
-        // because those methods are called via interface dispatch (polymorphism)
-        // and their fan_in will appear as 0 even though they are reachable.
+        //
+        // Also exclude methods that belong to a class involved in polymorphism:
+        //
+        // 1. NOT EXISTS (contains + implements): exclude methods whose containing class
+        //    implements an interface. Such methods may be invoked via interface dispatch
+        //    (e.g. IFoo.bar()) and will appear unreachable despite being live.
+        //    Edge types used:
+        //      cont.edge_type = 'contains'   → class contains this method (class→method)
+        //      impl.edge_type = 'implements' → that class implements an interface (class→interface)
+        //
+        // 2. NOT EXISTS (contains + inherits): exclude methods whose containing class
+        //    inherits from a parent class. Such methods may override a virtual/abstract
+        //    method and be called through the supertype reference.
+        //    Edge types used:
+        //      cont.edge_type = 'contains'  → class contains this method (class→method)
+        //      inh.edge_type  = 'inherits'  → that class inherits from a parent (class→parent)
         const query = `
             SELECT * FROM nodes
             WHERE fan_in = 0
@@ -40,11 +53,18 @@ export class OptimizationEngine {
             AND (tags IS NULL OR tags NOT LIKE '%trait:abstract%')
             AND (visibility != 'public' OR symbol_type NOT IN ('class', 'interface', 'function'))
             AND NOT EXISTS (
-                SELECT 1 FROM edges def
-                JOIN edges impl ON impl.from_id = def.from_id
-                WHERE def.to_id = nodes.id
-                AND def.edge_type = 'defines'
+                SELECT 1 FROM edges cont
+                JOIN edges impl ON impl.from_id = cont.from_id
+                WHERE cont.to_id = nodes.id
+                AND cont.edge_type = 'contains'
                 AND impl.edge_type = 'implements'
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM edges cont
+                JOIN edges inh ON inh.from_id = cont.from_id
+                WHERE cont.to_id = nodes.id
+                AND cont.edge_type = 'contains'
+                AND inh.edge_type = 'inherits'
             )
         `;
 
