@@ -41,6 +41,7 @@ async function bootstrap() {
         .option('--api', 'Start the REST API server', false)
         .option('--https', 'Enable ephemeral HTTPS for API server', false)
         .option('--force', 'Force full re-index', false)
+        .option('--bind <address>', 'Bind address for the REST API server', '127.0.0.1')
         .parse(process.argv);
 
     const options = program.opts();
@@ -231,7 +232,7 @@ async function bootstrap() {
         }
         const apiServer = new ApiServer(httpsOptions);
         apiServer.setMcpServer(mcpServer);
-        apiServer.start(parseInt(options.apiPort, 10));
+        apiServer.start(parseInt(options.apiPort, 10), options.bind);
     }
 
     if (options.interactive) {

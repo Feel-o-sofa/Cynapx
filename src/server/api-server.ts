@@ -8,12 +8,72 @@ import { Request, Response } from 'express';
 import * as http from 'http';
 import * as https from 'https';
 import * as crypto from 'crypto';
+import rateLimit from 'express-rate-limit';
+import { z, ZodSchema } from 'zod';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { TraversalResult } from '../graph/graph-engine';
 import { CodeNode, CodeEdge } from '../types';
 import { McpServer } from './mcp-server';
 import { EngineContext } from './workspace-manager';
 import * as fs from 'fs';
+
+// --- Zod Schemas (M-4) ---
+const SymbolRefSchema = z.object({
+    qualified_name: z.string().min(1),
+});
+
+const GetSymbolSchema = z.object({
+    qualified_name: z.string().min(1),
+});
+
+const GetCallersSchema = z.object({
+    symbol: SymbolRefSchema,
+    max_depth: z.number().int().positive().optional(),
+});
+
+const GetCalleesSchema = z.object({
+    symbol: SymbolRefSchema,
+    max_depth: z.number().int().positive().optional(),
+});
+
+const ImpactAnalysisSchema = z.object({
+    symbol: SymbolRefSchema,
+    max_depth: z.number().int().positive().optional(),
+});
+
+const HotspotsSchema = z.object({
+    metric: z.enum(['loc', 'cyclomatic', 'fan_in', 'fan_out', 'fan_in_dynamic', 'fan_out_dynamic']),
+    threshold: z.number().optional(),
+    symbol_type: z.string().optional(),
+});
+
+const TestsSchema = z.object({
+    symbol: SymbolRefSchema,
+});
+
+const SymbolSearchSchema = z.object({
+    query: z.string().min(1),
+    limit: z.number().int().positive().optional(),
+});
+
+const ExportGraphSchema = z.object({
+    root_qname: z.string().optional(),
+    max_depth: z.number().int().positive().optional(),
+});
+
+// --- Validation helper (M-4) ---
+function validate<T>(schema: ZodSchema<T>, req: Request, res: Response): T | null {
+    const result = schema.safeParse(req.body);
+    if (!result.success) {
+        res.status(400).json({ error: 'Validation failed', details: result.error.issues });
+        return null;
+    }
+    return result.data;
+}
+
+// --- Rate limiters (H-1) ---
+const globalLimiter = rateLimit({ windowMs: 60_000, max: 100 });
+const analyzeLimiter = rateLimit({ windowMs: 60_000, max: 10 });
 
 export class ApiServer {
     private app: express.Application;
@@ -23,6 +83,8 @@ export class ApiServer {
     constructor(private httpsOptions?: https.ServerOptions) {
         this.app = express();
         this.app.use(express.json({ limit: '1mb' }));
+        // H-1: apply global rate limiter (100 req/min per IP)
+        this.app.use(globalLimiter);
         this.setupMiddleware();
         this.setupRoutes();
     }
@@ -81,9 +143,10 @@ export class ApiServer {
         this.app.post('/api/symbol/get', this.handleGetSymbol.bind(this));
         this.app.post('/api/graph/callers', this.handleGetCallers.bind(this));
         this.app.post('/api/graph/callees', this.handleGetCallees.bind(this));
-        this.app.post('/api/analysis/impact', this.handleImpactAnalysis.bind(this));
-        this.app.post('/api/analysis/hotspots', this.handleHotspots.bind(this));
-        this.app.post('/api/analysis/tests', this.handleTests.bind(this));
+        // H-1: stricter limiter (10 req/min) for heavy analysis endpoints
+        this.app.post('/api/analysis/impact', analyzeLimiter, this.handleImpactAnalysis.bind(this));
+        this.app.post('/api/analysis/hotspots', analyzeLimiter, this.handleHotspots.bind(this));
+        this.app.post('/api/analysis/tests', analyzeLimiter, this.handleTests.bind(this));
         this.app.post('/api/search/symbols', this.handleSymbolSearch.bind(this));
         this.app.post('/api/graph/export', this.handleExportGraph.bind(this));
     }
@@ -107,9 +170,11 @@ export class ApiServer {
     }
 
     private async handleExportGraph(req: Request, res: Response) {
+        const body = validate(ExportGraphSchema, req, res);
+        if (body === null) return;
         try {
             const ctx = this.getActiveContext();
-            const { root_qname, max_depth } = req.body;
+            const { root_qname, max_depth } = body;
             const result = await ctx.graphEngine!.exportToMermaid({ rootQName: root_qname, maxDepth: max_depth });
             res.json({ format: 'mermaid', content: result });
         } catch (e: any) {
@@ -118,9 +183,11 @@ export class ApiServer {
     }
 
     private handleGetSymbol(req: Request, res: Response) {
+        const body = validate(GetSymbolSchema, req, res);
+        if (body === null) return;
         try {
             const ctx = this.getActiveContext();
-            const { qualified_name } = req.body;
+            const { qualified_name } = body;
             const node = ctx.graphEngine!.getNodeByQualifiedName(qualified_name);
             if (!node || node.id === undefined) return res.status(404).json({ error_code: 'SYMBOL_NOT_FOUND', related_symbol: qualified_name });
 
@@ -153,9 +220,11 @@ export class ApiServer {
     }
 
     private handleGetCallers(req: Request, res: Response) {
+        const body = validate(GetCallersSchema, req, res);
+        if (body === null) return;
         try {
             const ctx = this.getActiveContext();
-            const { symbol, max_depth } = req.body;
+            const { symbol, max_depth } = body;
             const node = ctx.graphEngine!.getNodeByQualifiedName(symbol.qualified_name);
             if (!node || node.id === undefined) return res.status(404).json({ error_code: 'SYMBOL_NOT_FOUND' });
             const results = ctx.graphEngine!.traverse(node.id, 'BFS', { direction: 'incoming', maxDepth: max_depth || 1 });
@@ -173,9 +242,11 @@ export class ApiServer {
     }
 
     private handleGetCallees(req: Request, res: Response) {
+        const body = validate(GetCalleesSchema, req, res);
+        if (body === null) return;
         try {
             const ctx = this.getActiveContext();
-            const { symbol, max_depth } = req.body;
+            const { symbol, max_depth } = body;
             const node = ctx.graphEngine!.getNodeByQualifiedName(symbol.qualified_name);
             if (!node || node.id === undefined) return res.status(404).json({ error_code: 'SYMBOL_NOT_FOUND' });
             const results = ctx.graphEngine!.traverse(node.id, 'BFS', { direction: 'outgoing', maxDepth: max_depth || 1 });
@@ -193,9 +264,11 @@ export class ApiServer {
     }
 
     private handleImpactAnalysis(req: Request, res: Response) {
+        const body = validate(ImpactAnalysisSchema, req, res);
+        if (body === null) return;
         try {
             const ctx = this.getActiveContext();
-            const { symbol, max_depth } = req.body;
+            const { symbol, max_depth } = body;
             const node = ctx.graphEngine!.getNodeByQualifiedName(symbol.qualified_name);
             if (!node || node.id === undefined) return res.status(404).json({ error_code: 'SYMBOL_NOT_FOUND' });
             const results = ctx.graphEngine!.traverse(node.id, 'BFS', { direction: 'incoming', maxDepth: max_depth || 3 });
@@ -212,15 +285,12 @@ export class ApiServer {
     }
 
     private handleHotspots(req: Request, res: Response) {
+        const body = validate(HotspotsSchema, req, res);
+        if (body === null) return;
         try {
             const ctx = this.getActiveContext();
-            const { metric, threshold, symbol_type } = req.body;
+            const { metric, threshold, symbol_type } = body;
             const db = ctx.dbManager!.getDb();
-
-            const allowedMetrics = ['loc', 'cyclomatic', 'fan_in', 'fan_out', 'fan_in_dynamic', 'fan_out_dynamic'];
-            if (!metric || !allowedMetrics.includes(metric)) {
-                return res.status(400).json({ error_code: 'INVALID_PARAMETER', message: `Invalid metric. Allowed: ${allowedMetrics.join(', ')}` });
-            }
 
             const params: any[] = [threshold || 0];
             let typeFilter = '';
@@ -237,9 +307,11 @@ export class ApiServer {
     }
 
     private handleTests(req: Request, res: Response) {
+        const body = validate(TestsSchema, req, res);
+        if (body === null) return;
         try {
             const ctx = this.getActiveContext();
-            const { symbol } = req.body;
+            const { symbol } = body;
             const node = ctx.graphEngine!.getNodeByQualifiedName(symbol.qualified_name);
             if (!node || node.id === undefined) return res.status(404).json({ error_code: 'SYMBOL_NOT_FOUND' });
             const edges = ctx.graphEngine!.getIncomingEdges(node.id);
@@ -254,10 +326,11 @@ export class ApiServer {
     }
 
     private handleSymbolSearch(req: Request, res: Response) {
+        const body = validate(SymbolSearchSchema, req, res);
+        if (body === null) return;
         try {
             const ctx = this.getActiveContext();
-            const { query, limit } = req.body;
-            if (!query) return res.status(400).json({ error_code: 'INVALID_QUERY', message: 'Query string is required' });
+            const { query, limit } = body;
             
             const nodes = ctx.graphEngine!.nodeRepo.searchSymbols(query, limit || 20);
             res.json({ 
@@ -291,11 +364,11 @@ export class ApiServer {
         };
     }
 
-    public start(port: number = 3000): void {
+    public start(port: number = 3000, bindAddress: string = '127.0.0.1'): void {
         const server = this.httpsOptions ? https.createServer(this.httpsOptions, this.app) : http.createServer(this.app);
-        server.listen(port, '0.0.0.0', () => {
+        server.listen(port, bindAddress, () => {
             const protocol = this.httpsOptions ? 'HTTPS' : 'HTTP';
-            console.log(`API Server listening on port ${port} (${protocol})`);
+            console.log(`API Server listening on ${bindAddress}:${port} (${protocol})`);
             try { fs.writeFileSync('.server-port', String(port)); } catch(e) {}
         });
     }
