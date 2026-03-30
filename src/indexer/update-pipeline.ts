@@ -202,6 +202,13 @@ export class UpdatePipeline {
                 }
             }
 
+            // Recompute fan_in / fan_out for all nodes based on actual edge counts
+            this.db.prepare(
+                'UPDATE nodes SET ' +
+                'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = ?), ' +
+                'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = ?)'
+            ).run('calls', 'calls');
+
             this.db.prepare('COMMIT').run();
             
             // Trigger embedding update in background
@@ -242,6 +249,14 @@ export class UpdatePipeline {
                     this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
                 }
             }
+
+            // Recompute fan_in / fan_out for all nodes based on actual edge counts
+            this.db.prepare(
+                'UPDATE nodes SET ' +
+                'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = ?), ' +
+                'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = ?)'
+            ).run('calls', 'calls');
+
             this.db.prepare('COMMIT').run();
 
             // Trigger embedding update in background
