@@ -464,3 +464,132 @@ Phase 4 (Week 4 — 재검증):
 
 > 이 문서는 2026-03-28 시점의 진단 결과 + 2026-03-29 MCP 검증 테스트 결과를 반영합니다.
 > 각 항목의 구현 완료 시 상태를 업데이트하세요.
+
+---
+
+## 8. E-1 후속 조사 결과 및 다음 단계 계획
+
+> **작성일**: 2026-03-30 (3차 세션)
+
+### 8.1 오늘 완료된 작업 (2026-03-30)
+
+#### Wave 1+2 구현 완료 (PR #2, 커밋 `4b94808`)
+
+| 항목 | 파일 | 상태 |
+|------|------|------|
+| H-1: Rate Limiting + --bind | `api-server.ts`, `bootstrap.ts` | ✅ 완료 |
+| H-2: Python Sidecar 안정성 | `embedding-manager.ts` | ✅ 완료 |
+| H-3: GraphEngine LRU 캐시 | `graph-engine.ts` | ✅ 완료 |
+| H-4: GitHub Actions CI/CD | `.github/workflows/` | ✅ 완료 |
+| M-1: Worker Pool 타임아웃/복구 | `worker-pool.ts` | ✅ 완료 |
+| M-3: Cross-Platform Native 빌드 | `.github/workflows/ci.yml` | ✅ 완료 |
+| M-4: Zod 입력 검증 | `api-server.ts` | ✅ 완료 |
+
+#### E-1 근본 원인 수정 (PR #3, 커밋 `44ede7f`)
+
+두 가지 아키텍처 버그를 수정함:
+
+**버그 1**: `fan_in` 컬럼이 초기값 0에서 절대 업데이트되지 않음
+- **수정**: `update-pipeline.ts`의 `processBatch()` · `applyDelta()` 트랜잭션 내부에 Pass 3 추가
+- `UPDATE nodes SET fan_in = (SELECT COUNT(*) FROM edges WHERE to_id = nodes.id AND edge_type = 'calls')`
+- **근거**: 트리거(`edges_ai_metrics`)가 있었으나 CASCADE DELETE 시 음수 drift 발생 → full recompute 필수
+
+**버그 2**: `NOT EXISTS` 서브쿼리의 엣지 타입 오류
+- **수정**: `defines`(file→symbol) → `contains`(class→method)로 교체, `inherits` 케이스 추가
+- **근거**: `defines` 엣지의 from_id는 파일 노드이므로 `implements` 엣지를 가질 수 없어 서브쿼리가 항상 true였음
+
+#### CI 파이프라인 수정 (커밋 `619fc23`)
+- `build:copy` PowerShell → Node.js `fs.cpSync` (cross-platform)
+- Node matrix: `[18, 20]` → `[20, 22]` (chokidar@5, commander@14 require Node >=20)
+
+---
+
+### 8.2 E-1 수정 후 검증 결과 (2026-03-30)
+
+재인덱싱 후 `find_dead_code` 재실행 결과:
+
+| 항목 | 이전 | 이후 |
+|------|------|------|
+| 총 dead symbols | 250 | 246 |
+| Public methods | 222 | 235 |
+| fan_in > 0인 dead code | 0 | 0 |
+
+**부분 성공, 한계 존재**:
+- `apiserver.handle*` private 메서드들 — `.bind(this)` 감지 + fan_in 재계산 조합으로 **일부 해결** (callers 확인됨)
+- 그러나 `edgerepository.createEdge` 등 **인스턴스 필드 메서드 호출** (`this.field.method()`)은 TypeScript 파서의 타입 해석 실패로 여전히 fan_in=0
+
+**근본적 한계**: TypeScript 파서가 `this.edgeRepo.createEdge()` 패턴에서 `edgeRepo`의 타입(`EdgeRepository`)을 해석하지 못하면 `calls` 엣지가 생성되지 않음. 완전한 해결은 TypeScript Language Server 수준의 타입 해석이 필요 — 의미론적으로 복잡한 영역.
+
+**추가 발견**: 메인 프로젝트(141개)와 워크트리(105개)가 동시에 인덱스에 올라가 결과가 중복됨. 워크트리 인덱스는 인덱싱 품질이 낮아 false positive 비율이 더 높음.
+
+---
+
+### 8.3 다음 세션 작업 계획: E-1-B (신뢰도 레벨 분리)
+
+#### 배경
+
+`this.field.method()` 패턴의 call resolution은 TypeScript 파서 수준에서 완전히 해결하기 어렵다고 판단. 대신 **dead code 결과에 신뢰도 레벨을 부여**하여 실용적 정확도를 높인다.
+
+#### 구현 대상: `src/graph/optimization-engine.ts`
+
+현재 `findDeadCode()`가 단일 flat 리스트를 반환하는 구조를 **3단계 신뢰도**로 분리:
+
+```typescript
+interface DeadCodeReport {
+  high: CodeNode[];    // private + fan_in=0 — 진짜 dead code 가능성 높음
+  medium: CodeNode[];  // public + fan_in=0 + trait:internal — 내부 구현이나 외부 호출 불확실
+  low: CodeNode[];     // public + fan_in=0 (trait:internal 없음) — 외부 API일 가능성
+  summary: {
+    totalSymbols: number;
+    highConfidenceDead: number;
+    mediumConfidenceDead: number;
+    lowConfidenceDead: number;
+    optimizationPotential: string;
+  };
+}
+```
+
+#### 분류 기준
+
+| 레벨 | 조건 | 설명 |
+|------|------|------|
+| **HIGH** | `visibility = 'private'` AND `fan_in = 0` | 같은 클래스 내에서도 호출 안됨 → 진짜 dead code |
+| **MEDIUM** | `visibility = 'public'` AND `fan_in = 0` AND tags LIKE `'%trait:internal%'` | 내부 구현용이지만 외부 호출 추적 불가 |
+| **LOW** | `visibility = 'public'` AND `fan_in = 0` (trait:internal 없음) | 공개 API — 외부 호출 가능성 있음, 참고용 |
+
+기존 NOT EXISTS 서브쿼리(`contains+implements`, `contains+inherits`)는 3단계 모두에 적용.
+
+#### 반환 형식 변경
+
+`mcp-server.ts`의 `find_dead_code` 응답도 함께 수정:
+- 기존: `{ potentialDeadCode: [], summary: {} }`
+- 변경: `{ high: [], medium: [], low: [], summary: {} }`
+- 후방 호환성: `potentialDeadCode` 필드는 `high`와 동일하게 유지 (alias)
+
+#### 예상 결과
+
+| 레벨 | 예상 건수 | false positive 비율 |
+|------|-----------|---------------------|
+| HIGH | ~10~20개 | <5% |
+| MEDIUM | ~30~50개 | ~30% |
+| LOW | ~180개 | >80% (참고용) |
+
+메인 사용 케이스에서 HIGH만 보면 실용적 dead code 목록 완성.
+
+#### 수정 파일
+
+1. `src/graph/optimization-engine.ts` — `findDeadCode()` 반환 타입 및 쿼리 분리
+2. `src/server/mcp-server.ts` — `find_dead_code` 응답 포맷 업데이트 (후방 호환 유지)
+3. `src/types/index.ts` — `DeadCodeReport` 인터페이스 추가
+
+#### 노력 수준: M (1~2시간)
+
+---
+
+### 8.4 알려진 미해결 이슈
+
+| 이슈 | 원인 | 대응 방향 |
+|------|------|-----------|
+| 워크트리 인덱스 중복 | `initialize_project` 호출 시 main+worktree 동시 인덱싱 | 세션 시작 시 `purge_index` 후 main만 초기화 |
+| `this.field.method()` call resolution 실패 | TypeScript 파서 타입 추론 한계 | 신뢰도 레벨로 보완 (E-1-B) |
+| `treesitterparser.calculatecc` private 메서드 dead code | 실제 unused일 가능성 있음 | 수동 검토 후 제거 여부 결정 |
