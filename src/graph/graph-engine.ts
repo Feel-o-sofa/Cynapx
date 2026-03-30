@@ -21,12 +21,62 @@ export interface TraversalResult {
 }
 
 /**
+ * LRUCache is a simple Least Recently Used cache backed by a Map.
+ * Map maintains insertion order; delete + re-insert on access gives O(1) LRU semantics.
+ */
+class LRUCache<K, V> {
+    private readonly _map = new Map<K, V>();
+    private readonly _max: number;
+
+    constructor(max: number) {
+        this._max = max;
+    }
+
+    get(key: K): V | undefined {
+        if (!this._map.has(key)) return undefined;
+        // Move to tail (most-recently-used position)
+        const value = this._map.get(key)!;
+        this._map.delete(key);
+        this._map.set(key, value);
+        return value;
+    }
+
+    set(key: K, value: V): void {
+        if (this._map.has(key)) {
+            this._map.delete(key);
+        }
+        this._map.set(key, value);
+        // Evict least-recently-used entry (head of Map iteration)
+        if (this._map.size > this._max) {
+            const oldest = this._map.keys().next().value as K;
+            this._map.delete(oldest);
+        }
+    }
+
+    has(key: K): boolean {
+        return this._map.has(key);
+    }
+
+    delete(key: K): boolean {
+        return this._map.delete(key);
+    }
+
+    clear(): void {
+        this._map.clear();
+    }
+
+    get size(): number {
+        return this._map.size;
+    }
+}
+
+/**
  * GraphEngine implements the logic for graph traversal and symbol resolution.
  */
 export class GraphEngine {
-    private nodeCache = new Map<number, CodeNode>();
-    private qnameCache = new Map<string, CodeNode>();
-    private impactCache = new Map<string, { timestamp: number, results: TraversalResult[] }>();
+    private nodeCache = new LRUCache<number, CodeNode>(10_000);
+    private qnameCache = new LRUCache<string, CodeNode>(10_000);
+    private impactCache = new LRUCache<string, { timestamp: number, results: TraversalResult[] }>(5_000);
 
     constructor(
         public nodeRepo: NodeRepository,

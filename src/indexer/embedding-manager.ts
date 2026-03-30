@@ -24,48 +24,101 @@ export interface EmbeddingProvider {
 export class PythonEmbeddingProvider implements EmbeddingProvider {
     private child: ChildProcess | null = null;
     private ready: boolean = false;
-    private pending: ((v: any) => void) | null = null;
-    private rejecter: ((e: any) => void) | null = null;
+    // H-2(1): 동시 요청 큐 — pending 단일 콜백 대신 Promise 기반 큐로 교체
+    private currentResolver: ((v: any) => void) | null = null;
+    private currentRejecter: ((e: any) => void) | null = null;
+    private requestQueue: Array<{ resolve: (v: any) => void; reject: (e: any) => void; texts: string[] }> = [];
+    private processing: boolean = false;
     private dimensions: number = 896;
+    // H-2(3): FTS5 폴백 모드 플래그 및 경고 출력 여부
+    public fallbackMode: boolean = false;
+    private fallbackWarned: boolean = false;
+    // H-2(2): 자동 재시작 재시도 카운터
+    private restartAttempts: number = 0;
+    private static readonly MAX_RESTART_ATTEMPTS = 3;
 
     private async start() {
         if (this.child) return;
         const scriptPath = path.join(process.cwd(), 'scripts', 'cynapx_embedder.py');
-        
+
         console.error(`[Embedding] Starting Python ML Sidecar...`);
         this.child = spawn('python', [scriptPath]);
-        
+
         const reader = readline.createInterface({ input: this.child.stdout! });
         this.child.stderr!.on('data', (d) => console.error(`[Python-ML] ${d.toString().trim()}`));
-        
+
         reader.on('line', (line) => {
             try {
                 const data = JSON.parse(line);
                 if (data.status === 'ready') {
                     this.ready = true;
+                    this.restartAttempts = 0; // 정상 기동 시 재시도 카운터 초기화
                     this.dimensions = data.dim;
                     console.error(`[Embedding] Python Sidecar Ready (${data.device}, Dim: ${this.dimensions})`);
-                } else if (data.vectors && this.pending) {
-                    this.pending(data.vectors);
-                    this.pending = null;
-                } else if (data.vector && this.pending) {
-                    this.pending([data.vector]);
-                    this.pending = null;
-                } else if (data.error && this.rejecter) {
-                    this.rejecter(new Error(data.error));
-                    this.pending = null;
-                    this.rejecter = null;
+                } else if (data.vectors && this.currentResolver) {
+                    this.currentResolver(data.vectors);
+                    this.currentResolver = null;
+                    this.currentRejecter = null;
+                    this._processNext();
+                } else if (data.vector && this.currentResolver) {
+                    this.currentResolver([data.vector]);
+                    this.currentResolver = null;
+                    this.currentRejecter = null;
+                    this._processNext();
+                } else if (data.error && this.currentRejecter) {
+                    this.currentRejecter(new Error(data.error));
+                    this.currentResolver = null;
+                    this.currentRejecter = null;
+                    this._processNext();
                 }
             } catch (e) {}
         });
 
+        // H-2(2): 프로세스 종료 시 자동 재시작 (최대 3회, 지수 백오프: 1s/2s/4s)
         this.child.on('exit', (code) => {
             this.child = null;
             this.ready = false;
             if (code !== 0 && code !== null) {
                 console.error(`[Embedding] Python Sidecar crashed with code ${code}`);
             }
+            if (this.restartAttempts < PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS) {
+                const delay = Math.pow(2, this.restartAttempts) * 1000; // 1s, 2s, 4s
+                this.restartAttempts++;
+                console.error(`[Embedding] Restarting Python Sidecar (attempt ${this.restartAttempts}/${PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS}) in ${delay}ms...`);
+                setTimeout(() => { this.start(); }, delay);
+            } else {
+                // H-2(3): 재시도 소진 시 FTS5 폴백 모드 활성화
+                this.fallbackMode = true;
+                if (!this.fallbackWarned) {
+                    this.fallbackWarned = true;
+                    console.error(`[Embedding] WARNING: Python Sidecar unavailable after ${PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS} retries. Switching to FTS5 fallback mode. Semantic search disabled.`);
+                }
+                // 현재 대기 중인 모든 요청을 null로 해소
+                if (this.currentRejecter) {
+                    this.currentRejecter(new Error('Sidecar unavailable; fallback mode active'));
+                    this.currentResolver = null;
+                    this.currentRejecter = null;
+                }
+                for (const pending of this.requestQueue) {
+                    pending.reject(new Error('Sidecar unavailable; fallback mode active'));
+                }
+                this.requestQueue = [];
+                this.processing = false;
+            }
         });
+    }
+
+    // H-2(1): 큐에서 다음 요청을 순차적으로 처리
+    private _processNext() {
+        const next = this.requestQueue.shift();
+        if (!next) {
+            this.processing = false;
+            return;
+        }
+        this.processing = true;
+        this.currentResolver = next.resolve;
+        this.currentRejecter = next.reject;
+        this.child?.stdin?.write(JSON.stringify({ texts: next.texts }) + '\n');
     }
 
     public async generate(text: string): Promise<number[]> {
@@ -74,8 +127,13 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
     }
 
     public async generateBatch(texts: string[]): Promise<number[][]> {
+        // H-2(3): 폴백 모드면 null을 graceful하게 반환
+        if (this.fallbackMode) {
+            return null as unknown as number[][];
+        }
+
         if (!this.child) await this.start();
-        
+
         // Wait for readiness with timeout
         let waitCount = 0;
         const maxWait = 3000; // 300 seconds (5m)
@@ -87,10 +145,16 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
             if (++waitCount > maxWait) throw new Error("Python sidecar startup timed out.");
         }
 
+        // H-2(1): 현재 처리 중인 요청이 있으면 큐에 추가하여 순차 대기
         return new Promise((resolve, reject) => {
-            this.pending = resolve;
-            this.rejecter = reject;
-            this.child?.stdin?.write(JSON.stringify({ texts }) + '\n');
+            if (this.processing) {
+                this.requestQueue.push({ resolve, reject, texts });
+            } else {
+                this.processing = true;
+                this.currentResolver = resolve;
+                this.currentRejecter = reject;
+                this.child?.stdin?.write(JSON.stringify({ texts }) + '\n');
+            }
         });
     }
 
@@ -102,6 +166,8 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
             this.child.kill();
             this.child = null;
         }
+        this.requestQueue = [];
+        this.processing = false;
     }
 }
 
