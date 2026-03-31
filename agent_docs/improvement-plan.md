@@ -1,466 +1,157 @@
-# Cynapx 프로젝트 진단 및 개선 계획
+# Cynapx 프로젝트 개선 계획
 
-> **작성일**: 2026-03-28
-> **대상 버전**: v1.0.6 (package.json: 1.0.0, bootstrap: 1.0.5 — 버전 불일치 존재)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-03-30 (3차 세션)
+> **대상 버전**: v1.0.6
 > **총 소스 파일**: 52개 TypeScript, 1개 Rust (napi-rs), 12개 Tree-sitter .scm 쿼리
 
 ---
 
-## 1. 프로젝트 현황
-
-Cynapx(시냅스엑스)는 AI 에이전트를 위한 고성능 격리형 코드 분석 엔진이다. Tree-sitter 기반 12개 언어 파싱, SQLite 지식 그래프, MCP/REST/CLI 인터페이스, Jina AI 임베딩 기반 시맨틱 검색을 지원한다. 17+ Phase를 완료하여 핵심 기능은 모두 구현되었으나, 아래와 같은 보안/안정성/품질 이슈가 방치되어 있다.
-
-### 아키텍처 요약
+## 1. 아키텍처 요약
 
 ```
 src/
-├── db/          (5 files, 489 lines)   — SQLite 데이터베이스 추상화 계층
-├── indexer/     (14 files, 1,828 lines) — Tree-sitter 파싱 및 인덱싱 파이프라인
-├── graph/       (6 files, 1,218 lines)  — 그래프 알고리즘, 아키텍처 분석
-├── server/      (5 files, 1,278 lines)  — MCP, REST API, IPC, REPL 서버
-├── utils/       (7 files, 449 lines)    — 보안, 잠금, 인증서, 경로 관리
-├── watcher/     (1 file, 102 lines)     — 파일 변경 감시
-├── types/       (1 file, 133 lines)     — 핵심 타입 정의
-└── bootstrap.ts (1 file)               — CLI 진입점 및 서비스 오케스트레이션
+├── db/          (5 files)  — SQLite 데이터베이스 추상화 계층
+├── indexer/     (14 files) — Tree-sitter 파싱 및 인덱싱 파이프라인
+├── graph/       (6 files)  — 그래프 알고리즘, 아키텍처 분석
+├── server/      (5 files)  — MCP, REST API, IPC, REPL 서버
+├── utils/       (7 files)  — 보안, 잠금, 인증서, 경로 관리
+├── watcher/     (1 file)   — 파일 변경 감시
+├── types/       (1 file)   — 핵심 타입 정의
+└── bootstrap.ts            — CLI 진입점 및 서비스 오케스트레이션
 ```
 
 ---
 
-## 2. 진단 요약
+## 2. 완료된 항목
 
-| 영역 | 상태 | 심각도 |
-|------|------|--------|
-| SQL Injection | `handleHotspots()`에서 사용자 입력 직접 SQL 삽입 | **CRITICAL** |
-| 인증 토큰 | 하드코딩된 기본 토큰 `dev-token-1234` | **CRITICAL** |
-| 테스트 인프라 | 테스트 프레임워크 미설치, 테스트 파일 0개 | **CRITICAL** |
-| CI/CD | 파이프라인 없음 | HIGH |
-| Rate Limiting | REST API 미적용 | HIGH |
-| Python Sidecar | 동시성 미지원, 오류 무시 | HIGH |
-| 메모리 관리 | GraphEngine 캐시 eviction 없음 | HIGH |
-| 버전 관리 | 3곳에서 버전 불일치 (package.json / bootstrap.ts / 문서) | MEDIUM |
-| Worker Pool | Timeout / 복구 미구현 | MEDIUM |
-| Cross-Platform | Windows x64 전용 native 모듈 | MEDIUM |
-| IPC Request ID | `Math.random()` 충돌 위험 | MEDIUM |
-| Lock Manager | Windows 경로 하드코딩 | MEDIUM |
-| 문서화 | CHANGELOG, 기여 가이드 미존재 | LOW |
+### 2.1 보안 (CRITICAL) — 모두 완료
 
----
+| 항목 | 내용 | 완료 시점 |
+|------|------|-----------|
+| C-1 SQL Injection | `handleHotspots()` whitelist + parameterized query | 1차 세션 |
+| C-2 인증 토큰 | `crypto.randomBytes(32)` 자동 생성, `--no-auth` 플래그 | 1차 세션 |
+| C-3 테스트 인프라 | Vitest 설치, 58개 테스트 (`tests/` 4개 파일) | 1차 세션 |
 
-## 3. 우선순위별 개선 항목
+### 2.2 안정성/보안 (HIGH) — 모두 완료
 
-### CRITICAL (즉시 조치)
+| 항목 | 내용 | 완료 시점 |
+|------|------|-----------|
+| H-1 Rate Limiting | `express-rate-limit` 100/min 전역, 분석 엔드포인트 10/min; `--bind` 옵션 | 3차 세션 |
+| H-2 Python Sidecar | 요청 큐잉, 3회 자동 재시작 (지수 백오프), FTS5 fallback | 3차 세션 |
+| H-3 GraphEngine LRU | `nodeCache`/`qnameCache` max 10,000; `impactCache` max 5,000 | 3차 세션 |
+| H-4 CI/CD | `ci.yml` (Node 20/22 matrix) + `release.yml` (npm publish on v\*) | 3차 세션 |
+| H-5 IPC Request ID | `Math.random()` → `crypto.randomUUID()` | 2차 세션 |
 
-#### C-1. SQL Injection 취약점 제거
-- **파일**: `src/server/api-server.ts` (line 212-213)
-- **문제**: `handleHotspots()`에서 `metric`과 `symbol_type` 파라미터가 SQL 쿼리에 직접 문자열 결합됨
-- **미조치 시 영향**: 악의적 입력으로 전체 DB 접근/수정/삭제 가능
-- **해결 방안**:
-  - `metric` 값을 허용된 컬럼명 whitelist (`loc`, `cyclomatic`, `fan_in`, `fan_out`, `fan_in_dynamic`, `fan_out_dynamic`)로 검증
-  - `symbol_type`은 parameterized query (`?` placeholder) 사용
-  - Zod schema 활용한 입력 검증 레이어 추가
-- **노력 수준**: S
-- **의존성**: 없음
+### 2.3 개선 (MEDIUM) — 모두 완료
 
-#### C-2. 인증 토큰 보안 강화
-- **파일**: `src/server/api-server.ts` (line 31)
-- **문제**: `'dev-token-1234'` 기본 토큰이 프로덕션에서도 사용 가능
-- **미조치 시 영향**: 토큰 미설정 시 누구나 API 접근 가능
-- **해결 방안**:
-  - 환경변수 미설정 시 `crypto.randomBytes(32)`로 랜덤 토큰 자동 생성
-  - 시작 시 생성된 토큰을 stderr로 1회 출력
-  - `--no-auth` 플래그로 명시적 비활성화 옵션 추가
-- **노력 수준**: S
-- **의존성**: 없음
+| 항목 | 내용 | 완료 시점 |
+|------|------|-----------|
+| M-1 Worker Pool | 30초 타임아웃, worker 자동 재시작, 큐 백프레셔 (max 100) | 3차 세션 |
+| M-2 버전 관리 | `bootstrap.ts`에서 `package.json` version 동적 로드 | 2차 세션 |
+| M-3 Cross-Platform | CI matrix에 win-x64/linux-x64/darwin-x64/darwin-arm64 빌드 추가 | 3차 세션 |
+| M-4 Zod 입력 검증 | 모든 REST 엔드포인트에 Zod 스키마 8개 적용, 400 에러 표준화 | 3차 세션 |
+| M-5 Lock Manager | `'locks\\'` 하드코딩 → `path.join()` / `path.sep` | 2차 세션 |
 
-#### C-3. 테스트 인프라 구축
-- **문제**: 52개 소스 파일에 테스트 0개, 테스트 프레임워크 미설치
-- **미조치 시 영향**: 리팩토링/변경 시 회귀 버그 감지 불가
-- **해결 방안**:
-  - Phase 1: Vitest 설치 (ESM 지원, TypeScript 네이티브, 빠른 실행)
-  - Phase 2: 핵심 모듈 단위 테스트 (우선순위 순):
-    1. `SecurityProvider` — path traversal 검증
-    2. `NodeRepository` / `EdgeRepository` — CRUD 정합성
-    3. `GraphEngine` — traversal 알고리즘
-    4. `WorkerPool` — 동시성
-    5. `LockManager` — lock lifecycle
-  - Phase 3: API 통합 테스트 (supertest 활용)
-  - Phase 4: 각 언어 파서 검증 테스트 (12개 .scm 파일)
-- **노력 수준**: XL
-- **의존성**: 없음
+### 2.4 엔진 정확도 (ENGINE) — 대부분 완료
+
+| 항목 | 내용 | 완료 시점 |
+|------|------|-----------|
+| E-2 CC 계산 일관성 | `??` 연산자를 native path + JS AST path 모두에 추가 | 2차 세션 |
+| E-3 purge_index EBUSY | `dbManager?.dispose()` 후 파일 삭제; `_closed` 플래그로 이중 close 방지 | 2차 세션 |
+| E-4 remediation 크래시 | `violation.source?.tags`, `violation.target?.tags` optional chaining | 2차 세션 |
+| E-5 Worktree 중복 인덱싱 | `toCanonical()` 기반 경로 비교로 교체 | 2차 세션 |
+| E-6 미발행 엣지 타입 | TypeScript 파서: `contains`(class→method), `overrides`(method→parent) 엣지 추가 | 2차 세션 |
+| E-1 (부분) fan_in 재계산 | `update-pipeline.ts`에 Pass 3 추가: 엣지 기반 fan_in/fan_out 전체 재계산 | 3차 세션 |
+| E-1 (부분) NOT EXISTS 수정 | `optimization-engine.ts`: `defines`→`contains`, `inherits` 케이스 추가 | 3차 세션 |
+
+### 2.5 기타
+
+| 항목 | 내용 | 완료 시점 |
+|------|------|-----------|
+| CI build:copy 수정 | PowerShell → Node.js `fs.cpSync` (cross-platform) | 3차 세션 |
+| `express.json` size limit | `limit: '1mb'` 추가 | 1차 세션 |
 
 ---
 
-### HIGH (1-2주 내 조치)
+## 3. 미완료 항목
 
-#### H-1. REST API Rate Limiting 추가
-- **파일**: `src/server/api-server.ts`
-- **문제**: API 엔드포인트에 요청 제한 없음, `0.0.0.0` 바인딩
-- **미조치 시 영향**: DoS 공격에 취약, 리소스 고갈 가능
-- **해결 방안**:
-  - `express-rate-limit` 추가 (IP 당 분당 100회)
-  - 바인드 주소 `--bind` 옵션 추가 (기본값 `127.0.0.1`)
-  - 입력 크기 제한 (`express.json({ limit: '1mb' })`)
-- **노력 수준**: S
-- **의존성**: 없음
+### 3.1 E-1-B: Dead Code 신뢰도 레벨 분리 (다음 세션 최우선)
 
-#### H-2. Python Sidecar 안정성 강화
-- **파일**: `src/indexer/embedding-manager.ts`
-- **문제점**:
-  - 단일 `pending` 변수로 동시 요청 불가 (line 27-28)
-  - JSON parse 오류 무시 (line 59)
-  - Python/Jina 미설치 시 300초 대기 후 타임아웃
-  - Sidecar 크래시 후 자동 재시작 없음
-- **미조치 시 영향**: 동시 embedding 요청 시 데이터 손실, 무한 대기 가능
-- **해결 방안**:
-  - Request ID 기반 다중 요청 처리 (`Map<id, Promise>`)
-  - Python 가용성 사전 체크 (`which python` / `where python`)
-  - 자동 재시작 (최대 3회) + exponential backoff
-  - Graceful degradation: embedding 불가 시 FTS5 keyword 검색으로 fallback
-- **노력 수준**: M
-- **의존성**: 없음
+**배경**: E-1 수정 후에도 `this.field.method()` 패턴의 TypeScript call resolution이 실패해 false positive가 지속됨. `edgerepository.createEdge` 등 인스턴스 필드를 통한 메서드 호출이 `calls` 엣지로 기록되지 않는 것이 근본 원인. 완전한 해결은 TypeScript Language Server 수준의 타입 해석이 필요 — 단기 해결 불가.
 
-#### H-3. GraphEngine 메모리 관리
-- **파일**: `src/graph/graph-engine.ts`
-- **문제**: `nodeCache`, `qnameCache`, `impactCache`에 eviction 정책 없음
-- **미조치 시 영향**: 대규모 프로젝트에서 메모리 무한 증가
-- **해결 방안**:
-  - LRU 캐시 구현 (최대 10,000 항목)
-  - `impactCache`에 TTL 적용 (5분)
-  - 캐시 통계 메서드 추가 (hit/miss ratio)
-- **노력 수준**: M
-- **의존성**: 없음
+**현재 상태** (3차 세션 측정):
+- 총 dead symbols: 246개 (메인 141 + 워크트리 105)
+- 전체 false positive 비율: ~88% (fan_in=0인 public 메서드 대부분이 FP)
+- HIGH confidence (private + fan_in=0): ~10~20개 — 실제 dead code 가능성 높음
 
-#### H-4. CI/CD 파이프라인 구축
-- **문제**: 자동화된 빌드/테스트/검증 없음
-- **미조치 시 영향**: 빌드 실패 감지 지연, 품질 관리 불가
-- **해결 방안**:
-  - GitHub Actions workflow:
-    - `ci.yml`: build, lint, test (Windows/Linux matrix)
-    - `release.yml`: 태깅 시 자동 npm publish
-  - ESLint + Prettier 설정 추가
-- **노력 수준**: M
-- **의존성**: C-3 (테스트 인프라)
+**구현 계획**:
 
-#### H-5. IPC Request ID 충돌 방지
-- **파일**: `src/server/ipc-coordinator.ts` (line 135)
-- **문제**: `Math.random().toString(36).substring(7)` 사용 — 충돌 가능
-- **해결 방안**: `crypto.randomUUID()` 사용
-- **노력 수준**: S
-- **의존성**: 없음
+반환 구조를 3단계 신뢰도로 분리:
 
----
-
-### MEDIUM (1개월 내 조치)
-
-#### M-1. Worker Pool 강화
-- **파일**: `src/indexer/worker-pool.ts`
-- **문제**: 작업 타임아웃 없음, 죽은 worker 교체 미구현, 큐 크기 제한 없음
-- **해결 방안**:
-  - 작업 타임아웃 (기본 30초) + 자동 worker 재생성
-  - 큐 크기 제한 + backpressure 메커니즘
-  - Worker health check + 비정상 종료 시 작업 재시도
-- **노력 수준**: M
-- **의존성**: 없음
-
-#### M-2. 버전 관리 일원화
-- **문제**: `package.json` (1.0.0), `bootstrap.ts` (1.0.5), 프로젝트 문맥 (1.0.6) 불일치
-- **해결 방안**:
-  - `bootstrap.ts`에서 `package.json`의 version을 동적으로 읽어서 사용
-  - `standard-version` 또는 `changesets`로 버전 자동화
-- **노력 수준**: S
-- **의존성**: 없음
-
-#### M-3. Cross-Platform Native 모듈 빌드
-- **파일**: `src-native/` (Cargo.toml, lib.rs)
-- **문제**: Windows x64 전용 `.node` 파일만 존재
-- **해결 방안**:
-  - GitHub Actions matrix build (win-x64, linux-x64, darwin-x64, darwin-arm64)
-  - `@napi-rs/cli`로 prebuild 자동화
-  - Native 모듈 미존재 시 JS fallback 경로 검증
-- **노력 수준**: L
-- **의존성**: H-4 (CI/CD)
-
-#### M-4. REST API 입력 검증 체계화
-- **파일**: `src/server/api-server.ts` 전체
-- **문제**: 각 핸들러에서 개별적 검증, 일관성 부족
-- **해결 방안**:
-  - Zod schema 기반 요청 검증 미들웨어
-  - 모든 엔드포인트에 대한 스키마 정의
-  - 검증 실패 시 표준화된 오류 응답
-- **노력 수준**: M
-- **의존성**: C-1 (SQL Injection 수정)
-
-#### M-5. Lock Manager 크로스 플랫폼 호환
-- **파일**: `src/utils/lock-manager.ts` (line 55)
-- **문제**: `'locks\\'` 하드코딩된 Windows 경로 구분자
-- **해결 방안**: `path.join()` / `path.sep` 일관 사용
-- **노력 수준**: S
-- **의존성**: 없음
-
----
-
-### LOW (분기별 개선)
-
-#### L-1. CHANGELOG 및 기여 가이드 작성
-- **해결 방안**: `CHANGELOG.md`, `CONTRIBUTING.md` 생성
-- **노력 수준**: S
-
-#### L-2. API 문서 자동 생성
-- **해결 방안**: OpenAPI/Swagger 스펙 작성 + `swagger-ui-express` 통합
-- **노력 수준**: M
-- **의존성**: M-4
-
-#### L-3. 언어별 파서 품질 검증
-- **해결 방안**: 각 `.scm` 쿼리에 대한 golden test 파일 + expected output
-- **노력 수준**: L
-- **의존성**: C-3
-
-#### L-4. Plugin 시스템 문서화
-- **해결 방안**: Plugin API 문서 + 예제 플러그인 작성
-- **노력 수준**: M
-
-#### L-5. 성능 벤치마크 스위트
-- **해결 방안**: 다양한 크기의 프로젝트 대상 인덱싱 시간/메모리 측정
-- **노력 수준**: M
-- **의존성**: C-3
-
----
-
-## 4. Quick Wins (즉시 적용 가능)
-
-| # | 항목 | 파일 | 변경량 |
-|---|------|------|--------|
-| 1 | SQL Injection 수정 | `api-server.ts` | ~15줄 |
-| 2 | 기본 인증 토큰 제거 | `api-server.ts` | ~10줄 |
-| 3 | IPC request ID 수정 | `ipc-coordinator.ts` | 1줄 |
-| 4 | 버전 통일 | `bootstrap.ts`, `package.json` | 2줄 |
-| 5 | 바인드 주소 설정 | `api-server.ts`, `bootstrap.ts` | ~5줄 |
-| 6 | Lock manager 경로 수정 | `lock-manager.ts` | 1줄 |
-| 7 | `express.json` size limit | `api-server.ts` | 1줄 |
-
----
-
-## 5. 권장 실행 순서
-
-```
-Week 1:  Quick Wins 전체 + C-3 Phase 1 (Vitest 설치)
-Week 2:  H-1 (Rate Limit) + H-5 (IPC ID) + M-2 (버전 통일)
-Week 3:  C-3 Phase 2 (핵심 단위 테스트)
-Week 4:  H-2 (Sidecar) + H-3 (캐시 eviction)
-Week 5:  M-4 (입력 검증) + M-1 (Worker Pool)
-Week 6:  H-4 (CI/CD) + M-5 (Lock 크로스플랫폼)
-Week 7+: C-3 Phase 3-4 + Medium/Low 항목 순차 진행
+```typescript
+// src/types/index.ts 추가
+interface DeadCodeReport {
+  high:   CodeNode[];  // private + fan_in=0
+  medium: CodeNode[];  // public + fan_in=0 + trait:internal
+  low:    CodeNode[];  // public + fan_in=0 (외부 API 가능성)
+  potentialDeadCode: CodeNode[];  // 후방 호환: high와 동일
+  summary: {
+    totalSymbols: number;
+    highConfidenceDead: number;
+    mediumConfidenceDead: number;
+    lowConfidenceDead: number;
+    optimizationPotential: string;
+  };
+}
 ```
 
----
+분류 기준:
 
-## 6. 기술 부채 요약
+| 레벨 | 조건 | 예상 건수 | FP 비율 |
+|------|------|-----------|---------|
+| HIGH | `visibility = 'private'` AND `fan_in = 0` | ~10~20개 | <5% |
+| MEDIUM | `visibility = 'public'` AND `fan_in = 0` AND `tags LIKE '%trait:internal%'` | ~30~50개 | ~30% |
+| LOW | `visibility = 'public'` AND `fan_in = 0` (trait:internal 없음) | ~180개 | >80% |
 
-| 카테고리 | 항목 수 | 예상 총 노력 |
-|----------|---------|-------------|
-| CRITICAL | 3 | S + S + XL |
-| HIGH | 5 | S + M + M + M + S |
-| MEDIUM | 5 | M + S + L + M + S |
-| LOW | 5 | S + M + L + M + M |
+**수정 파일**:
+1. `src/types/index.ts` — `DeadCodeReport` 인터페이스 추가
+2. `src/graph/optimization-engine.ts` — `findDeadCode()` 반환 타입 및 쿼리 3단계 분리
+3. `src/server/mcp-server.ts` — `find_dead_code` 응답 포맷 업데이트 (후방 호환 유지)
 
----
-
-## 7. Cynapx 분석 엔진 개선 계획
-
-> 2026-03-29 MCP 검증 테스트 결과 기반 추가
-
-### 7.1 검증 테스트 결과 요약
-
-Cynapx MCP 20개 도구 전체를 실행하여 분석 결과의 정확성을 검증한 결과:
-
-| 검증 항목 | 평가 |
-|-----------|------|
-| McpServer.executeTool 메트릭 (LOC/라인/호출자) | **부분 정확** — CC 다소 과대 |
-| GraphEngine 클래스 구조 분석 | **부분 정확** — impactCache TTL 미반영 |
-| Dead Code 탐지 (224개 보고) | **부분 정확** — 60-70% false positive |
-| Latent Policies (7개) | **정확** |
-| Architecture Violations (0건) | **부분 정확** — 관대한 정책 반영 |
-| CRITICAL 리스크 평가 | **정확** |
-
-### 7.2 근본 원인 분석
-
-#### E-1. Dead Code False Positive (CRITICAL)
-
-**근본 원인**: `optimization-engine.ts`의 dead code 판정이 `fan_in = 0` 단일 조건에 의존
-
-**영향받는 패턴 3가지**:
-
-1. **인터페이스 디스패치 미추적** — `LanguageProvider` 인터페이스의 5개 메서드 × 12개 언어 = 60개 false positive
-   - `implements` 엣지는 TypeScript 파서가 이미 생성하지만, dead code 판정 시 미활용
-   - 클래스가 인터페이스를 `implements`하면 해당 메서드는 간접 호출 가능 → dead 아님
-
-2. **Express `.bind(this)` 미추적** — `ApiServer`의 8개 핸들러 전부 false positive
-   - `typescript-parser.ts`의 `resolveCall`이 `.bind()` 호출을 `Function.prototype.bind`로 해석
-   - 원본 함수(`this.handleMcp` 등)에 대한 call 엣지 미생성
-
-3. **`Disposable` 인터페이스 간접 호출** — `WorkerPool.dispose` 등 false positive
-   - `LifecycleManager.disposeAll()`이 추적된 `Disposable` 객체들의 `.dispose()` 호출
-   - 동적 인터페이스 디스패치이므로 정적 분석에서 미추적
-
-**수정 대상 파일**:
-- `src/graph/optimization-engine.ts` — `implements` 엣지가 존재하는 클래스의 메서드는 dead code에서 제외
-- `src/indexer/typescript-parser.ts` — `.bind(this)` 패턴 인식, `contains` 엣지 발행
-
-**수정 방안**:
-```
-optimization-engine.ts 변경:
-  현재: fan_in = 0 AND (기본 제외 조건)
-  변경: fan_in = 0
-        AND (기본 제외 조건)
-        AND NOT EXISTS (
-          SELECT 1 FROM edges e
-          JOIN nodes parent ON parent.id = e.from_id
-          JOIN edges impl ON impl.from_id = parent.id AND impl.edge_type = 'implements'
-          WHERE e.to_id = parent.id AND e.edge_type = 'defines'
-          AND nodes.qualified_name LIKE parent.qualified_name || '.%'
-        )
-
-typescript-parser.ts 변경:
-  resolveCall()에서 .bind() 패턴 감지:
-  - node.expression이 PropertyAccessExpression이고 .name === 'bind'일 때
-  - node.expression.expression (원본 함수)에서 심볼 해석
-  - 원본 함수에 대한 'calls' 엣지 생성
-```
-
-**노력 수준**: M
-**의존성**: 없음
+**노력 수준**: M (1~2시간)
 
 ---
 
-#### E-2. CC (Cyclomatic Complexity) 과대 계산 (HIGH)
+### 3.2 알려진 미해결 이슈
 
-**근본 원인**: `metrics-calculator.ts`의 Native path와 JS path 결과 불일치
-
-- **JS path**: TypeScript AST 노드 타입으로 구조적 분석 (정확)
-- **Native path**: 키워드 문자열 매칭 (`'if'`, `'for'`, `'&&'` 등) → 문자열 리터럴/주석 내 키워드도 카운트 가능
-
-**추가 문제**:
-- `NullishCoalescing` (`??`), Optional Chaining (`?.`)이 decision point로 미카운트
-- `SwitchCase`의 카운트 방식이 과도할 수 있음 (case문 자체 vs case 내 분기)
-
-**수정 대상 파일**: `src/indexer/metrics-calculator.ts`
-
-**수정 방안**:
-- Native path 사용 시에도 AST 기반 decision point 리스트를 전달하도록 변경
-- 또는 Native path를 제거하고 JS path만 사용 (일관성 우선)
-- `??`와 `?.`를 decision point에 추가
-
-**노력 수준**: M
-**의존성**: 없음
+| 이슈 | 원인 | 권장 대응 |
+|------|------|-----------|
+| 워크트리 인덱스 중복 | `initialize_project` 시 main+worktree 동시 인덱싱 | 세션 시작 시 `purge_index` 후 main만 초기화 |
+| `this.field.method()` call resolution 실패 | TypeScript 파서 타입 추론 한계 | E-1-B 신뢰도 레벨로 보완 |
+| `treesitterparser.calculatecc` private 메서드 | 실제 unused일 가능성 있음 | 수동 검토 후 제거 여부 결정 |
 
 ---
 
-#### E-3. `purge_index` EBUSY 오류 (HIGH)
+### 3.3 LOW 항목 (분기별 개선, 미착수)
 
-**근본 원인**: MCP 서버가 DB 연결을 유지한 채 `fs.unlinkSync(dbPath)` 시도
-
-**수정 대상 파일**: `src/server/mcp-server.ts` (purge_index case) + `src/db/database.ts`
-
-**수정 방안**:
-- purge 시 `DatabaseManager.dispose()` 호출하여 DB 연결 종료 후 파일 삭제
-- `database.ts`에 `isOpen` 플래그 추가하여 이중 close 방지
-- purge 후 필요 시 DB 재생성
-
-**노력 수준**: S
-**의존성**: 없음
+| 항목 | 내용 | 노력 |
+|------|------|------|
+| L-1 | `CHANGELOG.md`, `CONTRIBUTING.md` 생성 | S |
+| L-2 | OpenAPI/Swagger 스펙 + `swagger-ui-express` 통합 | M |
+| L-3 | 각 `.scm` 쿼리에 대한 golden test 파일 + expected output | L |
+| L-4 | Plugin API 문서 + 예제 플러그인 | M |
+| L-5 | 다양한 크기 프로젝트 대상 인덱싱 성능 벤치마크 | M |
 
 ---
 
-#### E-4. `get_remediation_strategy` 크래시 (HIGH)
+## 4. 현재 분석 엔진 정확도 (3차 세션 기준)
 
-**근본 원인**: `violation.source` 또는 `violation.target`가 undefined일 때 `.tags` 접근
+| 항목 | 이전 | 현재 | 목표 |
+|------|------|------|------|
+| Dead code false positive | ~65% (224개 중) | ~88% (246개 중, E-1-B 미적용) | HIGH 레벨 <5% |
+| CC 정확도 | Native/JS 불일치 | `??` 추가, 단일 경로 일관성 향상 | ±5% 이내 |
+| purge_index 성공률 | MCP 실행 중 실패 | 항상 성공 | — |
+| 엣지 타입 활용률 | 4/15 | 8/15 (`contains`, `overrides`, `implements`, `inherits` 추가) | 10/15+ |
+| 테스트 커버리지 | 0개 | 58개 (4개 파일) | 100+ |
 
-**수정 대상 파일**: `src/graph/remediation-engine.ts`
-
-**수정 방안**:
-- `violation.source?.tags || []` 및 `violation.target?.tags || []` 으로 optional chaining 적용
-- `getRemediationStrategy` 진입부에서 source/target 유효성 검증 추가
-
-**노력 수준**: S
-**의존성**: 없음
-
----
-
-#### E-5. Worktree 중복 인덱싱 (MEDIUM)
-
-**근본 원인**: `update-pipeline.ts:325`에서 경로 비교 시 `toCanonical()` 미사용
-
-**현재 코드**: `p.path.toLowerCase()` vs `this.projectPath.toLowerCase()`
-**문제**: 경로 구분자(`\` vs `/`), trailing slash, 심볼릭 링크 등 미처리
-
-**수정 대상 파일**: `src/indexer/update-pipeline.ts`
-
-**수정 방안**:
-- 경로 비교를 `toCanonical(p.path) === toCanonical(this.projectPath)` 로 변경
-- `toCanonical()`이 이미 import되어 있으므로 1줄 수정
-
-**노력 수준**: S
-**의존성**: 없음
-
----
-
-#### E-6. 미발행 엣지 타입 (MEDIUM)
-
-**현황**: `types/index.ts`에 정의되었으나 파서가 발행하지 않는 엣지 타입:
-
-| 엣지 타입 | 정의됨 | 발행됨 | 용도 |
-|-----------|--------|--------|------|
-| `contains` | O | X | class → method 포함 관계 |
-| `overrides` | O | X | 메서드 오버라이드 |
-| `dynamic_calls` | O | X (대신 `calls` + `dynamic:true`) | 동적 호출 |
-| `implements_trait` | O | X | Rust/Go trait 구현 |
-
-**수정 대상 파일**: `src/indexer/typescript-parser.ts`, `src/indexer/tree-sitter-parser.ts`
-
-**수정 방안**:
-- TypeScript 파서: class 내부 메서드 발견 시 `contains` 엣지 추가
-- TypeScript 파서: 부모 클래스와 동일 이름의 메서드 발견 시 `overrides` 엣지 추가
-- Tree-sitter 파서: 동적 호출 감지 시 `dynamic_calls` 타입 사용 (`calls` + `dynamic:true` 대신)
-
-**노력 수준**: M
-**의존성**: E-1과 병행 가능
-
----
-
-### 7.3 엔진 개선 실행 순서
-
-```
-Phase 1 (Week 1 — Bug Fixes, 병렬):
-  E-3: purge_index EBUSY 수정 (S)
-  E-4: get_remediation_strategy null 가드 (S)
-  E-5: Worktree 경로 정규화 (S)
-
-Phase 2 (Week 2-3 — 핵심 정확도, 병렬):
-  E-1: Dead code false positive 감소 (M)
-    - optimization-engine.ts: implements 엣지 기반 제외
-    - typescript-parser.ts: .bind(this) 패턴 + contains 엣지
-  E-2: CC 계산 일관성 (M)
-    - metrics-calculator.ts: native/JS path 통일
-
-Phase 3 (Week 3-4 — 그래프 완성도):
-  E-6: 미발행 엣지 타입 구현 (M)
-
-Phase 4 (Week 4 — 재검증):
-  MCP 전체 도구 재실행 → dead code false positive 비율 측정
-  목표: false positive 비율 60-70% → 20% 이하
-```
-
-### 7.4 예상 효과
-
-| 개선 항목 | 현재 | 목표 |
-|-----------|------|------|
-| Dead code false positive | ~60-70% | <20% |
-| CC 정확도 | Native/JS 불일치 | 단일 경로, ±5% 이내 |
-| purge_index 성공률 | MCP 실행 중 실패 | 항상 성공 |
-| Worktree 중복 노드 | 2× 카운트 | 1× 카운트 |
-| 엣지 타입 활용률 | 6/15 (40%) | 10/15 (67%) |
-
----
-
-> 이 문서는 2026-03-28 시점의 진단 결과 + 2026-03-29 MCP 검증 테스트 결과를 반영합니다.
-> 각 항목의 구현 완료 시 상태를 업데이트하세요.
+> **다음 세션 최우선**: E-1-B 구현 (Dead code 신뢰도 레벨 분리)
