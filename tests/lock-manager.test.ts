@@ -58,7 +58,11 @@ describe('LockManager', () => {
             expect(lockPath.startsWith(TEST_LOCKS_DIR)).toBe(true);
             expect(lockPath.endsWith('.lock')).toBe(true);
             // Ensure path.join was used (no mixed separators on Windows)
-            expect(lockPath).not.toContain('/');  // On Windows all should be backslashes
+            if (process.platform === 'win32') {
+                expect(lockPath).not.toContain('/');  // On Windows all separators should be backslashes
+            } else {
+                expect(lockPath).not.toContain('\\');  // On POSIX all separators should be forward slashes
+            }
         });
     });
 
