@@ -131,3 +131,23 @@ export class CynapxError extends Error {
         this.name = 'CynapxError';
     }
 }
+
+export interface OptimizationReport {
+    /** HIGH confidence: private methods with fan_in=0 — likely genuine dead code */
+    high: CodeNode[];
+    /** MEDIUM confidence: public methods with fan_in=0 tagged trait:internal */
+    medium: CodeNode[];
+    /** LOW confidence: public methods with fan_in=0 — may be external API */
+    low: CodeNode[];
+    /** Backward-compatible alias for high */
+    potentialDeadCode: CodeNode[];
+    summary: {
+        totalSymbols: number;
+        highConfidenceDead: number;
+        mediumConfidenceDead: number;
+        lowConfidenceDead: number;
+        /** Total dead symbols across all tiers */
+        deadSymbols: number;
+        optimizationPotential: string;
+    };
+}
