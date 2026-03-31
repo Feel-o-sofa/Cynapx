@@ -99,7 +99,49 @@ Head Agent (Opus)
 
 ---
 
-## 5. 커밋 규칙
+## 5. 개발 중 MCP 빠른 검증
+
+워크트리에서 소스 수정 후 commit/PR/merge/세션 재시작 없이 즉시 MCP를 테스트할 수 있다.
+
+### 5.1 구조
+
+| MCP 서버명 | 소스 | 용도 |
+|------------|------|------|
+| `cynapx` | 메인 프로젝트 `src/` | 안정 버전 (merged) |
+| `cynapx-dev` | 현재 워크트리 `src/` | 개발 버전 (작업 중) |
+
+- `cynapx-dev`는 워크트리의 `.mcp.json`에만 정의되며, `cwd`가 해당 워크트리로 고정됨
+- `ts-node`로 실행하므로 빌드 불필요
+
+### 5.2 소스 변경 후 반영 절차
+
+1. 워크트리에서 소스 수정
+2. Claude Code에서 `/mcp` 명령 → `cynapx-dev` reconnect
+3. `mcp__cynapx-dev__*` 도구로 즉시 검증
+
+### 5.3 새 워크트리 생성 시 설정
+
+새 워크트리의 `.mcp.json`에서 `cynapx-dev.cwd`를 해당 워크트리 경로로 업데이트:
+
+```json
+{
+  "mcpServers": {
+    "cynapx": {
+      "command": "npx",
+      "args": ["ts-node", "src/bootstrap.ts", "--path", "."]
+    },
+    "cynapx-dev": {
+      "command": "npx",
+      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
+      "cwd": "C:/Workspace/ProjectAnalyzer/.claude/worktrees/<worktree-name>"
+    }
+  }
+}
+```
+
+---
+
+## 6. 커밋 규칙
 
 - 커밋은 **Head Agent만** 수행 (서브에이전트는 커밋하지 않음)
 - Gate 통과 후 Wave 단위로 커밋
