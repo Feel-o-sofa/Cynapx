@@ -4,16 +4,7 @@
  * See LICENSE in the project root for license information.
  */
 import { GraphEngine } from './graph-engine';
-import { CodeNode } from '../types';
-
-export interface OptimizationReport {
-    potentialDeadCode: CodeNode[];
-    summary: {
-        totalSymbols: number;
-        deadSymbols: number;
-        optimizationPotential: string;
-    };
-}
+import { CodeNode, OptimizationReport } from '../types';
 
 /**
  * OptimizationEngine identifies dead code and opportunities for graph pruning.
@@ -22,36 +13,27 @@ export class OptimizationEngine {
     constructor(private graphEngine: GraphEngine) {}
 
     /**
-     * Finds symbols that are likely unused (dead code).
+     * Finds symbols that are likely unused (dead code), classified into three confidence tiers.
+     *
+     * Common filter (applied to all three queries):
+     *   - fan_in = 0
+     *   - Exclude files, tests, packages
+     *   - Exclude entrypoints and abstract symbols
+     *   - Exclude methods whose containing class implements an interface (interface dispatch)
+     *   - Exclude methods whose containing class inherits from a parent (polymorphic override)
+     *
+     * HIGH   : private symbols — likely genuine dead code
+     * MEDIUM : public symbols tagged trait:internal — internal but exposed
+     * LOW    : public symbols without trait:internal — may be external API surface
      */
     public async findDeadCode(): Promise<OptimizationReport> {
         const db = (this.graphEngine.nodeRepo as any).db;
-        
-        // Find nodes with no incoming edges (fan_in = 0)
-        // Exclude files, tests, entrypoints, and public interfaces.
-        //
-        // Also exclude methods that belong to a class involved in polymorphism:
-        //
-        // 1. NOT EXISTS (contains + implements): exclude methods whose containing class
-        //    implements an interface. Such methods may be invoked via interface dispatch
-        //    (e.g. IFoo.bar()) and will appear unreachable despite being live.
-        //    Edge types used:
-        //      cont.edge_type = 'contains'   → class contains this method (class→method)
-        //      impl.edge_type = 'implements' → that class implements an interface (class→interface)
-        //
-        // 2. NOT EXISTS (contains + inherits): exclude methods whose containing class
-        //    inherits from a parent class. Such methods may override a virtual/abstract
-        //    method and be called through the supertype reference.
-        //    Edge types used:
-        //      cont.edge_type = 'contains'  → class contains this method (class→method)
-        //      inh.edge_type  = 'inherits'  → that class inherits from a parent (class→parent)
-        const query = `
-            SELECT * FROM nodes
+
+        const COMMON_FILTER = `
             WHERE fan_in = 0
             AND symbol_type NOT IN ('file', 'test', 'package')
             AND (tags IS NULL OR tags NOT LIKE '%trait:entrypoint%')
             AND (tags IS NULL OR tags NOT LIKE '%trait:abstract%')
-            AND (visibility != 'public' OR symbol_type NOT IN ('class', 'interface', 'function'))
             AND NOT EXISTS (
                 SELECT 1 FROM edges cont
                 JOIN edges impl ON impl.from_id = cont.from_id
@@ -68,20 +50,41 @@ export class OptimizationEngine {
             )
         `;
 
-        const rows = db.prepare(query).all();
-        const deadCodeNodes = rows.map((row: any) => ({
+        const highQuery = `SELECT * FROM nodes ${COMMON_FILTER} AND visibility = 'private'`;
+
+        const mediumQuery = `SELECT * FROM nodes ${COMMON_FILTER}
+            AND visibility = 'public'
+            AND symbol_type NOT IN ('class', 'interface', 'function')
+            AND tags LIKE '%trait:internal%'`;
+
+        const lowQuery = `SELECT * FROM nodes ${COMMON_FILTER}
+            AND visibility = 'public'
+            AND symbol_type NOT IN ('class', 'interface', 'function')
+            AND (tags IS NULL OR tags NOT LIKE '%trait:internal%')`;
+
+        const mapRow = (row: any): CodeNode => ({
             ...row,
             tags: row.tags ? JSON.parse(row.tags) : []
-        }));
+        });
 
-        const totalSymbols = db.prepare('SELECT COUNT(*) as count FROM nodes').get().count;
+        const highRows: CodeNode[] = db.prepare(highQuery).all().map(mapRow);
+        const mediumRows: CodeNode[] = db.prepare(mediumQuery).all().map(mapRow);
+        const lowRows: CodeNode[] = db.prepare(lowQuery).all().map(mapRow);
+
+        const totalSymbols: number = db.prepare('SELECT COUNT(*) as count FROM nodes').get().count;
 
         return {
-            potentialDeadCode: deadCodeNodes,
+            high: highRows,
+            medium: mediumRows,
+            low: lowRows,
+            potentialDeadCode: highRows,  // 후방 호환 alias
             summary: {
                 totalSymbols,
-                deadSymbols: deadCodeNodes.length,
-                optimizationPotential: `${((deadCodeNodes.length / totalSymbols) * 100).toFixed(2)}%`
+                highConfidenceDead: highRows.length,
+                mediumConfidenceDead: mediumRows.length,
+                lowConfidenceDead: lowRows.length,
+                deadSymbols: highRows.length + mediumRows.length + lowRows.length,
+                optimizationPotential: `${(((highRows.length + mediumRows.length + lowRows.length) / totalSymbols) * 100).toFixed(2)}%`
             }
         };
     }
