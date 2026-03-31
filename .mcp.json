@@ -3,6 +3,11 @@
     "cynapx": {
       "command": "npx",
       "args": ["ts-node", "src/bootstrap.ts", "--path", "."]
+    },
+    "cynapx-dev": {
+      "command": "npx",
+      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
+      "cwd": "C:/Workspace/ProjectAnalyzer/.claude/worktrees/pensive-meninsky"
     }
   }
 }
