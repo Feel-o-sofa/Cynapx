@@ -1,0 +1,106 @@
+# Cynapx 서브에이전트 오케스트레이션 워크플로우
+
+> **작성일**: 2026-03-31 (4차 세션)
+> **적용 범위**: 이 프로젝트의 모든 구현 작업에 적용
+
+---
+
+## 1. 역할 분담
+
+| 역할 | 모델 | 책임 |
+|------|------|------|
+| **Head Agent** | Opus | 설계, 계획, 의존성 분석, 병렬체인 구성, 오케스트레이션, Gate 실패 분석 |
+| **Worker Agent** | Sonnet (서브에이전트) | 할당된 체인의 atomic task 순차 실행 + self-check |
+| **Verifier Agent** | Sonnet (서브에이전트, 일회용) | Gate 검증 (체인 간 정합성, 통합 테스트) |
+
+---
+
+## 2. 작업 흐름
+
+```
+Head Agent (Opus)
+  │
+  │  1. 작업 분석 → atomic task 목록 작성
+  │  2. 의존성 분석 → 순서 할당
+  │  3. 파일 충돌 없는 task끼리 병렬체인(Wave) 구성
+  │
+  ├─── [Wave N] Worker Agent들 (Sonnet, 병렬)
+  │      │
+  │      │  각 Worker Agent:
+  │      │    for each atomic task in chain:
+  │      │      1. task 실행 (코드 수정)
+  │      │      2. self-check: tsc --noEmit
+  │      │      3. self-check 실패 시 자체 수정 후 재시도
+  │      │    완료 후 결과 보고 (변경 파일, 라인, tsc 결과)
+  │      │
+  │      └─── 모든 Worker 완료 대기
+  │
+  ├─── [Gate N] Verifier Agent (Sonnet, 새로 생성, 일회용)
+  │      │
+  │      │  필수 검증 항목:
+  │      │    1. tsc --noEmit → 0 errors
+  │      │    2. npm test → 전체 통과
+  │      │    3. 체인 간 정합성 (타입 호환, import 일관성)
+  │      │    4. 기능별 스모크 테스트 (해당 시)
+  │      │
+  │      │  결과: PASS / FAIL (실패 항목 + 원인 명시)
+  │      │  완료 후 즉시 해제
+  │      │
+  │      ├─ PASS → 다음 Wave 또는 Final 단계로 진행
+  │      └─ FAIL → Head Agent가 원인 분석
+  │                 → 해당 Worker Agent를 SendMessage로 재활성화
+  │                 → 수정 지시 → 수정 완료 후
+  │                 → 새 Verifier Agent로 Gate 재실행
+  │
+  └─── [Final] 커밋 & 푸시 (Head Agent 직접 수행)
+```
+
+---
+
+## 3. 핵심 원칙
+
+### 3.1 작업 환경
+
+- 모든 서브에이전트는 **Head Agent와 동일한 워크트리**에서 작업
+- `isolation: "worktree"` 사용하지 않음
+- 따라서 **파일 충돌이 없는 체인만 병렬화** (같은 파일을 수정하는 task는 동일 체인에 배치)
+
+### 3.2 검증 체계 (2단계)
+
+| 단계 | 수행 주체 | 시점 | 범위 |
+|------|-----------|------|------|
+| **Self-check** | Worker Agent 자체 | 각 atomic task 완료 후 | 해당 체인의 tsc 컴파일 |
+| **Gate (Cross-check)** | 독립 Verifier Agent | Wave 전체 완료 후 | 전체 프로젝트 tsc + test + 정합성 |
+
+- Self-check: "자기 코드는 자기가 1차 검증"
+- Gate: "남의 코드와의 정합성은 제3자가 검증"
+
+### 3.3 실패 복구
+
+1. **Self-check 실패**: Worker Agent가 자체적으로 수정 후 재시도 (최대 3회)
+2. **Gate 실패**: Head Agent가 실패 원인 분석 → `SendMessage`로 해당 Worker 재활성화 → 수정 지시 → 새 Verifier로 Gate 재실행
+3. **Gate 2회 연속 실패**: Head Agent가 직접 개입하여 수정
+
+### 3.4 Agent 생명주기
+
+| Agent 유형 | 생성 시점 | 해제 시점 |
+|------------|-----------|-----------|
+| Worker Agent | Wave 시작 시 | Gate 통과 후 (단, 실패 복구 대비 유지 가능) |
+| Verifier Agent | Gate 시작 시 | Gate 결과 보고 즉시 |
+
+---
+
+## 4. 병렬체인 구성 규칙
+
+1. **파일 단위 충돌 분석**: 같은 파일을 수정하는 task는 반드시 동일 체인에 배치
+2. **의존성 순서 보장**: task B가 task A의 결과에 의존하면, A → B 순서로 동일 체인 내 직렬 배치
+3. **Wave 간 의존성**: Wave N+1은 Wave N의 Gate 통과 후에만 시작
+4. **최대 병렬도**: 파일 충돌이 없는 한 제한 없음
+
+---
+
+## 5. 커밋 규칙
+
+- 커밋은 **Head Agent만** 수행 (서브에이전트는 커밋하지 않음)
+- Gate 통과 후 Wave 단위로 커밋
+- 커밋 메시지에 변경된 항목 ID 명시 (예: `feat(E-1-B): ...`)
