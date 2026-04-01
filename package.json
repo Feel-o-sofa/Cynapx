@@ -16,7 +16,8 @@
     "dev": "ts-node-dev --respawn src/bootstrap.ts",
     "prepare": "npm run build",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "bench": "vitest bench"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

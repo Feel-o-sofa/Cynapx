@@ -6,5 +6,9 @@ export default defineConfig({
     root: '.',
     include: ['src/**/*.test.ts', 'tests/**/*.test.ts'],
     testTimeout: 30000,
+    benchmark: {
+      include: ['tests/benchmarks/**/*.bench.ts'],
+      reporters: ['verbose'],
+    },
   },
 });

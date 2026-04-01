@@ -1,0 +1,598 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`tree-sitter parser — Go (sample.go) > snapshot: all captures 1`] = `
+[
+  {
+    "name": "import.def",
+    "text": ""fmt"",
+  },
+  {
+    "name": "import.name",
+    "text": ""fmt"",
+  },
+  {
+    "name": "import.def",
+    "text": ""strings"",
+  },
+  {
+    "name": "import.name",
+    "text": ""strings"",
+  },
+  {
+    "name": "class.def",
+    "text": "Animal struct {
+	Name string
+}",
+  },
+  {
+    "name": "class.name",
+    "text": "Animal",
+  },
+  {
+    "name": "class.def",
+    "text": "Dog struct {
+	Animal
+	Breed string
+}",
+  },
+  {
+    "name": "class.name",
+    "text": "Dog",
+  },
+  {
+    "name": "method.def",
+    "text": "func (a *Animal) Speak() string {
+	return fmt.Sprintf("%s makes a sound.", a.Name)
+}",
+  },
+  {
+    "name": "method.name",
+    "text": "Speak",
+  },
+  {
+    "name": "method.params",
+    "text": "()",
+  },
+  {
+    "name": "call.expr",
+    "text": "fmt.Sprintf("%s makes a sound.", a.Name)",
+  },
+  {
+    "name": "call.name",
+    "text": "fmt.Sprintf",
+  },
+  {
+    "name": "method.def",
+    "text": "func (d *Dog) Speak() string {
+	return fmt.Sprintf("%s barks.", d.Name)
+}",
+  },
+  {
+    "name": "method.name",
+    "text": "Speak",
+  },
+  {
+    "name": "method.params",
+    "text": "()",
+  },
+  {
+    "name": "call.expr",
+    "text": "fmt.Sprintf("%s barks.", d.Name)",
+  },
+  {
+    "name": "call.name",
+    "text": "fmt.Sprintf",
+  },
+  {
+    "name": "method.def",
+    "text": "func (d *Dog) FetchBreed() string {
+	return strings.ToUpper(d.Breed)
+}",
+  },
+  {
+    "name": "method.name",
+    "text": "FetchBreed",
+  },
+  {
+    "name": "method.params",
+    "text": "()",
+  },
+  {
+    "name": "call.expr",
+    "text": "strings.ToUpper(d.Breed)",
+  },
+  {
+    "name": "call.name",
+    "text": "strings.ToUpper",
+  },
+  {
+    "name": "function.def",
+    "text": "func FormatAnimal(name string) string {
+	return fmt.Sprintf("[%s]", name)
+}",
+  },
+  {
+    "name": "function.name",
+    "text": "FormatAnimal",
+  },
+  {
+    "name": "function.params",
+    "text": "(name string)",
+  },
+  {
+    "name": "call.expr",
+    "text": "fmt.Sprintf("[%s]", name)",
+  },
+  {
+    "name": "call.name",
+    "text": "fmt.Sprintf",
+  },
+  {
+    "name": "function.def",
+    "text": "func main() {
+	dog := &Dog{Animal: Animal{Name: "Rex"}, Breed: "Labrador"}
+	fmt.Println(dog.Speak())
+}",
+  },
+  {
+    "name": "function.name",
+    "text": "main",
+  },
+  {
+    "name": "function.params",
+    "text": "()",
+  },
+  {
+    "name": "call.expr",
+    "text": "fmt.Println(dog.Speak())",
+  },
+  {
+    "name": "call.name",
+    "text": "fmt.Println",
+  },
+  {
+    "name": "call.expr",
+    "text": "dog.Speak()",
+  },
+  {
+    "name": "call.name",
+    "text": "dog.Speak",
+  },
+]
+`;
+
+exports[`tree-sitter parser — JavaScript (sample.js) > snapshot: all captures 1`] = `
+[
+  {
+    "name": "call.expr",
+    "text": "require('path')",
+  },
+  {
+    "name": "call.name",
+    "text": "require",
+  },
+  {
+    "name": "class.def",
+    "text": "class Animal {
+    constructor(name) {
+        this.name = name;
+    }
+
+    speak() {
+        return \`\${this.name} makes a sound.\`;
+    }
+}",
+  },
+  {
+    "name": "class.name",
+    "text": "Animal",
+  },
+  {
+    "name": "method.def",
+    "text": "constructor(name) {
+        this.name = name;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "constructor",
+  },
+  {
+    "name": "method.def",
+    "text": "speak() {
+        return \`\${this.name} makes a sound.\`;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "speak",
+  },
+  {
+    "name": "class.def",
+    "text": "class Dog extends Animal {
+    constructor(name, breed) {
+        super(name);
+        this.breed = breed;
+    }
+
+    speak() {
+        return \`\${this.name} barks.\`;
+    }
+
+    fetchBreed() {
+        return this.breed;
+    }
+}",
+  },
+  {
+    "name": "class.name",
+    "text": "Dog",
+  },
+  {
+    "name": "method.def",
+    "text": "constructor(name, breed) {
+        super(name);
+        this.breed = breed;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "constructor",
+  },
+  {
+    "name": "method.def",
+    "text": "speak() {
+        return \`\${this.name} barks.\`;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "speak",
+  },
+  {
+    "name": "method.def",
+    "text": "fetchBreed() {
+        return this.breed;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "fetchBreed",
+  },
+  {
+    "name": "function.def",
+    "text": "function formatAnimal(animal) {
+    return \`[\${animal.name}]\`;
+}",
+  },
+  {
+    "name": "function.name",
+    "text": "formatAnimal",
+  },
+]
+`;
+
+exports[`tree-sitter parser — Python (sample.py) > snapshot: all captures 1`] = `
+[
+  {
+    "name": "import.stmt",
+    "text": "import os",
+  },
+  {
+    "name": "import.from_stmt",
+    "text": "from pathlib import Path",
+  },
+  {
+    "name": "class.def",
+    "text": "class Animal:
+    def __init__(self, name: str):
+        self.name = name
+
+    def speak(self) -> str:
+        return f"{self.name} makes a sound."",
+  },
+  {
+    "name": "class.name",
+    "text": "Animal",
+  },
+  {
+    "name": "function.def",
+    "text": "def __init__(self, name: str):
+        self.name = name",
+  },
+  {
+    "name": "function.name",
+    "text": "__init__",
+  },
+  {
+    "name": "function.params",
+    "text": "(self, name: str)",
+  },
+  {
+    "name": "function.def",
+    "text": "def speak(self) -> str:
+        return f"{self.name} makes a sound."",
+  },
+  {
+    "name": "function.name",
+    "text": "speak",
+  },
+  {
+    "name": "function.params",
+    "text": "(self)",
+  },
+  {
+    "name": "function.return",
+    "text": "str",
+  },
+  {
+    "name": "class.def",
+    "text": "class Dog(Animal):
+    def __init__(self, name: str, breed: str):
+        super().__init__(name)
+        self.breed = breed
+
+    def speak(self) -> str:
+        return f"{self.name} barks."
+
+    def fetch_breed(self) -> str:
+        return self.breed",
+  },
+  {
+    "name": "class.name",
+    "text": "Dog",
+  },
+  {
+    "name": "relation.inherits",
+    "text": "Animal",
+  },
+  {
+    "name": "function.def",
+    "text": "def __init__(self, name: str, breed: str):
+        super().__init__(name)
+        self.breed = breed",
+  },
+  {
+    "name": "function.name",
+    "text": "__init__",
+  },
+  {
+    "name": "function.params",
+    "text": "(self, name: str, breed: str)",
+  },
+  {
+    "name": "call.expr",
+    "text": "super()",
+  },
+  {
+    "name": "call.name",
+    "text": "super",
+  },
+  {
+    "name": "function.def",
+    "text": "def speak(self) -> str:
+        return f"{self.name} barks."",
+  },
+  {
+    "name": "function.name",
+    "text": "speak",
+  },
+  {
+    "name": "function.params",
+    "text": "(self)",
+  },
+  {
+    "name": "function.return",
+    "text": "str",
+  },
+  {
+    "name": "function.def",
+    "text": "def fetch_breed(self) -> str:
+        return self.breed",
+  },
+  {
+    "name": "function.name",
+    "text": "fetch_breed",
+  },
+  {
+    "name": "function.params",
+    "text": "(self)",
+  },
+  {
+    "name": "function.return",
+    "text": "str",
+  },
+  {
+    "name": "function.def",
+    "text": "def format_animal(animal: Animal) -> str:
+    return f"[{animal.name}]"",
+  },
+  {
+    "name": "function.name",
+    "text": "format_animal",
+  },
+  {
+    "name": "function.params",
+    "text": "(animal: Animal)",
+  },
+  {
+    "name": "function.return",
+    "text": "str",
+  },
+]
+`;
+
+exports[`tree-sitter parser — TypeScript (sample.ts) > snapshot: all captures 1`] = `
+[
+  {
+    "name": "import.name",
+    "text": "'events'",
+  },
+  {
+    "name": "class.def",
+    "text": "class Animal {
+    constructor(public name: string) {}
+
+    public speak(): string {
+        return \`\${this.name} makes a sound.\`;
+    }
+}",
+  },
+  {
+    "name": "class.name",
+    "text": "Animal",
+  },
+  {
+    "name": "method.def",
+    "text": "constructor(public name: string) {}",
+  },
+  {
+    "name": "method.name",
+    "text": "constructor",
+  },
+  {
+    "name": "method.params",
+    "text": "(public name: string)",
+  },
+  {
+    "name": "method.def",
+    "text": "public speak(): string {
+        return \`\${this.name} makes a sound.\`;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "speak",
+  },
+  {
+    "name": "method.params",
+    "text": "()",
+  },
+  {
+    "name": "method.return",
+    "text": ": string",
+  },
+  {
+    "name": "class.def",
+    "text": "class Dog extends Animal implements Greetable {
+    private breed: string;
+
+    constructor(name: string, breed: string) {
+        super(name);
+        this.breed = breed;
+    }
+
+    public speak(): string {
+        return \`\${this.name} barks.\`;
+    }
+
+    public greet(person: string): string {
+        return \`Woof! Hello, \${person}!\`;
+    }
+
+    private fetchBreed(): string {
+        return this.breed;
+    }
+}",
+  },
+  {
+    "name": "class.name",
+    "text": "Dog",
+  },
+  {
+    "name": "relation.inherits",
+    "text": "Animal",
+  },
+  {
+    "name": "relation.implements",
+    "text": "Greetable",
+  },
+  {
+    "name": "method.def",
+    "text": "constructor(name: string, breed: string) {
+        super(name);
+        this.breed = breed;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "constructor",
+  },
+  {
+    "name": "method.params",
+    "text": "(name: string, breed: string)",
+  },
+  {
+    "name": "method.def",
+    "text": "public speak(): string {
+        return \`\${this.name} barks.\`;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "speak",
+  },
+  {
+    "name": "method.params",
+    "text": "()",
+  },
+  {
+    "name": "method.return",
+    "text": ": string",
+  },
+  {
+    "name": "method.def",
+    "text": "public greet(person: string): string {
+        return \`Woof! Hello, \${person}!\`;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "greet",
+  },
+  {
+    "name": "method.params",
+    "text": "(person: string)",
+  },
+  {
+    "name": "method.return",
+    "text": ": string",
+  },
+  {
+    "name": "method.def",
+    "text": "private fetchBreed(): string {
+        return this.breed;
+    }",
+  },
+  {
+    "name": "method.name",
+    "text": "fetchBreed",
+  },
+  {
+    "name": "method.params",
+    "text": "()",
+  },
+  {
+    "name": "method.return",
+    "text": ": string",
+  },
+  {
+    "name": "function.def",
+    "text": "function formatAnimal(animal: Animal): string {
+    return \`[\${animal.name}]\`;
+}",
+  },
+  {
+    "name": "function.name",
+    "text": "formatAnimal",
+  },
+  {
+    "name": "function.params",
+    "text": "(animal: Animal)",
+  },
+  {
+    "name": "function.return",
+    "text": ": string",
+  },
+]
+`;
