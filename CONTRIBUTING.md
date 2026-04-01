@@ -9,10 +9,11 @@ Thank you for your interest in contributing to Cynapx, a high-performance isolat
 1. [Development Setup](#development-setup)
 2. [Worktree-Based Development Workflow](#worktree-based-development-workflow)
 3. [Sub-Agent Orchestration Workflow](#sub-agent-orchestration-workflow)
-4. [Commit Message Conventions](#commit-message-conventions)
-5. [Pull Request Process](#pull-request-process)
-6. [Running Tests](#running-tests)
-7. [TypeScript Type Checking](#typescript-type-checking)
+4. [Adding Language Support](#adding-language-support)
+5. [Commit Message Conventions](#commit-message-conventions)
+6. [Pull Request Process](#pull-request-process)
+7. [Running Tests](#running-tests)
+8. [TypeScript Type Checking](#typescript-type-checking)
 
 ---
 
@@ -91,6 +92,20 @@ Key points:
 - The **Worker** agent implements the task, runs `npx tsc --noEmit` and `npm test`, then opens a PR.
 - The Orchestrator reviews the PR and merges it before proceeding to the next task.
 - Agents follow the Cynapx Development Protocol defined in the agent rules (`.claude/`).
+
+---
+
+## Adding Language Support
+
+Cynapx supports new programming languages through a **language provider** plugin system. A language provider is a class that implements the `LanguageProvider` interface and is installed in `~/.cynapx/plugins/`. The registry scans that directory at startup and automatically registers any valid provider it finds — no configuration file is required.
+
+For full instructions, interface documentation, tree-sitter query conventions, and a complete worked example, see:
+
+**[docs/extending-language-support.md](docs/extending-language-support.md)**
+
+A ready-to-adapt example provider for Ruby is available at:
+
+**[examples/ruby-language-provider.ts](examples/ruby-language-provider.ts)**
 
 ---
 
