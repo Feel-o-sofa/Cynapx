@@ -92,15 +92,15 @@ HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 
 
 ---
 
-### 3.3 LOW 항목 (분기별 개선, 미착수)
+### 3.3 LOW 항목
 
-| 항목 | 내용 | 노력 |
-|------|------|------|
-| L-1 | `CHANGELOG.md`, `CONTRIBUTING.md` 생성 | S |
-| L-2 | OpenAPI/Swagger 스펙 + `swagger-ui-express` 통합 | M |
-| L-3 | 각 `.scm` 쿼리에 대한 golden test 파일 + expected output | L |
-| L-4 | Plugin API 문서 + 예제 플러그인 | M |
-| L-5 | 다양한 크기 프로젝트 대상 인덱싱 성능 벤치마크 | M |
+| 항목 | 내용 | 완료 시점 |
+|------|------|-----------|
+| L-1 | `CHANGELOG.md`, `CONTRIBUTING.md` 생성 | 5차 세션 (PR #7) |
+| L-2 | OpenAPI/Swagger 스펙 + `swagger-ui-express` 통합 (`/api/docs`) | 5차 세션 (PR #7) |
+| L-3 | 4개 언어 parser golden/snapshot 테스트 (TS/PY/JS/Go, 81개 테스트) | 5차 세션 (PR #8) |
+| L-4 | 언어 provider 확장 문서 + Ruby 예제 (`docs/`, `examples/`) | 5차 세션 (PR #8) |
+| L-5 | Vitest 벤치마크 — parsing/database/tagging 3 suite | 5차 세션 (PR #8) |
 
 ---
 
@@ -114,4 +114,4 @@ HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 
 | 엣지 타입 활용률 | 4/15 | 8/15 (`contains`, `overrides`, `implements`, `inherits` 추가) | 10/15+ |
 | 테스트 커버리지 | 0개 | 58개 (4개 파일) | 100+ |
 
-> **다음 세션**: L-1 (CHANGELOG/CONTRIBUTING), L-2 (OpenAPI/Swagger) 진행 예정
+> **상태**: L-1 ~ L-5 모두 완료. 추가 계획 항목 없음.
