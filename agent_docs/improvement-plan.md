@@ -117,4 +117,5 @@ HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 
 | API 문서 | 없음 | OpenAPI 3.0.3 (`/api/docs`) | ✅ |
 | 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) | ✅ |
 
-> **상태**: 모든 계획 항목(C/H/M/E/L) 완료. 5차 세션 기준 신규 계획 없음.
+> **Phase 1 상태**: 모든 계획 항목(C/H/M/E/L) 완료.
+> **Phase 2**: 종합 진단을 통해 28개 신규 개선 항목 발굴 → [`diagnostic-v2.md`](./diagnostic-v2.md) 참조.
