@@ -10,11 +10,13 @@ import * as https from 'https';
 import * as crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { z, ZodSchema } from 'zod';
+import swaggerUi from 'swagger-ui-express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { TraversalResult } from '../graph/graph-engine';
 import { CodeNode, CodeEdge } from '../types';
 import { McpServer } from './mcp-server';
 import { EngineContext } from './workspace-manager';
+import { openApiSpec } from './openapi';
 import * as fs from 'fs';
 
 // --- Zod Schemas (M-4) ---
@@ -118,7 +120,7 @@ export class ApiServer {
         });
 
         this.app.use((req, res, next) => {
-            if (req.path === '/mcp' && req.method === 'GET') return next();
+            if ((req.path === '/mcp' && req.method === 'GET') || req.path.startsWith('/api/docs')) return next();
             const authHeader = req.headers.authorization;
             if (!authHeader || authHeader !== `Bearer ${AUTH_TOKEN}`) {
                 return res.status(401).json({ error_code: 'UNAUTHORIZED', message: 'Invalid or missing Bearer Token' });
@@ -139,6 +141,9 @@ export class ApiServer {
     }
 
     private setupRoutes(): void {
+        // OpenAPI / Swagger UI (no auth required for documentation)
+        this.app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec));
+
         this.app.all('/mcp', this.handleMcp.bind(this));
         this.app.post('/api/symbol/get', this.handleGetSymbol.bind(this));
         this.app.post('/api/graph/callers', this.handleGetCallers.bind(this));

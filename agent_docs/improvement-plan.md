@@ -1,6 +1,6 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-03-30 (3차 세션)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-01 (5차 세션)
 > **대상 버전**: v1.0.6
 > **총 소스 파일**: 52개 TypeScript, 1개 Rust (napi-rs), 12개 Tree-sitter .scm 쿼리
 
@@ -75,50 +75,10 @@ src/
 
 ## 3. 미완료 항목
 
-### 3.1 E-1-B: Dead Code 신뢰도 레벨 분리 (다음 세션 최우선)
+### 3.1 E-1-B: Dead Code 신뢰도 레벨 분리 ✅ 완료 (4차 세션, PR #5)
 
-**배경**: E-1 수정 후에도 `this.field.method()` 패턴의 TypeScript call resolution이 실패해 false positive가 지속됨. `edgerepository.createEdge` 등 인스턴스 필드를 통한 메서드 호출이 `calls` 엣지로 기록되지 않는 것이 근본 원인. 완전한 해결은 TypeScript Language Server 수준의 타입 해석이 필요 — 단기 해결 불가.
-
-**현재 상태** (3차 세션 측정):
-- 총 dead symbols: 246개 (메인 141 + 워크트리 105)
-- 전체 false positive 비율: ~88% (fan_in=0인 public 메서드 대부분이 FP)
-- HIGH confidence (private + fan_in=0): ~10~20개 — 실제 dead code 가능성 높음
-
-**구현 계획**:
-
-반환 구조를 3단계 신뢰도로 분리:
-
-```typescript
-// src/types/index.ts 추가
-interface DeadCodeReport {
-  high:   CodeNode[];  // private + fan_in=0
-  medium: CodeNode[];  // public + fan_in=0 + trait:internal
-  low:    CodeNode[];  // public + fan_in=0 (외부 API 가능성)
-  potentialDeadCode: CodeNode[];  // 후방 호환: high와 동일
-  summary: {
-    totalSymbols: number;
-    highConfidenceDead: number;
-    mediumConfidenceDead: number;
-    lowConfidenceDead: number;
-    optimizationPotential: string;
-  };
-}
-```
-
-분류 기준:
-
-| 레벨 | 조건 | 예상 건수 | FP 비율 |
-|------|------|-----------|---------|
-| HIGH | `visibility = 'private'` AND `fan_in = 0` | ~10~20개 | <5% |
-| MEDIUM | `visibility = 'public'` AND `fan_in = 0` AND `tags LIKE '%trait:internal%'` | ~30~50개 | ~30% |
-| LOW | `visibility = 'public'` AND `fan_in = 0` (trait:internal 없음) | ~180개 | >80% |
-
-**수정 파일**:
-1. `src/types/index.ts` — `DeadCodeReport` 인터페이스 추가
-2. `src/graph/optimization-engine.ts` — `findDeadCode()` 반환 타입 및 쿼리 3단계 분리
-3. `src/server/mcp-server.ts` — `find_dead_code` 응답 포맷 업데이트 (후방 호환 유지)
-
-**노력 수준**: M (1~2시간)
+HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 유지.
+실측: HIGH 11개, MEDIUM 0개, LOW 265개 (총 276개).
 
 ---
 
@@ -154,4 +114,4 @@ interface DeadCodeReport {
 | 엣지 타입 활용률 | 4/15 | 8/15 (`contains`, `overrides`, `implements`, `inherits` 추가) | 10/15+ |
 | 테스트 커버리지 | 0개 | 58개 (4개 파일) | 100+ |
 
-> **다음 세션 최우선**: E-1-B 구현 (Dead code 신뢰도 레벨 분리)
+> **다음 세션**: L-1 (CHANGELOG/CONTRIBUTING), L-2 (OpenAPI/Swagger) 진행 예정
