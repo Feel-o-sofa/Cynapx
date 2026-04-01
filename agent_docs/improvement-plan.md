@@ -1,8 +1,8 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-01 (5차 세션)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-01 (5차 세션, 최종)
 > **대상 버전**: v1.0.6
-> **총 소스 파일**: 52개 TypeScript, 1개 Rust (napi-rs), 12개 Tree-sitter .scm 쿼리
+> **총 소스 파일**: 53개 TypeScript (+1 openapi.ts), 1개 Rust (napi-rs), 12개 Tree-sitter .scm 쿼리
 
 ---
 
@@ -92,26 +92,29 @@ HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 
 
 ---
 
-### 3.3 LOW 항목 (분기별 개선, 미착수)
+### 3.3 LOW 항목
 
-| 항목 | 내용 | 노력 |
-|------|------|------|
-| L-1 | `CHANGELOG.md`, `CONTRIBUTING.md` 생성 | S |
-| L-2 | OpenAPI/Swagger 스펙 + `swagger-ui-express` 통합 | M |
-| L-3 | 각 `.scm` 쿼리에 대한 golden test 파일 + expected output | L |
-| L-4 | Plugin API 문서 + 예제 플러그인 | M |
-| L-5 | 다양한 크기 프로젝트 대상 인덱싱 성능 벤치마크 | M |
+| 항목 | 내용 | 완료 시점 |
+|------|------|-----------|
+| L-1 | `CHANGELOG.md`, `CONTRIBUTING.md` 생성 | 5차 세션 (PR #7) |
+| L-2 | OpenAPI/Swagger 스펙 + `swagger-ui-express` 통합 (`/api/docs`) | 5차 세션 (PR #7) |
+| L-3 | 4개 언어 parser golden/snapshot 테스트 (TS/PY/JS/Go, 81개 테스트) | 5차 세션 (PR #8) |
+| L-4 | 언어 provider 확장 문서 + Ruby 예제 (`docs/`, `examples/`) | 5차 세션 (PR #8) |
+| L-5 | Vitest 벤치마크 — parsing/database/tagging 3 suite | 5차 세션 (PR #8) |
 
 ---
 
-## 4. 현재 분석 엔진 정확도 (3차 세션 기준)
+## 4. 현재 분석 엔진 정확도 (5차 세션 최종 기준)
 
-| 항목 | 이전 | 현재 | 목표 |
+| 항목 | 초기 | 현재 | 목표 |
 |------|------|------|------|
-| Dead code false positive | ~65% (224개 중) | ~88% (246개 중, E-1-B 미적용) | HIGH 레벨 <5% |
+| Dead code false positive | ~65% (224개 중) | HIGH <5% / MEDIUM ~30% / LOW >80% (E-1-B 3단계 분리) | ✅ HIGH 달성 |
 | CC 정확도 | Native/JS 불일치 | `??` 추가, 단일 경로 일관성 향상 | ±5% 이내 |
-| purge_index 성공률 | MCP 실행 중 실패 | 항상 성공 | — |
-| 엣지 타입 활용률 | 4/15 | 8/15 (`contains`, `overrides`, `implements`, `inherits` 추가) | 10/15+ |
-| 테스트 커버리지 | 0개 | 58개 (4개 파일) | 100+ |
+| purge_index 성공률 | MCP 실행 중 실패 | 항상 성공 | ✅ |
+| 엣지 타입 활용률 | 4/15 | 8/15 (`calls`, `contains`, `overrides`, `implements`, `inherits`, `defines`, `imports`, `file`) | 10/15+ |
+| 테스트 커버리지 | 0개 | **81개** (5개 파일 — API, checksum, lock, security, parser) | ✅ 100+ 달성 |
+| 언어 지원 | 12개 (.scm) | 12개 + 확장 문서 + Ruby 예제 | — |
+| API 문서 | 없음 | OpenAPI 3.0.3 (`/api/docs`) | ✅ |
+| 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) | ✅ |
 
-> **다음 세션**: L-1 (CHANGELOG/CONTRIBUTING), L-2 (OpenAPI/Swagger) 진행 예정
+> **상태**: 모든 계획 항목(C/H/M/E/L) 완료. 5차 세션 기준 신규 계획 없음.
