@@ -147,7 +147,7 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
                 if (!isConsistent) {
                     console.error("[HealthMonitor] Ledger inconsistency detected. Triggering auto-repair...");
                     this.isCheckingConsistency = true;
-                    const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, (ctx as any).gitService, (ctx as any).updatePipeline, ctx.projectPath);
+                    const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, ctx.gitService!, ctx.updatePipeline!, ctx.projectPath);
                     await checker.validate(true, false);
                     this.isCheckingConsistency = false;
                 }
@@ -539,7 +539,7 @@ Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the curr
 
                 if (args.include_source !== false) {
                     try {
-                        const security = (ctx as any).securityProvider as SecurityProvider;
+                        const security = ctx.securityProvider;
                         if (security) security.validatePath(node.file_path);
                         const content = fs.readFileSync(node.file_path, 'utf8').split('\n');
                         const snippet = content.slice(node.start_line - 1, node.end_line);
@@ -651,7 +651,7 @@ Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the curr
             }
             case 'check_consistency': {
                 const ctx = this.getContext();
-                const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, (ctx as any).gitService, (ctx as any).updatePipeline, ctx.projectPath);
+                const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, ctx.gitService!, ctx.updatePipeline!, ctx.projectPath);
                 const results = await checker.validate(args.repair, args.force);
                 return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
             }
@@ -667,12 +667,12 @@ Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the curr
                 return { content: [{ type: "text", text: "Project index purged successfully. Server in PENDING mode." }] };
             }
             case 're_tag_project': {
-                const pipeline = (this.getContext() as any).updatePipeline;
+                const pipeline = this.getContext().updatePipeline!;
                 await pipeline.reTagAllNodes();
                 return { content: [{ type: "text", text: "Successfully re-tagged all nodes." }] };
             }
             case 'backfill_history': {
-                const pipeline = (this.getContext() as any).updatePipeline;
+                const pipeline = this.getContext().updatePipeline!;
                 await pipeline.mapHistoryToProject();
                 return { content: [{ type: "text", text: "Successfully backfilled Git history." }] };
             }
