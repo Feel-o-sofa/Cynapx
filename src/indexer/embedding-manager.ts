@@ -172,12 +172,37 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
 }
 
 /**
+ * NullEmbeddingProvider is used when embeddings are unavailable
+ * (e.g., Python sidecar failed and max retries exhausted).
+ * Returns null/empty values, allowing the system to degrade gracefully.
+ */
+export class NullEmbeddingProvider implements EmbeddingProvider {
+    public readonly unavailable = true;
+
+    public async generate(_text: string): Promise<number[]> {
+        return null as unknown as number[];
+    }
+
+    public async generateBatch(_texts: string[]): Promise<number[][]> {
+        return null as unknown as number[][];
+    }
+
+    public getDimensions(): number { return 0; }
+    public getModelName(): string { return 'null (unavailable)'; }
+}
+
+/**
  * Manages the lifecycle of embeddings for the knowledge graph.
  */
 export class EmbeddingManager {
     private provider: EmbeddingProvider;
 
-    constructor(private db: Database, private nodeRepo: NodeRepository, provider?: EmbeddingProvider) {
+    constructor(
+        private db: Database,
+        private nodeRepo: NodeRepository,
+        provider?: EmbeddingProvider,
+        private onProviderFallback?: () => void
+    ) {
         this.provider = provider || new PythonEmbeddingProvider();
     }
 
@@ -195,6 +220,18 @@ export class EmbeddingManager {
     }
 
     public async refreshAll(): Promise<void> {
+        // If provider entered fallback mode, switch to NullEmbeddingProvider
+        if (this.provider instanceof PythonEmbeddingProvider && this.provider.fallbackMode) {
+            console.error('[EmbeddingManager] Primary provider in fallback mode — switching to NullEmbeddingProvider');
+            this.provider = new NullEmbeddingProvider();
+            this.onProviderFallback?.();
+        }
+
+        // NullEmbeddingProvider: skip embedding refresh entirely
+        if (this.provider instanceof NullEmbeddingProvider) {
+            return;
+        }
+
         // Ensure model is ready and check dimensions
         await this.provider.generate("ping");
         const dim = this.provider.getDimensions();
