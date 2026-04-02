@@ -112,8 +112,9 @@ export class WorkerPool implements Disposable {
         // Spawn a replacement so the pool keeps its target size
         this.spawnWorker();
 
-        // The new worker is immediately marked free — kick the queue
-        this.processNext();
+        // Defer processNext to the next event loop tick to avoid re-entrant
+        // synchronous call chains (processNext → replaceWorker → spawnWorker → processNext)
+        setImmediate(() => this.processNext());
     }
 
     public runTask(task: any): Promise<any> {

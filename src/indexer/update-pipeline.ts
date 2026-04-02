@@ -11,7 +11,8 @@ import { MetadataRepository } from '../db/metadata-repository';
 import { GitService } from './git-service';
 import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
 import { WorkerPool } from './worker-pool';
-import { toCanonical, readRegistry } from '../utils/paths';
+import { toCanonical } from '../utils/paths';
+import { CrossProjectResolver } from './cross-project-resolver';
 import { StructuralTagger } from './structural-tagger';
 import { EmbeddingManager } from './embedding-manager';
 import { CodeNode } from '../types';
@@ -35,9 +36,13 @@ export class UpdatePipeline {
         private graphEngine?: GraphEngine
     ) {
         this.embeddingManager = new EmbeddingManager(this.db, this.nodeRepo);
+        if (this.projectPath) {
+            this.crossProjectResolver = new CrossProjectResolver(this.nodeRepo, this.projectPath);
+        }
     }
 
     private writeLock: Promise<void> = Promise.resolve();
+    private crossProjectResolver?: CrossProjectResolver;
 
     public async reTagAllNodes(): Promise<void> {
         const nodes = this.nodeRepo.getAllNodes();
@@ -338,52 +343,9 @@ export class UpdatePipeline {
         }
 
         // Boundaryless Edge Discovery (Task 31)
-        // If not found locally, search across other registered projects
-        if (side === 'to' && this.projectPath) {
-            const registry = readRegistry();
-            const otherProjects = registry.filter(p => toCanonical(p.path) !== toCanonical(this.projectPath!));
-            
-            // Extract pure symbol name if it contains # (e.g. "path/to/file.ts#MyClass" -> "MyClass")
-            const symbolName = qname.includes('#') ? qname.split('#').pop()! : qname;
-
-            for (const project of otherProjects) {
-                try {
-                    if (!require('fs').existsSync(project.db_path)) continue;
-
-                    const remoteDb = new SQLiteDatabase(project.db_path, { readonly: true });
-                    try {
-                        // Try exact match first, then suffix match with symbol name
-                        const remoteStmt = remoteDb.prepare("SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LIKE ? COLLATE NOCASE LIMIT 1");
-                        const remoteMatch = remoteStmt.get(canonicalQName, `%#${symbolName}`) as any;
-
-                        if (remoteMatch) {
-                            // Create a Shadow Node in the local DB
-                            const shadowNodeId = this.nodeRepo.createNode({
-                                qualified_name: `remote:${project.name}:${remoteMatch.qualified_name}`,
-                                symbol_type: remoteMatch.symbol_type,
-                                language: remoteMatch.language,
-                                file_path: remoteMatch.file_path, // Remote file path
-                                start_line: remoteMatch.start_line,
-                                end_line: remoteMatch.end_line,
-                                visibility: remoteMatch.visibility,
-                                is_generated: true,
-                                last_updated_commit: 'remote',
-                                version: 0,
-                                remote_project_path: project.path,
-                                signature: remoteMatch.signature,
-                                return_type: remoteMatch.return_type,
-                                tags: remoteMatch.tags ? JSON.parse(remoteMatch.tags) : undefined,
-                                history: remoteMatch.history ? JSON.parse(remoteMatch.history) : undefined
-                            });
-                            return shadowNodeId;
-                        }
-                    } finally {
-                        remoteDb.close();
-                    }
-                } catch (err) {
-                    // Silently ignore errors for specific remote DBs
-                }
-            }
+        if (side === 'to' && this.crossProjectResolver) {
+            const result = this.crossProjectResolver.resolve(qname, canonicalQName);
+            if (result !== undefined) return result;
         }
 
         return undefined;
