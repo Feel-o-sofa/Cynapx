@@ -286,12 +286,17 @@ export class TypeScriptParser implements CodeParser {
 
         if (this.typeChecker) {
             if (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node) || ts.isMethodSignature(node)) {
-                const tsSymbol = this.typeChecker.getSymbolAtLocation((node as any).name);
-                const tsType = this.typeChecker.getTypeOfSymbolAtLocation(tsSymbol!, (node as any).name);
-                const signatures = tsType.getCallSignatures();
-                if (signatures.length > 0) {
-                    signature = this.typeChecker.signatureToString(signatures[0]);
-                    returnType = this.typeChecker.typeToString(signatures[0].getReturnType());
+                const nameNode = (node as ts.NamedDeclaration).name;
+                if (nameNode) {
+                    const tsSymbol = this.typeChecker.getSymbolAtLocation(nameNode);
+                    if (tsSymbol) {
+                        const tsType = this.typeChecker.getTypeOfSymbolAtLocation(tsSymbol, nameNode);
+                        const signatures = tsType.getCallSignatures();
+                        if (signatures.length > 0) {
+                            signature = this.typeChecker.signatureToString(signatures[0]);
+                            returnType = this.typeChecker.typeToString(signatures[0].getReturnType());
+                        }
+                    }
                 }
             } else if (ts.isPropertyDeclaration(node) || ts.isPropertySignature(node) || ts.isVariableDeclaration(node)) {
                 const tsType = this.typeChecker.getTypeAtLocation(node);

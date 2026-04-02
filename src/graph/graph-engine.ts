@@ -83,6 +83,12 @@ export class GraphEngine {
         private edgeRepo: EdgeRepository
     ) { }
 
+    public invalidateCache(): void {
+        this.impactCache = new LRUCache<string, { timestamp: number, results: TraversalResult[] }>(5_000);
+        this.nodeCache = new LRUCache<number, CodeNode>(10_000);
+        this.qnameCache = new LRUCache<string, CodeNode>(10_000);
+    }
+
     public getNodeByQualifiedName(qualifiedName: string): CodeNode | null {
         if (this.qnameCache.has(qualifiedName)) {
             return this.qnameCache.get(qualifiedName)!;
@@ -470,34 +476,45 @@ export class GraphEngine {
         results: TraversalResult[],
         visited: Set<number>
     ): void {
-        const queue: { id: number, depth: number, path: TraversalPathStep[] }[] = [
-            { id: startId, depth: 0, path: [{ nodeId: startId }] }
-        ];
+        interface BfsEntry { id: number; depth: number; parentIndex: number; edge?: CodeEdge; }
+        const entries: BfsEntry[] = [];
+        const queue: number[] = []; // indices into entries
+
+        entries.push({ id: startId, depth: 0, parentIndex: -1 });
+        queue.push(0);
         visited.add(startId);
 
-        while (queue.length > 0) {
-            const { id, depth, path } = queue.shift()!;
+        const reconstructPath = (idx: number): TraversalPathStep[] => {
+            const path: TraversalPathStep[] = [];
+            while (idx >= 0) {
+                path.unshift({ nodeId: entries[idx].id, edge: entries[idx].edge });
+                idx = entries[idx].parentIndex;
+            }
+            return path;
+        };
 
-            const node = this.getNodeById(id);
+        while (queue.length > 0) {
+            const entryIdx = queue.shift()!;
+            const entry = entries[entryIdx];
+
+            const node = this.getNodeById(entry.id);
             if (node) {
-                results.push({ node, distance: depth, path });
+                results.push({ node, distance: entry.depth, path: reconstructPath(entryIdx) });
             }
 
-            if (depth >= maxDepth) continue;
+            if (entry.depth >= maxDepth) continue;
 
             const edges = direction === 'outgoing'
-                ? this.edgeRepo.getOutgoingEdges(id, edgeType)
-                : this.edgeRepo.getIncomingEdges(id, edgeType);
+                ? this.edgeRepo.getOutgoingEdges(entry.id, edgeType)
+                : this.edgeRepo.getIncomingEdges(entry.id, edgeType);
 
             for (const edge of edges) {
                 const nextId = direction === 'outgoing' ? edge.to_id : edge.from_id;
                 if (!visited.has(nextId)) {
                     visited.add(nextId);
-                    queue.push({
-                        id: nextId,
-                        depth: depth + 1,
-                        path: [...path, { nodeId: nextId, edge }]
-                    });
+                    const newIdx = entries.length;
+                    entries.push({ id: nextId, depth: entry.depth + 1, parentIndex: entryIdx, edge });
+                    queue.push(newIdx);
                 }
             }
         }
@@ -513,27 +530,42 @@ export class GraphEngine {
         results: TraversalResult[],
         visited: Set<number>
     ): void {
-        if (visited.has(currentId) || depth > maxDepth) return;
+        interface DfsEntry { id: number; depth: number; parentIndex: number; edge?: CodeEdge; }
+        const entries: DfsEntry[] = [];
+        const stack: DfsEntry[] = [{ id: currentId, depth: 0, parentIndex: -1 }];
 
-        visited.add(currentId);
-        const node = this.getNodeById(currentId);
-        // Path is already built by the caller or initial call
-        const currentPath = path.length === 0 ? [{ nodeId: currentId }] : path;
+        const reconstructPath = (idx: number): TraversalPathStep[] => {
+            const p: TraversalPathStep[] = [];
+            while (idx >= 0) {
+                p.unshift({ nodeId: entries[idx].id, edge: entries[idx].edge });
+                idx = entries[idx].parentIndex;
+            }
+            return p;
+        };
 
-        if (node) {
-            results.push({ node, distance: depth, path: currentPath });
-        }
+        while (stack.length > 0) {
+            const entry = stack.pop()!;
+            if (visited.has(entry.id) || entry.depth > maxDepth) continue;
+            visited.add(entry.id);
 
-        if (depth >= maxDepth) return;
+            const entryIndex = entries.length;
+            entries.push(entry);
 
-        const edges = direction === 'outgoing'
-            ? this.edgeRepo.getOutgoingEdges(currentId, edgeType)
-            : this.edgeRepo.getIncomingEdges(currentId, edgeType);
+            const node = this.getNodeById(entry.id);
+            if (node) {
+                results.push({ node, distance: entry.depth, path: reconstructPath(entryIndex) });
+            }
 
-        for (const edge of edges) {
-            const nextId = direction === 'outgoing' ? edge.to_id : edge.from_id;
-            const nextPath = [...currentPath, { nodeId: nextId, edge }];
-            this.dfs(nextId, depth + 1, nextPath, direction, edgeType, maxDepth, results, visited);
+            if (entry.depth < maxDepth) {
+                const edges = direction === 'outgoing'
+                    ? this.edgeRepo.getOutgoingEdges(entry.id, edgeType)
+                    : this.edgeRepo.getIncomingEdges(entry.id, edgeType);
+
+                for (const edge of edges) {
+                    const nextId = direction === 'outgoing' ? edge.to_id : edge.from_id;
+                    stack.push({ id: nextId, depth: entry.depth + 1, parentIndex: entryIndex, edge });
+                }
+            }
         }
     }
 }
