@@ -1,7 +1,7 @@
 # Cynapx v1.0.6 종합 진단서 (Phase 2 개선 계획)
 
 > **작성일**: 2026-04-02 (5차 세션)
-> **최종 업데이트**: 2026-04-02 (6차 세션) — Phase 2 구현 완료, PR #12
+> **최종 업데이트**: 2026-04-02 (7차 세션) — Phase 3 구현 완료, PR #12 업데이트
 > **진단 방법**: 전체 소스 2,941줄(핵심 11개 파일) 정밀 코드 리뷰 + 실측 검증
 > **진단 범위**: 기능 결함, 보안, 성능, 아키텍처, 유지보수성
 
@@ -15,15 +15,16 @@
 | L-3, L-4, L-5, L-6, L-9 | ✅ 완료 | #12 |
 | M-6 (cycle cache) | ✅ 완료 | #12 |
 | L-1 (수렴 종료) | ✅ 이미 구현됨 (스킵) | — |
-| **M-1** (McpServer God Object) | ⏳ 다음 세션 | Phase 3 |
-| **M-4** (CrossProjectResolver) | ⏳ 다음 세션 | Phase 3 |
-| **M-5** (EmbeddingManager 분리) | ⏳ 다음 세션 | Phase 3 |
-| L-2 (Louvain 클러스터링) | ⏳ 다음 세션 | Phase 3 |
-| L-7 (MCP session 정리) | ⏳ 다음 세션 | Phase 3 |
-| L-8 (BFS/DFS 테스트) | ⏳ 다음 세션 | Phase 3 |
-| L-10 (타입 가드 교체) | ⏳ 다음 세션 | Phase 3 |
+| **M-1** (McpServer partial split) | ✅ 부분 완료 (702→578줄) | #12 |
+| **M-4** (CrossProjectResolver) | ✅ 완료 | #12 |
+| **M-5** (NullEmbeddingProvider) | ✅ 부분 완료 | #12 |
+| L-2 (Louvain 클러스터링) | ⏳ 다음 세션 | Phase 4 |
+| L-7 (MCP session 정리) | ✅ 완료 | #12 |
+| L-8 (BFS/DFS 테스트 17개) | ✅ 완료 | #12 |
+| L-10 (타입 가드 교체) | ✅ 완료 | #12 |
+| worker-pool 순환 호출 | ✅ setImmediate 적용 | #12 |
 
-**신규 발견 (자체 분석 도구)**: `worker-pool.ts` 내 순환 호출 (`processNext → replaceWorker → spawnWorker → processNext`) — Phase 3에서 처리
+**Phase 4 잔여 항목**: M-1 tool dispatcher 추출, M-5 queue 분리, L-2 Louvain 알고리즘
 
 ---
 
