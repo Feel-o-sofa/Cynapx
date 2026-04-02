@@ -88,7 +88,8 @@ HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 
 |------|------|-----------|
 | 워크트리 인덱스 중복 | `initialize_project` 시 main+worktree 동시 인덱싱 | 세션 시작 시 `purge_index` 후 main만 초기화 |
 | `this.field.method()` call resolution 실패 | TypeScript 파서 타입 추론 한계 | E-1-B 신뢰도 레벨로 보완 |
-| `treesitterparser.calculatecc` private 메서드 | 실제 unused일 가능성 있음 | 수동 검토 후 제거 여부 결정 |
+
+> ~~`treesitterparser.calculatecc` private 메서드~~ — **Phase 2+3 (PR #12)에서 삭제 완료.**
 
 ---
 
@@ -118,4 +119,6 @@ HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 
 | 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) | ✅ |
 
 > **Phase 1 상태**: 모든 계획 항목(C/H/M/E/L) 완료.
-> **Phase 2**: 종합 진단을 통해 28개 신규 개선 항목 발굴 → [`diagnostic-v2.md`](./diagnostic-v2.md) 참조.
+> **Phase 2+3 상태** (PR #12 머지 완료, 2026-04-02): 28개 항목 중 24개 완료 (+2개 부분완료). 완전 잔여는 L-2(Louvain) 1개.
+> 부분 완료: M-1(tool-dispatcher 미추출), M-5(EmbeddingManager queue 분리 미완).
+> 상세 내역 → [`diagnostic-v2.md`](./diagnostic-v2.md) 참조.

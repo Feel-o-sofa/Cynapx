@@ -1,7 +1,7 @@
 # Cynapx v1.0.6 종합 진단서 (Phase 2 개선 계획)
 
 > **작성일**: 2026-04-02 (5차 세션)
-> **최종 업데이트**: 2026-04-02 (7차 세션) — Phase 3 구현 완료, PR #12 업데이트
+> **최종 업데이트**: 2026-04-02 (8차 세션) — PR #12 머지 완료, 요약 테이블 실측 반영
 > **진단 방법**: 전체 소스 2,941줄(핵심 11개 파일) 정밀 코드 리뷰 + 실측 검증
 > **진단 범위**: 기능 결함, 보안, 성능, 아키텍처, 유지보수성
 
@@ -11,20 +11,26 @@
 |------|------|-----|
 | C-1~C-5 (CRITICAL 전체) | ✅ 완료 | #12 |
 | H-1~H-6 (HIGH 전체) | ✅ 완료 | #12 |
-| M-2, M-3, M-7 | ✅ 완료 | #12 |
-| L-3, L-4, L-5, L-6, L-9 | ✅ 완료 | #12 |
+| M-2 (EngineContext 타입 — `as any` 완전 제거) | ✅ 완료 | #12 |
+| M-3 (구조화된 로거 `src/utils/logger.ts`) | ✅ 완료 | #12 |
+| M-4 (CrossProjectResolver 추출) | ✅ 완료 | #12 |
 | M-6 (cycle cache) | ✅ 완료 | #12 |
-| L-1 (수렴 종료) | ✅ 이미 구현됨 (스킵) | — |
-| **M-1** (McpServer partial split) | ✅ 부분 완료 (702→578줄) | #12 |
-| **M-4** (CrossProjectResolver) | ✅ 완료 | #12 |
-| **M-5** (NullEmbeddingProvider) | ✅ 부분 완료 | #12 |
-| L-2 (Louvain 클러스터링) | ⏳ 다음 세션 | Phase 4 |
-| L-7 (MCP session 정리) | ✅ 완료 | #12 |
-| L-8 (BFS/DFS 테스트 17개) | ✅ 완료 | #12 |
+| M-7 (`calculateCC` 데드코드 삭제) | ✅ 완료 | #12 |
+| L-3 (dead code 생성자 FP — `NOT LIKE '%#constructor'`) | ✅ 완료 | #12 |
+| L-4 (Windows HOME — `USERPROFILE \|\| HOME`) | ✅ 완료 | #12 |
+| L-5 (Git rename 추적 — R100 파싱) | ✅ 완료 | #12 |
+| L-6 (Prepared statement 캐싱 — EdgeRepository) | ✅ 완료 | #12 |
+| L-7 (MCP session 정리 — HealthMonitor.stop()) | ✅ 완료 | #12 |
+| L-8 (BFS/DFS 유닛 테스트 17개) | ✅ 완료 | #12 |
+| L-9 (아키텍처 태그 대소문자 — toLowerCase) | ✅ 완료 | #12 |
 | L-10 (타입 가드 교체) | ✅ 완료 | #12 |
+| L-1 (수렴 종료) | ✅ 이미 구현됨 (스킵) | — |
 | worker-pool 순환 호출 | ✅ setImmediate 적용 | #12 |
+| **M-1** (McpServer — resource/prompt/health 분리) | ⚠️ 부분 완료 (702→578줄, tool dispatcher 미추출) | #12 |
+| **M-5** (NullEmbeddingProvider + fallback 스왑) | ⚠️ 부분 완료 (queue/timeout 분리 미완) | #12 |
+| L-2 (Louvain 클러스터링) | ⏳ 잔여 | Phase 4 |
 
-**Phase 4 잔여 항목**: M-1 tool dispatcher 추출, M-5 queue 분리, L-2 Louvain 알고리즘
+**Phase 4 잔여 항목 (3개)**: M-1 tool-dispatcher 추출, M-5 EmbeddingManager queue 분리, L-2 Louvain 알고리즘
 
 ---
 
@@ -48,9 +54,9 @@
 |----------|---------|------|------|-----------|
 | 🔴 CRITICAL | 5 | **5** | 0 | 런타임 크래시, 리소스 누수, 메모리 폭발 |
 | 🟠 HIGH | 6 | **6** | 0 | OOM, 보안, 캐시 불일치, 데이터 손상 |
-| 🟡 MEDIUM | 7 | **3** | 4 | God object, 로깅 부재, 코드 중복 |
-| 🟢 LOW | 10 | **7** | 3 (+ L-1 이미 구현) | 성능, 엣지케이스, 테스트 커버리지 |
-| **합계** | **28** | **21** | **7** | |
+| 🟡 MEDIUM | 7 | **5** (+2 부분) | 0 완전잔여 (M-1·M-5 부분완료) | tool dispatcher 미추출, EmbeddingManager queue 미분리 |
+| 🟢 LOW | 10 | **8** | 1 (+ L-1 이미 구현) | Louvain 클러스터링 (L-2) |
+| **합계** | **28** | **24** (+2 부분) | **1 완전잔여** | |
 
 ---
 
