@@ -14,6 +14,9 @@ import { PolicyDiscoverer } from '../graph/policy-discoverer';
 import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
 import { getDatabasePath, getProjectHash } from '../utils/paths';
+import { GitService } from '../indexer/git-service';
+import { UpdatePipeline } from '../indexer/update-pipeline';
+import { SecurityProvider } from '../utils/security';
 
 export interface EngineContext {
     projectPath: string;
@@ -26,6 +29,9 @@ export interface EngineContext {
     refactorEngine?: RefactoringEngine;
     optEngine?: OptimizationEngine;
     policyDiscoverer?: PolicyDiscoverer;
+    gitService?: GitService;
+    updatePipeline?: UpdatePipeline;
+    securityProvider?: SecurityProvider;
 }
 
 /**

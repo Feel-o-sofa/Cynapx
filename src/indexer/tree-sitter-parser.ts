@@ -175,18 +175,4 @@ export class TreeSitterParser implements CodeParser {
         return { nodes, edges };
     }
 
-    private calculateCC(node: Parser.SyntaxNode, provider: LanguageProvider): number {
-        let complexity = 1;
-        const walk = (n: Parser.SyntaxNode) => {
-            if (provider.getDecisionPoints().includes(n.type)) {
-                if (n.type === 'binary_expression') {
-                    const text = n.text;
-                    if (text.includes('&&') || text.includes('||') || text.includes('and') || text.includes('or')) complexity++;
-                } else complexity++;
-            }
-            for (let i = 0; i < n.childCount; i++) walk(n.child(i)!);
-        };
-        walk(node);
-        return complexity;
-    }
 }

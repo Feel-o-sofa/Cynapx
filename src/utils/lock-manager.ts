@@ -5,6 +5,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { getLocksDir, getProjectHash } from './paths';
 
 export interface LockInfo {
@@ -12,6 +13,7 @@ export interface LockInfo {
     ipcPort: number;
     lastHeartbeat: string;
     status: 'active' | 'shutting-down';
+    nonce: string;
 }
 
 /**
@@ -45,19 +47,25 @@ export class LockManager {
                 process.kill(lock.pid, 0);
                 return lock;
             } catch (e: any) {
-                // If it's a stale lock, perform a clean-up
+                // PID is dead — but re-read to guard against TOCTOU
                 console.error(`[*] Stale lock detected (PID ${lock.pid} is dead). Cleaning up residual files...`);
-                
+
+                try {
+                    const recheck = JSON.parse(fs.readFileSync(this.lockPath, 'utf8')) as LockInfo;
+                    if (recheck.nonce !== lock.nonce) {
+                        // Another process overwrote the lock — it's no longer stale
+                        return recheck;
+                    }
+                } catch {
+                    // File was already deleted or is corrupted — proceed with cleanup
+                }
+
                 // 1. Remove the lock file itself
                 if (fs.existsSync(this.lockPath)) fs.unlinkSync(this.lockPath);
 
                 // 2. Clear residual DB journal files that might keep the DB locked
-                const dbPath = this.lockPath.replace('.lock', '.db').replace('locks' + path.sep, '');
-                // The lock is in ~/.cynapx/locks/<hash>.lock, DB is in ~/.cynapx/<hash>.db
-                const dbBase = this.lockPath.replace(path.join('locks', path.basename(this.lockPath)), path.basename(this.lockPath, '.lock'));
-                const dir = path.dirname(path.dirname(this.lockPath));
-                const dbFile = path.join(dir, `${path.basename(this.lockPath, '.lock')}.db`);
-                
+                const dbFile = path.join(path.dirname(path.dirname(this.lockPath)), `${path.basename(this.lockPath, '.lock')}.db`);
+
                 ['', '-wal', '-shm'].forEach(suffix => {
                     const file = `${dbFile}${suffix}`;
                     if (fs.existsSync(file)) {
@@ -81,7 +89,8 @@ export class LockManager {
             pid: process.pid,
             ipcPort,
             lastHeartbeat: new Date().toISOString(),
-            status: 'active'
+            status: 'active',
+            nonce: crypto.randomUUID()
         };
         fs.writeFileSync(this.lockPath, JSON.stringify(this.currentLock, null, 2), 'utf8');
     }

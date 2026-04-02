@@ -34,7 +34,7 @@ export class LanguageRegistry {
 
     private constructor() {
         // Automatically scan ~/.cynapx/plugins if it exists
-        const userPluginDir = path.join(process.env.HOME || process.env.USERPROFILE || '', '.cynapx', 'plugins');
+        const userPluginDir = path.join(process.env.USERPROFILE || process.env.HOME || '', '.cynapx', 'plugins');
         if (fs.existsSync(userPluginDir)) {
             this.pluginDirs.push(userPluginDir);
         }

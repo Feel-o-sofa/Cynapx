@@ -61,17 +61,24 @@ export class GitService {
         try {
             const raw = await this.git.diff(['--name-status', `${from}..${to}`]);
             const lines = raw.split('\n').filter(line => line.trim().length > 0);
-            return lines.map(line => {
+            return lines.flatMap(line => {
                 const parts = line.split(/\s+/);
                 const statusChar = parts[0][0]; // A, M, D, R, etc.
-                const file = parts[parts.length - 1]; // Handles renames if necessary, but keep it simple
-                
+
+                if (statusChar === 'R' && parts.length >= 3) {
+                    // Rename: return DELETE for old path + ADD for new path
+                    return [
+                        { file: parts[1], status: 'DELETE' },
+                        { file: parts[2], status: 'ADD' }
+                    ];
+                }
+
+                const file = parts[parts.length - 1];
                 let event: string = 'MODIFY';
                 if (statusChar === 'A') event = 'ADD';
                 else if (statusChar === 'D') event = 'DELETE';
-                else if (statusChar === 'M' || statusChar === 'R') event = 'MODIFY';
 
-                return { file, status: event };
+                return [{ file, status: event }];
             });
         } catch (error) {
             console.error(`Failed to get diff between ${from} and ${to}:`, error);

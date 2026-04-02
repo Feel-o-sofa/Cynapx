@@ -110,12 +110,13 @@ async function bootstrap() {
                 ctx.metadataRepo!,
                 gitService,
                 workerPool,
-                ctx.projectPath
+                ctx.projectPath,
+                ctx.graphEngine!
             );
 
-            (ctx as any).gitService = gitService;
-            (ctx as any).updatePipeline = updatePipeline;
-            (ctx as any).securityProvider = new SecurityProvider(ctx.projectPath);
+            ctx.gitService = gitService;
+            ctx.updatePipeline = updatePipeline;
+            ctx.securityProvider = new SecurityProvider(ctx.projectPath);
 
             if (!options.noIndex) {
                 const head = await gitService.getCurrentHead();

@@ -4,6 +4,7 @@
  * See LICENSE in the project root for license information.
  */
 import * as path from 'path';
+import * as fs from 'fs';
 import { CynapxError, CynapxErrorCode } from '../types';
 
 /**
@@ -22,11 +23,24 @@ export class SecurityProvider {
      * Throws a CynapxError if access is denied.
      */
     public validatePath(targetPath: string): void {
-        const absoluteTargetPath = path.resolve(targetPath);
-        const normalizedProjectRoot = this.projectRoot.toLowerCase();
-        const normalizedTargetPath = absoluteTargetPath.toLowerCase();
+        const resolvedTarget = path.resolve(targetPath);
 
-        if (!normalizedTargetPath.startsWith(normalizedProjectRoot)) {
+        // Resolve symlinks when path exists; fall back to path.resolve for new files
+        let realTarget: string;
+        try {
+            realTarget = fs.realpathSync(resolvedTarget);
+        } catch {
+            realTarget = resolvedTarget;
+        }
+
+        let realRoot: string;
+        try {
+            realRoot = fs.realpathSync(this.projectRoot);
+        } catch {
+            realRoot = this.projectRoot;
+        }
+
+        if (!realTarget.toLowerCase().startsWith(realRoot.toLowerCase())) {
             throw new CynapxError(
                 CynapxErrorCode.PATH_TRAVERSAL_DENIED,
                 `Access to file outside project directory denied: ${targetPath}`

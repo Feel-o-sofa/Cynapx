@@ -8,12 +8,8 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import {
     CallToolRequestSchema,
     ErrorCode,
-    ListResourcesRequestSchema,
-    ReadResourceRequestSchema,
     ListToolsRequestSchema,
-    McpError,
-    ListPromptsRequestSchema,
-    GetPromptRequestSchema
+    McpError
 } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import * as path from 'path';
@@ -26,6 +22,9 @@ import { ConsistencyChecker } from '../indexer/consistency-checker';
 import { addToRegistry, getDatabasePath, readRegistry, ANCHOR_FILE } from '../utils/paths';
 import { CynapxErrorCode } from '../types';
 import { SecurityProvider } from '../utils/security';
+import { registerResourceHandlers } from './resource-provider';
+import { registerPromptHandlers } from './prompt-provider';
+import { HealthMonitor } from './health-monitor';
 
 /**
  * [Phase 14] Zod Schemas for Strict Protocol Reinforcement
@@ -70,9 +69,9 @@ export class McpServer {
     private isTerminal: boolean = false;
     private terminalCoordinator?: IpcCoordinator;
     
-    private isCheckingConsistency: boolean = false;
     private onInitializeCallback?: (newPath: string) => Promise<void>;
     private onPurgeCallback?: () => Promise<void>;
+    private healthMonitor: HealthMonitor = new HealthMonitor();
 
     constructor(workspaceManager?: WorkspaceManager) {
         let version = "1.0.5";
@@ -133,26 +132,7 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
 
     private startHealthMonitor() {
         if (this.isTerminal) return;
-        setInterval(async () => {
-            if (this.isCheckingConsistency) return;
-            try {
-                const ctx = this.workspaceManager.getActiveContext();
-                if (!ctx) return;
-                
-                const stats = ctx.metadataRepo!.getLedgerStats();
-                const isConsistent = 
-                    stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
-                    stats.metadata.total_calls_count === stats.actual.sum_fan_out;
-
-                if (!isConsistent) {
-                    console.error("[HealthMonitor] Ledger inconsistency detected. Triggering auto-repair...");
-                    this.isCheckingConsistency = true;
-                    const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, (ctx as any).gitService, (ctx as any).updatePipeline, ctx.projectPath);
-                    await checker.validate(true, false);
-                    this.isCheckingConsistency = false;
-                }
-            } catch (err) {}
-        }, 5 * 60 * 1000);
+        this.healthMonitor.start(this.workspaceManager);
     }
 
     private async waitUntilReady() {
@@ -182,6 +162,7 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
     }
 
     public async close() {
+        this.healthMonitor.stop();
         await this.sdkServer.close();
     }
 
@@ -193,51 +174,9 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
      * Unified handler registration split into logical units
      */
     public registerHandlers() {
-        this.registerResources();
+        registerResourceHandlers(this.sdkServer, this.waitUntilReady.bind(this), this.getContext.bind(this));
         this.registerTools();
-        this.registerPrompts();
-    }
-
-    private registerResources() {
-        this.sdkServer.setRequestHandler(ListResourcesRequestSchema, async () => ({
-            resources: [
-                { uri: "graph://ledger", name: "Knowledge Graph Ledger", mimeType: "application/json", description: "Global call ledger and consistency metrics" },
-                { uri: "graph://summary", name: "Graph Summary", mimeType: "application/json", description: "Summary of nodes, edges and files" },
-                { uri: "graph://hotspots", name: "Graph Hotspots", mimeType: "application/json", description: "Technical debt hotspots (Complexity & Coupling)" },
-                { uri: "graph://clusters", name: "Logical Clusters", mimeType: "application/json", description: "Semantic groupings into logical modules" }
-            ]
-        }));
-
-        this.sdkServer.setRequestHandler(ReadResourceRequestSchema, async (request) => {
-            await this.waitUntilReady();
-            const ctx = this.getContext();
-            const db = ctx.dbManager!.getDb();
-            const uri = request.params.uri;
-
-            if (uri === "graph://ledger") {
-                return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(ctx.metadataRepo!.getLedgerStats(), null, 2) }] };
-            }
-            if (uri === "graph://summary") {
-                const nodeCount = (db.prepare("SELECT COUNT(*) as count FROM nodes").get() as any).count;
-                const edgeCount = (db.prepare("SELECT COUNT(*) as count FROM edges").get() as any).count;
-                const fileCount = (db.prepare("SELECT COUNT(DISTINCT file_path) as count FROM nodes").get() as any).count;
-                return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ nodes: nodeCount, edges: edgeCount, files: fileCount, project: ctx.projectPath, last_updated: new Date().toISOString() }, null, 2) }] };
-            }
-            if (uri === "graph://hotspots") {
-                const topComplexity = db.prepare("SELECT qualified_name, symbol_type, cyclomatic FROM nodes ORDER BY cyclomatic DESC LIMIT 10").all();
-                const topFanIn = db.prepare("SELECT qualified_name, symbol_type, fan_in FROM nodes ORDER BY fan_in DESC LIMIT 10").all();
-                return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ by_complexity: topComplexity, by_fan_in: topFanIn, last_updated: new Date().toISOString() }, null, 2) }] };
-            }
-            if (uri === "graph://clusters") {
-                const clusters = db.prepare("SELECT * FROM logical_clusters").all();
-                const result = clusters.map((c: any) => {
-                    const count = (db.prepare("SELECT COUNT(*) as count FROM nodes WHERE cluster_id = ?").get(c.id) as any).count;
-                    return { ...c, node_count: count };
-                });
-                return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(result, null, 2) }] };
-            }
-            throw new McpError(ErrorCode.InvalidRequest, `Unknown resource: ${uri}`);
-        });
+        registerPromptHandlers(this.sdkServer, this.waitUntilReady.bind(this));
     }
 
     private registerTools() {
@@ -416,69 +355,6 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
         });
     }
 
-    private registerPrompts() {
-        this.sdkServer.setRequestHandler(ListPromptsRequestSchema, async () => ({
-            prompts: [
-                {
-                    name: "explain-impact", 
-                    description: "Explain ripple effect of changing a symbol", 
-                    arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
-                },
-                {
-                    name: "check-health", 
-                    description: "Check graph health and consistency"
-                },
-                {
-                    name: "refactor-safety", 
-                    description: "Perform a comprehensive safety check before refactoring a symbol", 
-                    arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
-                }
-            ]
-        }));
-
-        this.sdkServer.setRequestHandler(GetPromptRequestSchema, async (request) => {
-            await this.waitUntilReady();
-            const name = request.params.name;
-            const args = request.params.arguments || {};
-
-            if (name === "explain-impact") {
-                return {
-                    messages: [{
-                        role: "user", 
-                        content: {
-                            type: "text", 
-                            text: `Please analyze the impact of changing the symbol '${args.qualified_name}'. Use the 'analyze_impact' tool to find incoming dependencies and explain what might break.`
-                        } 
-                    }]
-                };
-            }
-            if (name === "check-health") {
-                return {
-                    messages: [{
-                        role: "user", 
-                        content: {
-                            type: "text", 
-                            text: "Please run a consistency check on the knowledge graph using the 'check_consistency' tool and report any issues found."
-                        }
-                    }]
-                };
-            }
-            if (name === "refactor-safety") {
-                return {
-                    messages: [{
-                        role: "user", 
-                        content: {
-                            type: "text", 
-                            text: `I am planning to refactor the symbol '${args.qualified_name}'. 
-Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the current index integrity.\n2. Use 'analyze_impact' with 'qualified_name: ${args.qualified_name}' to identify all incoming dependencies.\n3. Use 'get_symbol_details' to check the complexity and metrics of '${args.qualified_name}'.\n4. Provide a risk assessment summary: (Low/Medium/High risk) based on the number of dependencies and complexity.`
-                        }
-                    }]
-                };
-            }
-            throw new McpError(ErrorCode.InvalidRequest, `Unknown prompt: ${name}`);
-        });
-    }
-
     public async executeTool(name: string, args: any): Promise<any> {
         if (this.isTerminal && this.terminalCoordinator) return this.terminalCoordinator.forwardExecuteTool(name, args);
         await this.waitUntilReady();
@@ -539,7 +415,7 @@ Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the curr
 
                 if (args.include_source !== false) {
                     try {
-                        const security = (ctx as any).securityProvider as SecurityProvider;
+                        const security = ctx.securityProvider;
                         if (security) security.validatePath(node.file_path);
                         const content = fs.readFileSync(node.file_path, 'utf8').split('\n');
                         const snippet = content.slice(node.start_line - 1, node.end_line);
@@ -651,7 +527,7 @@ Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the curr
             }
             case 'check_consistency': {
                 const ctx = this.getContext();
-                const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, (ctx as any).gitService, (ctx as any).updatePipeline, ctx.projectPath);
+                const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, ctx.gitService!, ctx.updatePipeline!, ctx.projectPath);
                 const results = await checker.validate(args.repair, args.force);
                 return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
             }
@@ -667,12 +543,12 @@ Please follow this safety protocol:\n1. Read 'graph://ledger' to verify the curr
                 return { content: [{ type: "text", text: "Project index purged successfully. Server in PENDING mode." }] };
             }
             case 're_tag_project': {
-                const pipeline = (this.getContext() as any).updatePipeline;
+                const pipeline = this.getContext().updatePipeline!;
                 await pipeline.reTagAllNodes();
                 return { content: [{ type: "text", text: "Successfully re-tagged all nodes." }] };
             }
             case 'backfill_history': {
-                const pipeline = (this.getContext() as any).updatePipeline;
+                const pipeline = this.getContext().updatePipeline!;
                 await pipeline.mapHistoryToProject();
                 return { content: [{ type: "text", text: "Successfully backfilled Git history." }] };
             }

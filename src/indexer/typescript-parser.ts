@@ -65,8 +65,8 @@ export class TypeScriptParser implements CodeParser {
 
         const visit = (node: ts.Node) => {
             // 2. Define Symbols (Node Extraction)
-            if ((ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) && (node as any).name) {
-                const symbol = this.typeChecker?.getSymbolAtLocation((node as any).name);
+            if ((ts.isClassDeclaration(node) || ts.isInterfaceDeclaration(node) || ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node)) && (node as ts.NamedDeclaration).name) {
+                const symbol = this.typeChecker?.getSymbolAtLocation((node as ts.NamedDeclaration).name!);
                 if (symbol) {
                     const qname = toCanonical(this.getName(symbol));
                     const type = this.getSymbolType(node);
@@ -282,16 +282,21 @@ export class TypeScriptParser implements CodeParser {
         let signature: string | undefined;
         let returnType: string | undefined;
         let fieldType: string | undefined;
-        const modifiers = ts.getModifiers(node as any)?.map(m => m.getText());
+        const modifiers = ts.canHaveModifiers(node) ? ts.getModifiers(node)?.map(m => m.getText()) : undefined;
 
         if (this.typeChecker) {
             if (ts.isMethodDeclaration(node) || ts.isFunctionDeclaration(node) || ts.isMethodSignature(node)) {
-                const tsSymbol = this.typeChecker.getSymbolAtLocation((node as any).name);
-                const tsType = this.typeChecker.getTypeOfSymbolAtLocation(tsSymbol!, (node as any).name);
-                const signatures = tsType.getCallSignatures();
-                if (signatures.length > 0) {
-                    signature = this.typeChecker.signatureToString(signatures[0]);
-                    returnType = this.typeChecker.typeToString(signatures[0].getReturnType());
+                const nameNode = (node as ts.NamedDeclaration).name;
+                if (nameNode) {
+                    const tsSymbol = this.typeChecker.getSymbolAtLocation(nameNode);
+                    if (tsSymbol) {
+                        const tsType = this.typeChecker.getTypeOfSymbolAtLocation(tsSymbol, nameNode);
+                        const signatures = tsType.getCallSignatures();
+                        if (signatures.length > 0) {
+                            signature = this.typeChecker.signatureToString(signatures[0]);
+                            returnType = this.typeChecker.typeToString(signatures[0].getReturnType());
+                        }
+                    }
                 }
             } else if (ts.isPropertyDeclaration(node) || ts.isPropertySignature(node) || ts.isVariableDeclaration(node)) {
                 const tsType = this.typeChecker.getTypeAtLocation(node);
@@ -320,7 +325,7 @@ export class TypeScriptParser implements CodeParser {
     }
 
     private getVisibility(node: ts.Node): Visibility {
-        const modifiers = ts.getModifiers(node as any);
+        const modifiers = ts.canHaveModifiers(node) ? ts.getModifiers(node) : undefined;
         if (modifiers) {
             if (modifiers.some(m => m.kind === ts.SyntaxKind.PrivateKeyword)) return 'private';
             if (modifiers.some(m => m.kind === ts.SyntaxKind.ProtectedKeyword)) return 'protected';

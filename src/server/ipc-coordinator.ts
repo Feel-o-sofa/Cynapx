@@ -141,12 +141,26 @@ export class IpcCoordinator extends EventEmitter {
         };
 
         return new Promise((resolve, reject) => {
-            this.pendingRequests.set(id, { resolve, reject });
+            const timeout = setTimeout(() => {
+                this.pendingRequests.delete(id);
+                reject(new Error(`IPC request '${name}' timed out after 30s`));
+            }, 30_000);
+
+            this.pendingRequests.set(id, {
+                resolve: (v: any) => { clearTimeout(timeout); resolve(v); },
+                reject: (e: any) => { clearTimeout(timeout); reject(e); }
+            });
             this.client!.write(JSON.stringify(req) + '\n');
         });
     }
 
     public close() {
+        // Reject all pending requests
+        for (const [id, pending] of this.pendingRequests) {
+            pending.reject(new Error('IPC connection closed'));
+        }
+        this.pendingRequests.clear();
+
         if (this.server) {
             this.server.close();
             this.server = null;
