@@ -27,6 +27,8 @@ export interface ArchitectureViolation {
  * ArchitectureEngine detects violations of architectural policies.
  */
 export class ArchitectureEngine {
+    private cycleCache: { timestamp: number; cycles: number[][] } | null = null;
+
     private policies: ArchitecturePolicy[] = [
         {
             id: 'layer-hierarchy',
@@ -142,6 +144,11 @@ export class ArchitectureEngine {
     }
 
     private detectCycles(): number[][] {
+        // Return cached result if fresh (< 60 seconds)
+        if (this.cycleCache && (Date.now() - this.cycleCache.timestamp < 60_000)) {
+            return this.cycleCache.cycles;
+        }
+
         const cycles: number[][] = [];
         const visited = new Set<number>();
         const recStack = new Set<number>();
@@ -177,11 +184,14 @@ export class ArchitectureEngine {
             }
         }
 
+        this.cycleCache = { timestamp: Date.now(), cycles };
         return cycles;
     }
 
     private hasTag(node: CodeNode, tag: string): boolean {
-        return !!node.tags && node.tags.includes(tag);
+        if (!node.tags) return false;
+        const lowerTag = tag.toLowerCase();
+        return node.tags.some(t => t.toLowerCase() === lowerTag);
     }
 
     /**

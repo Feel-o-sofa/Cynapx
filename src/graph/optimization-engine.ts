@@ -32,6 +32,7 @@ export class OptimizationEngine {
         const COMMON_FILTER = `
             WHERE fan_in = 0
             AND symbol_type NOT IN ('file', 'test', 'package')
+            AND qualified_name NOT LIKE '%#constructor'
             AND (tags IS NULL OR tags NOT LIKE '%trait:entrypoint%')
             AND (tags IS NULL OR tags NOT LIKE '%trait:abstract%')
             AND NOT EXISTS (
