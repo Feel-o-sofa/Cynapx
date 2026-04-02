@@ -136,7 +136,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
 
         // Wait for readiness with timeout
         let waitCount = 0;
-        const maxWait = 3000; // 300 seconds (5m)
+        const maxWait = 300; // 30 seconds
         while (!this.ready) {
             if (waitCount > 0 && waitCount % 50 === 0) {
                 console.error(`[Embedding] Still waiting for ML Sidecar... (${waitCount/10}s)`);

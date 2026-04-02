@@ -33,8 +33,12 @@ export class DatabaseManager implements Disposable {
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('foreign_keys = ON');
         this.db.pragma('synchronous = NORMAL');
-        this.db.pragma('cache_size = -2000000'); // ~2GB Cache
-        this.db.pragma('mmap_size = 30000000000'); // Up to 30GB Memory-mapped I/O
+        // Dynamic cache/mmap sizing based on DB file size
+        const dbSizeMB = fs.existsSync(dbPath) ? fs.statSync(dbPath).size / (1024 * 1024) : 0;
+        const cacheSizeKB = Math.min(Math.max(Math.ceil(dbSizeMB * 2), 64), 512) * 1024; // 64MB ~ 512MB
+        const mmapSize = Math.min(Math.max(Math.ceil(dbSizeMB * 4), 64), 2048) * 1024 * 1024; // 64MB ~ 2GB
+        this.db.pragma(`cache_size = -${cacheSizeKB}`); // negative = KB
+        this.db.pragma(`mmap_size = ${mmapSize}`);
         this.db.pragma('temp_store = MEMORY');
         this.db.pragma('page_size = 4096');
 

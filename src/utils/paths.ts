@@ -79,7 +79,10 @@ export function addToRegistry(projectPath: string): void {
             last_accessed_at: now 
         });
     }
-    fs.writeFileSync(getRegistryPath(), JSON.stringify(registry, null, 2), 'utf8');
+    const registryPath = getRegistryPath();
+    const tmpPath = registryPath + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(registry, null, 2), 'utf8');
+    fs.renameSync(tmpPath, registryPath);
 }
 
 export function removeFromRegistry(projectPath: string): void {
@@ -87,7 +90,10 @@ export function removeFromRegistry(projectPath: string): void {
     let registry = readRegistry();
     const newRegistry = registry.filter(p => p.path.toLowerCase() !== absolutePath.toLowerCase());
     if (registry.length !== newRegistry.length) {
-        fs.writeFileSync(getRegistryPath(), JSON.stringify(newRegistry, null, 2), 'utf8');
+        const registryPath = getRegistryPath();
+        const tmpPath = registryPath + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(newRegistry, null, 2), 'utf8');
+        fs.renameSync(tmpPath, registryPath);
     }
 }
 
