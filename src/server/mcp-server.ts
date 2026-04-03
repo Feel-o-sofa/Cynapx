@@ -91,6 +91,10 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
             this.resolveReady();
             this.isInitialized = true;
             this.startHealthMonitor();
+        } else if (!ready) {
+            this.isInitialized = false;
+            // Reset promise so waitUntilReady() blocks again after purge
+            this.readyPromise = new Promise((resolve) => { this.resolveReady = resolve; });
         }
     }
 
@@ -162,7 +166,13 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
             onPurge: () => this.onPurgeCallback ? this.onPurgeCallback() : Promise.resolve(),
             markReady: this.markReady.bind(this),
             getIsInitialized: () => this.isInitialized,
-            setIsInitialized: (value: boolean) => { this.isInitialized = value; },
+            setIsInitialized: (value: boolean) => {
+                if (!value) {
+                    this.markReady(false);
+                } else {
+                    this.isInitialized = value;
+                }
+            },
         };
     }
 }

@@ -275,6 +275,10 @@ export class EmbeddingManager {
 
             try {
                 const vectors = await this.enqueuedBatch(snippets);
+                if (!vectors) {
+                    console.error('[EmbeddingManager] Batch returned null — skipping (fallback mode)');
+                    continue;
+                }
 
                 this.db.transaction(() => {
                     vectors.forEach((vector, idx) => {

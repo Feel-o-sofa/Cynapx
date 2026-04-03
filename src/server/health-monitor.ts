@@ -32,14 +32,17 @@ export class HealthMonitor {
                 if (!isConsistent) {
                     console.error("[HealthMonitor] Ledger inconsistency detected. Triggering auto-repair...");
                     this.isChecking = true;
-                    const checker = new ConsistencyChecker(
-                        ctx.graphEngine!.nodeRepo,
-                        ctx.gitService!,
-                        ctx.updatePipeline!,
-                        ctx.projectPath
-                    );
-                    await checker.validate(true, false);
-                    this.isChecking = false;
+                    try {
+                        const checker = new ConsistencyChecker(
+                            ctx.graphEngine!.nodeRepo,
+                            ctx.gitService!,
+                            ctx.updatePipeline!,
+                            ctx.projectPath
+                        );
+                        await checker.validate(true, false);
+                    } finally {
+                        this.isChecking = false;
+                    }
                 }
             } catch { }
         }, 5 * 60 * 1000);
