@@ -12,6 +12,10 @@ import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
 export class NodeRepository {
     constructor(public db: Database) { }
 
+    public getDb(): Database {
+        return this.db;
+    }
+
     public createNode(node: CodeNode): number {
         const stmt = this.db.prepare(`
       INSERT OR REPLACE INTO nodes (
@@ -70,6 +74,13 @@ export class NodeRepository {
         const stmt = this.db.prepare('SELECT * FROM nodes WHERE qualified_name = ?');
         const row = stmt.get(qualifiedName) as any;
         return row ? this.mapRowToNode(row) : null;
+    }
+
+    public getNodeIdsByFilePath(filePath: string): number[] {
+        const rows = this.db.prepare(
+            'SELECT id FROM nodes WHERE file_path = ?'
+        ).all(filePath) as { id: number }[];
+        return rows.map(r => r.id);
     }
 
     public deleteNodesByFilePath(filePath: string): void {
