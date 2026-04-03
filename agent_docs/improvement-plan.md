@@ -1,8 +1,7 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-01 (5차 세션, 최종)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-03 (10차 세션)
 > **대상 버전**: v1.0.6
-> **총 소스 파일**: 53개 TypeScript (+1 openapi.ts), 1개 Rust (napi-rs), 12개 Tree-sitter .scm 쿼리
 
 ---
 
@@ -10,124 +9,180 @@
 
 ```
 src/
-├── db/          (5 files)  — SQLite 데이터베이스 추상화 계층
-├── indexer/     (14 files) — Tree-sitter 파싱 및 인덱싱 파이프라인
-├── graph/       (6 files)  — 그래프 알고리즘, 아키텍처 분석
-├── server/      (5 files)  — MCP, REST API, IPC, REPL 서버
-├── utils/       (7 files)  — 보안, 잠금, 인증서, 경로 관리
-├── watcher/     (1 file)   — 파일 변경 감시
-├── types/       (1 file)   — 핵심 타입 정의
-└── bootstrap.ts            — CLI 진입점 및 서비스 오케스트레이션
+├── db/          — SQLite 데이터베이스 추상화 계층
+├── indexer/     — Tree-sitter 파싱 + 인덱싱 파이프라인 + 임베딩
+├── graph/       — 그래프 알고리즘, 클러스터링, 아키텍처 분석
+├── server/      — MCP, REST API, IPC, REPL 서버, 도구 디스패처
+├── utils/       — 보안, 잠금, 인증서, 경로 관리
+├── watcher/     — 파일 변경 감시
+├── types/       — 핵심 타입 정의
+└── bootstrap.ts — CLI 진입점 및 서비스 오케스트레이션
 ```
 
----
-
-## 2. 완료된 항목
-
-### 2.1 보안 (CRITICAL) — 모두 완료
-
-| 항목 | 내용 | 완료 시점 |
-|------|------|-----------|
-| C-1 SQL Injection | `handleHotspots()` whitelist + parameterized query | 1차 세션 |
-| C-2 인증 토큰 | `crypto.randomBytes(32)` 자동 생성, `--no-auth` 플래그 | 1차 세션 |
-| C-3 테스트 인프라 | Vitest 설치, 58개 테스트 (`tests/` 4개 파일) | 1차 세션 |
-
-### 2.2 안정성/보안 (HIGH) — 모두 완료
-
-| 항목 | 내용 | 완료 시점 |
-|------|------|-----------|
-| H-1 Rate Limiting | `express-rate-limit` 100/min 전역, 분석 엔드포인트 10/min; `--bind` 옵션 | 3차 세션 |
-| H-2 Python Sidecar | 요청 큐잉, 3회 자동 재시작 (지수 백오프), FTS5 fallback | 3차 세션 |
-| H-3 GraphEngine LRU | `nodeCache`/`qnameCache` max 10,000; `impactCache` max 5,000 | 3차 세션 |
-| H-4 CI/CD | `ci.yml` (Node 20/22 matrix) + `release.yml` (npm publish on v\*) | 3차 세션 |
-| H-5 IPC Request ID | `Math.random()` → `crypto.randomUUID()` | 2차 세션 |
-
-### 2.3 개선 (MEDIUM) — 모두 완료
-
-| 항목 | 내용 | 완료 시점 |
-|------|------|-----------|
-| M-1 Worker Pool | 30초 타임아웃, worker 자동 재시작, 큐 백프레셔 (max 100) | 3차 세션 |
-| M-2 버전 관리 | `bootstrap.ts`에서 `package.json` version 동적 로드 | 2차 세션 |
-| M-3 Cross-Platform | CI matrix에 win-x64/linux-x64/darwin-x64/darwin-arm64 빌드 추가 | 3차 세션 |
-| M-4 Zod 입력 검증 | 모든 REST 엔드포인트에 Zod 스키마 8개 적용, 400 에러 표준화 | 3차 세션 |
-| M-5 Lock Manager | `'locks\\'` 하드코딩 → `path.join()` / `path.sep` | 2차 세션 |
-
-### 2.4 엔진 정확도 (ENGINE) — 대부분 완료
-
-| 항목 | 내용 | 완료 시점 |
-|------|------|-----------|
-| E-2 CC 계산 일관성 | `??` 연산자를 native path + JS AST path 모두에 추가 | 2차 세션 |
-| E-3 purge_index EBUSY | `dbManager?.dispose()` 후 파일 삭제; `_closed` 플래그로 이중 close 방지 | 2차 세션 |
-| E-4 remediation 크래시 | `violation.source?.tags`, `violation.target?.tags` optional chaining | 2차 세션 |
-| E-5 Worktree 중복 인덱싱 | `toCanonical()` 기반 경로 비교로 교체 | 2차 세션 |
-| E-6 미발행 엣지 타입 | TypeScript 파서: `contains`(class→method), `overrides`(method→parent) 엣지 추가 | 2차 세션 |
-| E-1 (부분) fan_in 재계산 | `update-pipeline.ts`에 Pass 3 추가: 엣지 기반 fan_in/fan_out 전체 재계산 | 3차 세션 |
-| E-1 (부분) NOT EXISTS 수정 | `optimization-engine.ts`: `defines`→`contains`, `inherits` 케이스 추가 | 3차 세션 |
-
-### 2.5 기타
-
-| 항목 | 내용 | 완료 시점 |
-|------|------|-----------|
-| CI build:copy 수정 | PowerShell → Node.js `fs.cpSync` (cross-platform) | 3차 세션 |
-| `express.json` size limit | `limit: '1mb'` 추가 | 1차 세션 |
+**테스트 커버리지**: 117개 (9개 파일) — Phase 5 완료 기준
 
 ---
 
-## 3. 미완료 항목
+## 2. Phase별 완료 현황
 
-### 3.1 E-1-B: Dead Code 신뢰도 레벨 분리 ✅ 완료 (4차 세션, PR #5)
+### Phase 1 — 초기 안정화 (1~5차 세션, PR #1~#8)
 
-HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 유지.
-실측: HIGH 11개, MEDIUM 0개, LOW 265개 (총 276개).
+모두 완료. 상세 내역은 하위 표 참조.
+
+#### 보안 (CRITICAL)
+
+| ID | 내용 | PR |
+|----|------|----|
+| C-1 | `handleHotspots()` whitelist + parameterized query (SQL injection) | #2 |
+| C-2 | `crypto.randomBytes(32)` 인증 토큰 자동 생성 | #2 |
+| C-3 | Vitest 설치, 58개 초기 테스트 구축 | #2 |
+
+#### 안정성/보안 (HIGH)
+
+| ID | 내용 | PR |
+|----|------|----|
+| H-1 | `express-rate-limit` 전역 100/min, 분석 엔드포인트 10/min; `--bind` 옵션 | #4 |
+| H-2 | Python Sidecar 요청 큐잉 + 3회 자동 재시작(지수 백오프) + FTS5 fallback | #4 |
+| H-3 | GraphEngine `nodeCache`/`qnameCache` LRU max 10,000; `impactCache` max 5,000 | #4 |
+| H-4 | `ci.yml` (Node 20/22 matrix) + `release.yml` (npm publish on v\*) | #4 |
+| H-5 | IPC Request ID: `Math.random()` → `crypto.randomUUID()` | #3 |
+
+#### 개선 (MEDIUM)
+
+| ID | 내용 | PR |
+|----|------|----|
+| M-1 | Worker Pool 30초 타임아웃 + 자동 재시작 + 큐 백프레셔 (max 100) | #4 |
+| M-2 | `bootstrap.ts`에서 `package.json` version 동적 로드 | #3 |
+| M-3 | CI matrix win-x64/linux-x64/darwin-x64/darwin-arm64 빌드 추가 | #4 |
+| M-4 | 모든 REST 엔드포인트 Zod 스키마 8개 적용, 400 에러 표준화 | #4 |
+| M-5 | Lock Manager `'locks\\'` 하드코딩 → `path.join()` / `path.sep` | #3 |
+
+#### 엔진 정확도 (ENGINE)
+
+| ID | 내용 | PR |
+|----|------|----|
+| E-1-B | `find_dead_code` HIGH/MEDIUM/LOW 3단계 신뢰도 분리 | #5 |
+| E-2 | CC 계산 `??` 연산자 native + JS 양 경로 모두 추가 | #3 |
+| E-3 | `purge_index` EBUSY: `dbManager?.dispose()` 후 파일 삭제; `_closed` 플래그 | #3 |
+| E-4 | `remediation` 크래시: `violation.source?.tags`, `violation.target?.tags` optional chaining | #3 |
+| E-5 | Worktree 중복 인덱싱: `toCanonical()` 기반 경로 비교 | #3 |
+| E-6 | TypeScript 파서 `contains`(class→method), `overrides`(method→parent) 엣지 추가 | #3 |
+| E-1 (partial) | `update-pipeline.ts` Pass 3: 엣지 기반 fan_in/fan_out 전체 재계산 | #4 |
+
+#### 기타 (LOW)
+
+| ID | 내용 | PR |
+|----|------|----|
+| L-1 | `CHANGELOG.md`, `CONTRIBUTING.md` 생성 | #7 |
+| L-2 | OpenAPI 3.0.3 스펙 + `swagger-ui-express` (`/api/docs`) | #7 |
+| L-3 | TS/PY/JS/Go 파서 golden/snapshot 테스트 81개 | #8 |
+| L-4 | 언어 provider 확장 문서 + Ruby 예제 (`docs/`, `examples/`) | #8 |
+| L-5 | Vitest 벤치마크 3 suite (parsing/DB/tagging) | #8 |
 
 ---
 
-### 3.2 알려진 미해결 이슈
+### Phase 2+3 — 심층 안정화 (8차 세션, PR #12)
+
+25개 항목 완료. 상세 내역: [`diagnostic-v2.md`](./diagnostic-v2.md)
+
+| 분류 | 항목 | 내용 |
+|------|------|------|
+| 🔴 C-1 | TypeScript Parser null 역참조 크래시 | `getSymbolAtLocation()` undefined 가드 |
+| 🔴 C-2 | Remote DB 연결 리소스 누수 | `update-pipeline.ts` DB close 보장 |
+| 🔴 C-3 | Worker pool 크래시 시 unhandled rejection | `try/catch` + reject 전파 |
+| 🔴 C-4 | 원자적 파일 쓰기 누락 | TOCTOU nonce 패턴 적용 |
+| 🔴 C-5 | DB 스키마 마이그레이션 누락 | 버전 감지 + ALTER TABLE |
+| 🟠 H-1 | BFS 부모 포인터 누락 — 순환 그래프 무한루프 | BFS 방문 맵 + 부모 포인터 |
+| 🟠 H-2 | GraphEngine 메모리 폭발 (대형 코드베이스) | LRU cache hit rate 로깅 |
+| 🟠 H-3 | HealthMonitor 이중 초기화 | `_started` 플래그 가드 |
+| 🟠 H-4 | IPC 포트 충돌 — 고정 포트 | 동적 포트 할당 |
+| 🟠 H-5 | `check_consistency` 데이터 손상 | 트랜잭션 롤백 보장 |
+| 🟠 H-6 | Worker pool 순환 호출 | `setImmediate` 적용 |
+| 🟡 M-2 | `EngineContext` 타입 `as any` 완전 제거 | 명시적 타입 정의 |
+| 🟡 M-3 | 구조화된 로거 `src/utils/logger.ts` | console.log → logger |
+| 🟡 M-4 | `CrossProjectResolver` 추출 | graph-engine에서 분리 |
+| 🟡 M-6 | 사이클 캐시 | `detectCycles()` memoization |
+| 🟡 M-7 | `calculateCC` 데드코드 삭제 | private 메서드 제거 |
+| 🟢 L-3 | dead code 생성자 false positive | `NOT LIKE '%#constructor'` |
+| 🟢 L-4 | Windows `HOME` 환경변수 | `USERPROFILE \|\| HOME` |
+| 🟢 L-5 | Git rename 추적 (R100 파싱) | `git log --follow` 파싱 개선 |
+| 🟢 L-6 | `EdgeRepository` prepared statement 캐싱 | 반복 prepare 제거 |
+| 🟢 L-7 | MCP 세션 정리 `HealthMonitor.stop()` | transport close 연동 |
+| 🟢 L-8 | BFS/DFS 유닛 테스트 17개 | `tests/graph.test.ts` 신규 |
+| 🟢 L-9 | 아키텍처 태그 대소문자 | `toLowerCase()` 정규화 |
+| 🟢 L-10 | 타입 가드 교체 | `as any` → `instanceof` |
+| — | L-1 수렴 종료 | 이미 구현됨 (스킵) |
+
+---
+
+### Phase 4 — 아키텍처 리팩터링 (9차 세션, PR #13)
+
+3개 항목 완료 (diagnostic-v2.md M-1·M-5·L-2). 상세 내역: [`diagnostic-v2.md`](./diagnostic-v2.md)
+
+| ID | 내용 |
+|----|------|
+| M-1 | `tool-dispatcher.ts` 추출: `mcp-server.ts` 578 → 168줄. `ToolDeps` 콜백 패턴으로 도구 로직 분리 |
+| M-5 | `EmbeddingManager` 큐 분리: `queueTail` promise chain 직렬화, 배치당 2분 타임아웃 |
+| L-2 | Label Propagation 클러스터링: O(V²) seed-BFS → O(V+E)/iteration LPA, max 20 iterations |
+
+---
+
+### Phase 5 — 보안·안정성·품질 (9차 세션, PR #14)
+
+16개 항목 완료. 상세 내역: [`diagnostic-v3.md`](./diagnostic-v3.md)
+
+| ID | 내용 | Wave |
+|----|------|------|
+| 🔴 C-1 | `get_hotspots` MCP 경로 SQL 인젝션: `ALLOWED_METRICS` whitelist | Wave 1 |
+| 🔴 C-2 | `EmbeddingManager.refreshAll()` null 역참조: `enqueuedBatch` null 가드 | Wave 1 |
+| 🟠 H-1 | `detectCycles()` 재귀 DFS → 명시적 스택 반복 DFS (스택 오버플로우 방지) | Wave 1 |
+| 🟠 H-2 | `persistClusters()` `as any` 캡슐화 파괴 → `getDb()` 공개 메서드 + 단일 트랜잭션 | Wave 2 |
+| 🟠 H-3 | `readyPromise` purge 후 재사용 불가 → `markReady(false)` 시 promise 재생성 | Wave 1 |
+| 🟠 H-4 | API 서버 POST 페이로드 평문 로깅 → `CYNAPX_LOG_PAYLOADS=1` 환경변수 게이트 | Wave 1 |
+| 🟡 M-1 | `searchSymbols('')` 조기 반환으로 `export_graph` 항상 빈 결과 → `getAllNodes().filter` | Wave 2 |
+| 🟡 M-2 | 노드 삭제 시 고아 엣지 잔류 → 3개 호출 지점에서 엣지 먼저 삭제 | Wave 2 |
+| 🟡 M-3 | `persistClusters()` NaN `avg_complexity` DB 삽입 → `length > 0` 가드 | Wave 2 |
+| 🟡 M-4 | `SIGTERM` 핸들러 누락 → `SIGINT`와 동일 핸들러 등록 | Wave 1 |
+| 🟡 M-5 | `mapHistoryToProject()` N+1 git 호출 → chunk 20 병렬 + 단일 쓰기 트랜잭션 | Wave 2 |
+| 🟢 L-1 | LPA `Math.random()` 셔플 비결정성 → 인라인 주석으로 의도 문서화 | Wave 2 |
+| 🟢 L-2 | Phase 4 테스트 공백 → 19개 신규 테스트 (3개 파일: tool-dispatcher, clustering, embedding-queue) | Wave 2 |
+| 🟢 L-3 | `dfs()` dead `depth`/`path` 파라미터 → 시그니처에서 제거 | Wave 2 |
+| 🟢 L-4 | MCP GET `/mcp` 인증 우회 → `!AUTH_TOKEN \|\| sessionId` 조건 검증 | Wave 1 |
+| 🟢 L-5 | `isChecking` 예외 시 `false` 복구 누락 → `finally` 블록으로 이동 | Wave 1 |
+
+---
+
+## 3. 미완료 항목 (Phase 6)
+
+1개 항목. 상세 내역: [`diagnostic-v4.md`](./diagnostic-v4.md)
+
+| ID | 우선순위 | 내용 | 상태 |
+|----|----------|------|------|
+| H-1 | 🟠 HIGH | MCP StreamableHTTP 다중 세션 크래시 — `SdkMcpServer` 싱글톤에 `connect()` 재호출 불가, 두 번째 클라이언트 연결 시 서버 exit(1) | ⬜ 미착수 |
+
+**수정 방향**: `handleMcp()`에서 세션마다 새 `SdkMcpServer` 인스턴스를 생성하고 `registerToolHandlers()`로 핸들러 재등록.
+**관련 파일**: `src/server/api-server.ts` (handleMcp), `src/server/mcp-server.ts` (connectTransport)
+**신규 테스트**: `tests/mcp-transport.test.ts` — 동시 2개 세션 연결 후 크래시 없음 검증
+
+---
+
+## 4. 알려진 미해결 이슈
 
 | 이슈 | 원인 | 권장 대응 |
 |------|------|-----------|
-| 워크트리 인덱스 중복 | `initialize_project` 시 main+worktree 동시 인덱싱 | 세션 시작 시 `purge_index` 후 main만 초기화 |
+| 워크트리 인덱스 중복 | `initialize_project` 시 main + worktree 동시 인덱싱 | 세션 시작 시 `purge_index` 후 main만 초기화 |
 | `this.field.method()` call resolution 실패 | TypeScript 파서 타입 추론 한계 | E-1-B 신뢰도 레벨로 보완 |
 
-> ~~`treesitterparser.calculatecc` private 메서드~~ — **Phase 2+3 (PR #12)에서 삭제 완료.**
-
 ---
 
-### 3.3 LOW 항목
+## 5. 분석 엔진 정확도 (Phase 5 완료 기준)
 
-| 항목 | 내용 | 완료 시점 |
-|------|------|-----------|
-| L-1 | `CHANGELOG.md`, `CONTRIBUTING.md` 생성 | 5차 세션 (PR #7) |
-| L-2 | OpenAPI/Swagger 스펙 + `swagger-ui-express` 통합 (`/api/docs`) | 5차 세션 (PR #7) |
-| L-3 | 4개 언어 parser golden/snapshot 테스트 (TS/PY/JS/Go, 81개 테스트) | 5차 세션 (PR #8) |
-| L-4 | 언어 provider 확장 문서 + Ruby 예제 (`docs/`, `examples/`) | 5차 세션 (PR #8) |
-| L-5 | Vitest 벤치마크 — parsing/database/tagging 3 suite | 5차 세션 (PR #8) |
-
----
-
-## 4. 현재 분석 엔진 정확도 (5차 세션 최종 기준)
-
-| 항목 | 초기 | 현재 | 목표 |
-|------|------|------|------|
-| Dead code false positive | ~65% (224개 중) | HIGH <5% / MEDIUM ~30% / LOW >80% (E-1-B 3단계 분리) | ✅ HIGH 달성 |
-| CC 정확도 | Native/JS 불일치 | `??` 추가, 단일 경로 일관성 향상 | ±5% 이내 |
-| purge_index 성공률 | MCP 실행 중 실패 | 항상 성공 | ✅ |
-| 엣지 타입 활용률 | 4/15 | 8/15 (`calls`, `contains`, `overrides`, `implements`, `inherits`, `defines`, `imports`, `file`) | 10/15+ |
-| 테스트 커버리지 | 0개 | **81개** (5개 파일 — API, checksum, lock, security, parser) | ✅ 100+ 달성 |
-| 언어 지원 | 12개 (.scm) | 12개 + 확장 문서 + Ruby 예제 | — |
-| API 문서 | 없음 | OpenAPI 3.0.3 (`/api/docs`) | ✅ |
-| 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) | ✅ |
-
-> **Phase 1 상태**: 모든 계획 항목(C/H/M/E/L) 완료.
-> **Phase 2+3+4 상태** (2026-04-03, 9차 세션): 28개 항목 **전부 완료**.
-> M-1(tool-dispatcher.ts 추출 578→168줄), M-5(EmbeddingManager queue 분리 + 2분 타임아웃), L-2(Label Propagation O(V²)→O(V+E)) 모두 완료.
-> 상세 내역 → [`diagnostic-v2.md`](./diagnostic-v2.md) 참조.
->
-> **Phase 5 계획** (2026-04-03, 9차 세션): Phase 4 완료 후 신규 진단 16개 항목 발굴.
-> 2 CRITICAL (SQL 인젝션, null 역참조), 4 HIGH, 5 MEDIUM, 5 LOW.
-> Wave 1 (7 병렬 체인) + Wave 2 (3 병렬 체인) 설계 완료. **Phase 5 완료 (PR #14, 2026-04-03).**
-> 상세 내역 → [`diagnostic-v3.md`](./diagnostic-v3.md) 참조.
->
-> **Phase 6 계획** (2026-04-03, 10차 세션): Phase 5 실증 검증 중 신규 진단 1개 항목 발굴.
-> 1 HIGH (MCP StreamableHTTP 다중 세션 크래시 — SdkMcpServer 싱글톤 재연결 불가).
-> 상세 내역 → [`diagnostic-v4.md`](./diagnostic-v4.md) 참조.
+| 항목 | 초기 | 현재 |
+|------|------|------|
+| Dead code false positive | ~65% | HIGH <5% / MEDIUM ~30% / LOW >80% (E-1-B 3단계) |
+| CC 정확도 | Native/JS 불일치 | `??` 추가, 양 경로 일관성 향상 |
+| purge_index 성공률 | MCP 중 실패 | 항상 성공 |
+| 엣지 타입 활용률 | 4/15 | 8/15 (`calls`, `contains`, `overrides`, `implements`, `inherits`, `defines`, `imports`, `file`) |
+| 테스트 커버리지 | 0개 | **117개** (9개 파일) |
+| API 문서 | 없음 | OpenAPI 3.0.3 (`/api/docs`) |
+| 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) |
