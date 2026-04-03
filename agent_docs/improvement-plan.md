@@ -125,5 +125,9 @@ HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 
 >
 > **Phase 5 계획** (2026-04-03, 9차 세션): Phase 4 완료 후 신규 진단 16개 항목 발굴.
 > 2 CRITICAL (SQL 인젝션, null 역참조), 4 HIGH, 5 MEDIUM, 5 LOW.
-> Wave 1 (7 병렬 체인) + Wave 2 (3 병렬 체인) 설계 완료.
+> Wave 1 (7 병렬 체인) + Wave 2 (3 병렬 체인) 설계 완료. **Phase 5 완료 (PR #14, 2026-04-03).**
 > 상세 내역 → [`diagnostic-v3.md`](./diagnostic-v3.md) 참조.
+>
+> **Phase 6 계획** (2026-04-03, 10차 세션): Phase 5 실증 검증 중 신규 진단 1개 항목 발굴.
+> 1 HIGH (MCP StreamableHTTP 다중 세션 크래시 — SdkMcpServer 싱글톤 재연결 불가).
+> 상세 내역 → [`diagnostic-v4.md`](./diagnostic-v4.md) 참조.
