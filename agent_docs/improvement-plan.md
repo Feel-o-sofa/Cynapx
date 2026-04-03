@@ -119,6 +119,6 @@ HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 
 | 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) | ✅ |
 
 > **Phase 1 상태**: 모든 계획 항목(C/H/M/E/L) 완료.
-> **Phase 2+3 상태** (PR #12 머지 완료, 2026-04-02): 28개 항목 중 24개 완료 (+2개 부분완료). 완전 잔여는 L-2(Louvain) 1개.
-> 부분 완료: M-1(tool-dispatcher 미추출), M-5(EmbeddingManager queue 분리 미완).
+> **Phase 2+3+4 상태** (2026-04-03, 9차 세션): 28개 항목 **전부 완료**.
+> M-1(tool-dispatcher.ts 추출 578→168줄), M-5(EmbeddingManager queue 분리 + 2분 타임아웃), L-2(Label Propagation O(V²)→O(V+E)) 모두 완료.
 > 상세 내역 → [`diagnostic-v2.md`](./diagnostic-v2.md) 참조.
