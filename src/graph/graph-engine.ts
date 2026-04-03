@@ -149,87 +149,84 @@ export class GraphEngine {
     }
 
     /**
-     * Executes the semantic clustering algorithm.
-     * Groups symbols into logical clusters based on affinity and saves results to DB.
+     * Executes the Label Propagation Algorithm (LPA) for community detection.
+     * O(V + E) per iteration, typically converges in <20 iterations.
+     * Groups symbols into logical clusters and saves results to DB.
      */
     public async performClustering(): Promise<{ clusterCount: number, nodesClustered: number }> {
         const nodes = this.nodeRepo.getAllNodes();
         const edges = this.edgeRepo.getAllEdges();
         if (nodes.length === 0) return { clusterCount: 0, nodesClustered: 0 };
 
-        // 1. Build Adjacency List for fast neighbor lookup
-        const adjacency = new Map<number, Set<number>>();
-        for (const edge of edges) {
-            if (!adjacency.has(edge.from_id)) adjacency.set(edge.from_id, new Set());
-            if (!adjacency.has(edge.to_id)) adjacency.set(edge.to_id, new Set());
-            adjacency.get(edge.from_id)!.add(edge.to_id);
-            adjacency.get(edge.to_id)!.add(edge.from_id); // Undirected for affinity
+        // Build adjacency (undirected) — O(E)
+        const adjacency = new Map<number, number[]>();
+        for (const n of nodes) adjacency.set(n.id!, []);
+        for (const e of edges) {
+            adjacency.get(e.from_id)?.push(e.to_id);
+            adjacency.get(e.to_id)?.push(e.from_id);
         }
 
-        // 2. Simple Seed-based Community Detection
-        const clusters: number[][] = [];
-        const unvisited = new Set(nodes.filter(n => n.id !== undefined).map(n => n.id!));
         const nodeMap = new Map(nodes.map(n => [n.id!, n]));
 
-        while (unvisited.size > 0) {
-            const seedId = unvisited.values().next().value as number;
-            unvisited.delete(seedId);
+        // Initialize: each node gets its own label
+        const label = new Map<number, number>();
+        for (const n of nodes) label.set(n.id!, n.id!);
 
-            const currentCluster: number[] = [seedId];
-            const queue: number[] = [seedId];
+        // Label propagation — O(V + E) per iteration
+        const MAX_ITER = 20;
+        for (let iter = 0; iter < MAX_ITER; iter++) {
+            let changed = false;
 
-            while (queue.length > 0) {
-                const currentId = queue.shift()!;
-                const neighbors = adjacency.get(currentId) || new Set<number>();
+            // Shuffle node order each iteration to avoid bias
+            const order = [...nodes].sort(() => Math.random() - 0.5);
 
-                for (const neighborId of neighbors) {
-                    if (unvisited.has(neighborId)) {
-                        // Calculate affinity to decide if neighbor belongs to this cluster
-                        const affinity = this.calculateAffinity(currentId, neighborId, adjacency, nodeMap);
-                        if (affinity > 0.3) { // Threshold for clustering
-                            unvisited.delete(neighborId);
-                            currentCluster.push(neighborId);
-                            queue.push(neighborId);
-                        }
+            for (const node of order) {
+                const neighbors = adjacency.get(node.id!) || [];
+                if (neighbors.length === 0) continue;
+
+                // Count neighbor label frequencies
+                const freq = new Map<number, number>();
+                for (const nbId of neighbors) {
+                    const lbl = label.get(nbId)!;
+                    freq.set(lbl, (freq.get(lbl) || 0) + 1);
+                }
+
+                // File-proximity bonus: neighbors in same file get +0.5 count
+                const currentNode = nodeMap.get(node.id!);
+                for (const nbId of neighbors) {
+                    const nb = nodeMap.get(nbId);
+                    if (currentNode && nb && currentNode.file_path === nb.file_path) {
+                        const lbl = label.get(nbId)!;
+                        freq.set(lbl, (freq.get(lbl) || 0) + 0.5);
                     }
                 }
+
+                // Pick most frequent label (tie-break: keep current)
+                let best = label.get(node.id!)!;
+                let bestCount = freq.get(best) || 0;
+                for (const [lbl, count] of freq) {
+                    if (count > bestCount) { best = lbl; bestCount = count; }
+                }
+
+                if (best !== label.get(node.id!)) {
+                    label.set(node.id!, best);
+                    changed = true;
+                }
             }
-            clusters.push(currentCluster);
+
+            if (!changed) break;
         }
 
-        // 3. Persist Clusters to Database
+        // Group nodes by label
+        const groups = new Map<number, number[]>();
+        for (const [nodeId, lbl] of label) {
+            if (!groups.has(lbl)) groups.set(lbl, []);
+            groups.get(lbl)!.push(nodeId);
+        }
+        const clusters = [...groups.values()];
+
         await this.persistClusters(clusters, nodeMap);
-
-        return {
-            clusterCount: clusters.length,
-            nodesClustered: nodes.length
-        };
-    }
-
-    /**
-     * Calculates logical affinity between two nodes.
-     * Uses Jaccard similarity of neighbors and file proximity.
-     */
-    private calculateAffinity(
-        idA: number,
-        idB: number,
-        adjacency: Map<number, Set<number>>,
-        nodeMap: Map<number, CodeNode>
-    ): number {
-        const neighborsA = adjacency.get(idA) || new Set();
-        const neighborsB = adjacency.get(idB) || new Set();
-
-        // Jaccard Similarity of neighbors
-        const intersection = new Set([...neighborsA].filter(x => neighborsB.has(x)));
-        const union = new Set([...neighborsA, ...neighborsB]);
-        const jaccard = union.size > 0 ? intersection.size / union.size : 0;
-
-        // File Proximity (Bonus)
-        const nodeA = nodeMap.get(idA);
-        const nodeB = nodeMap.get(idB);
-        const fileProximity = (nodeA && nodeB && nodeA.file_path === nodeB.file_path) ? 0.5 : 0;
-
-        return jaccard + fileProximity;
+        return { clusterCount: clusters.length, nodesClustered: nodes.length };
     }
 
     private async persistClusters(clusters: number[][], nodeMap: Map<number, CodeNode>): Promise<void> {
