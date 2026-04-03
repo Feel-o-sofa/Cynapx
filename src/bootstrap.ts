@@ -244,12 +244,14 @@ async function bootstrap() {
         console.error("[*] MCP Server ready on stdio.");
     }
 
-    process.on('SIGINT', async () => {
+    const shutdown = async () => {
         console.error("\n[*] Shutting down gracefully...");
         await lifecycle.disposeAll();
         await lockManager.release();
         process.exit(0);
-    });
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
 }
 
 bootstrap().catch(err => {

@@ -101,7 +101,25 @@ export class UpdatePipeline {
     public async mapHistoryToProject(): Promise<void> {
         if (!this.gitService) return;
         const filePaths = this.nodeRepo.getAllFilePaths();
-        console.log(`Backfilling history for ${filePaths.length} files...`);
+        if (filePaths.length === 0) return;
+
+        console.error(`[UpdatePipeline] Fetching git history for ${filePaths.length} files...`);
+
+        // Parallel fetch in chunks of 20 to avoid spawning too many git processes
+        const CHUNK_SIZE = 20;
+        const allHistory: Array<{ filePath: string; history: any[] }> = [];
+
+        for (let i = 0; i < filePaths.length; i += CHUNK_SIZE) {
+            const chunk = filePaths.slice(i, i + CHUNK_SIZE);
+            const results = await Promise.all(
+                chunk.map(fp =>
+                    this.gitService!.getHistoryForFile(fp)
+                        .then(history => ({ filePath: fp, history }))
+                        .catch(() => ({ filePath: fp, history: [] }))
+                )
+            );
+            allHistory.push(...results);
+        }
 
         const previousLock = this.writeLock;
         let resolveLock: () => void;
@@ -110,8 +128,7 @@ export class UpdatePipeline {
 
         try {
             this.db.prepare('BEGIN').run();
-            for (const filePath of filePaths) {
-                const history = await this.gitService.getHistoryForFile(filePath);
+            for (const { filePath, history } of allHistory) {
                 if (history && history.length > 0) {
                     const historyJson = JSON.stringify(history);
                     this.db.prepare('UPDATE nodes SET history = ? WHERE file_path = ?').run(historyJson, filePath);
@@ -124,6 +141,8 @@ export class UpdatePipeline {
         } finally {
             resolveLock!();
         }
+
+        console.error(`[UpdatePipeline] History backfill complete.`);
     }
 
     public async processChangeEvent(event: FileChangeEvent, version: number): Promise<void> {
@@ -182,6 +201,11 @@ export class UpdatePipeline {
             // Pass 1: Definitions
             for (const res of results) {
                 if (res.status === 'success') {
+                    // Delete edges for nodes being removed, then delete the nodes
+                    const nodeIds = this.nodeRepo.getNodeIdsByFilePath(res.event.file_path);
+                    for (const id of nodeIds) {
+                        this.edgeRepo.deleteEdgesByNodeId(id);
+                    }
                     this.nodeRepo.deleteNodesByFilePath(res.event.file_path);
                     if (res.event.event !== 'DELETE') {
                         const history = this.gitService ? await this.gitService.getHistoryForFile(res.event.file_path) : undefined;
@@ -239,7 +263,14 @@ export class UpdatePipeline {
 
         try {
             this.db.prepare('BEGIN').run();
-            if (type === 'MODIFY') this.nodeRepo.deleteNodesByFilePath(filePath);
+            if (type === 'MODIFY') {
+                // Delete edges for nodes being removed, then delete the nodes
+                const nodeIds = this.nodeRepo.getNodeIdsByFilePath(filePath);
+                for (const id of nodeIds) {
+                    this.edgeRepo.deleteEdgesByNodeId(id);
+                }
+                this.nodeRepo.deleteNodesByFilePath(filePath);
+            }
 
             const history = this.gitService ? await this.gitService.getHistoryForFile(filePath) : undefined;
             const symbolCache = new Map<string, number>();
@@ -287,6 +318,11 @@ export class UpdatePipeline {
         await previousLock;
         try {
             this.db.prepare('BEGIN').run();
+            // Delete edges for nodes being removed, then delete the nodes
+            const nodeIds = this.nodeRepo.getNodeIdsByFilePath(filePath);
+            for (const id of nodeIds) {
+                this.edgeRepo.deleteEdgesByNodeId(id);
+            }
             this.nodeRepo.deleteNodesByFilePath(filePath);
             this.db.prepare('COMMIT').run();
         } catch (e) {

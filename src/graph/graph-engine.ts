@@ -177,7 +177,10 @@ export class GraphEngine {
         for (let iter = 0; iter < MAX_ITER; iter++) {
             let changed = false;
 
-            // Shuffle node order each iteration to avoid bias
+            // Shuffle node order each iteration to avoid label propagation bias.
+            // Note: non-deterministic by design — results vary between runs, which
+            // is acceptable for exploratory clustering. Use a seeded PRNG if
+            // reproducibility is required.
             const order = [...nodes].sort(() => Math.random() - 0.5);
 
             for (const node of order) {
@@ -230,9 +233,11 @@ export class GraphEngine {
     }
 
     private async persistClusters(clusters: number[][], nodeMap: Map<number, CodeNode>): Promise<void> {
-        const db = (this.nodeRepo as any).db;
-        db.prepare('DELETE FROM logical_clusters').run();
-        db.prepare('UPDATE nodes SET cluster_id = NULL').run();
+        const db = this.nodeRepo.getDb();
+        db.transaction(() => {
+            db.prepare('DELETE FROM logical_clusters').run();
+            db.prepare('UPDATE nodes SET cluster_id = NULL').run();
+        })();
 
         for (let i = 0; i < clusters.length; i++) {
             const clusterNodes = clusters[i];
@@ -254,7 +259,7 @@ export class GraphEngine {
                     const complexity = node.cyclomatic || 1;
                     const fanIn = node.fan_in || 0;
                     const fanOut = node.fan_out || 0;
-                    
+
                     totalComplexity += complexity;
                     totalFanIn += fanIn;
                     totalFanOut += fanOut;
@@ -267,7 +272,7 @@ export class GraphEngine {
                 }
             }
 
-            const avgComplexity = totalComplexity / clusterNodes.length;
+            const avgComplexity = clusterNodes.length > 0 ? totalComplexity / clusterNodes.length : 0;
             
             // Classification heuristic
             let type: 'core' | 'utility' | 'domain' = 'domain';
@@ -323,7 +328,7 @@ export class GraphEngine {
                 this.impactCache.set(cacheKey, { timestamp: Date.now(), results });
             }
         } else {
-            this.dfs(startNodeId, 0, [], direction, edgeType, maxDepth, results, visited);
+            this.dfs(startNodeId, direction, edgeType, maxDepth, results, visited);
         }
 
         return results;
@@ -356,7 +361,7 @@ export class GraphEngine {
                 }
             }
         } else {
-            const allFiles = this.nodeRepo.searchSymbols('', 10).filter(n => n.symbol_type === 'file');
+            const allFiles = this.nodeRepo.getAllNodes().filter(n => n.symbol_type === 'file').slice(0, 10);
             const nodeIds = new Set<number>();
             
             for (const file of allFiles) {
@@ -407,7 +412,7 @@ export class GraphEngine {
             }
         } else {
             // Limited full export of the first few files and their contents
-            const allFiles = this.nodeRepo.searchSymbols('', 10).filter(n => n.symbol_type === 'file');
+            const allFiles = this.nodeRepo.getAllNodes().filter(n => n.symbol_type === 'file').slice(0, 10);
             const nodeIds = new Set<number>();
             
             for (const file of allFiles) {
@@ -519,14 +524,13 @@ export class GraphEngine {
 
     private dfs(
         currentId: number,
-        depth: number,
-        path: TraversalPathStep[],
         direction: 'outgoing' | 'incoming',
         edgeType: EdgeType | undefined,
         maxDepth: number,
         results: TraversalResult[],
         visited: Set<number>
     ): void {
+        // depth and path removed from signature — initialized internally
         interface DfsEntry { id: number; depth: number; parentIndex: number; edge?: CodeEdge; }
         const entries: DfsEntry[] = [];
         const stack: DfsEntry[] = [{ id: currentId, depth: 0, parentIndex: -1 }];

@@ -151,36 +151,61 @@ export class ArchitectureEngine {
 
         const cycles: number[][] = [];
         const visited = new Set<number>();
-        const recStack = new Set<number>();
         const allNodes = this.graphEngine.getAllNodes();
 
-        const findCycles = (nodeId: number, path: number[]) => {
-            visited.add(nodeId);
-            recStack.add(nodeId);
-            path.push(nodeId);
-
-            const outgoing = this.graphEngine.getOutgoingEdges(nodeId).filter(e => 
-                ['calls', 'dynamic_calls', 'inherits', 'implements', 'depends_on'].includes(e.edge_type)
-            );
-
-            for (const edge of outgoing) {
-                if (!visited.has(edge.to_id)) {
-                    findCycles(edge.to_id, [...path]);
-                } else if (recStack.has(edge.to_id)) {
-                    // Cycle found
-                    const cycleStartIdx = path.indexOf(edge.to_id);
-                    if (cycleStartIdx !== -1) {
-                        cycles.push(path.slice(cycleStartIdx));
-                    }
-                }
-            }
-
-            recStack.delete(nodeId);
-        };
+        // Iterative DFS replacing the former recursive findCycles.
+        // Each stack frame is either an "enter" frame (visit the node) or an
+        // "exit" frame (pop the node from recStack after all neighbours are done).
+        type Frame =
+            | { kind: 'enter'; nodeId: number; path: number[] }
+            | { kind: 'exit';  nodeId: number };
 
         for (const node of allNodes) {
-            if (node.id !== undefined && !visited.has(node.id)) {
-                findCycles(node.id, []);
+            if (node.id === undefined || visited.has(node.id)) continue;
+
+            const recStack = new Set<number>();
+            const stack: Frame[] = [{ kind: 'enter', nodeId: node.id, path: [] }];
+
+            while (stack.length > 0) {
+                const frame = stack.pop()!;
+
+                if (frame.kind === 'exit') {
+                    recStack.delete(frame.nodeId);
+                    continue;
+                }
+
+                const { nodeId, path } = frame;
+
+                if (visited.has(nodeId)) {
+                    // Node was already fully processed in a previous iteration;
+                    // we still need to check recStack for the cycle-detection
+                    // path that led here, but since it is visited we just skip.
+                    continue;
+                }
+
+                visited.add(nodeId);
+                recStack.add(nodeId);
+                const currentPath = [...path, nodeId];
+
+                // Schedule the exit action so recStack is cleaned up after all
+                // descendants of this node have been processed.
+                stack.push({ kind: 'exit', nodeId });
+
+                const outgoing = this.graphEngine.getOutgoingEdges(nodeId).filter(e =>
+                    ['calls', 'dynamic_calls', 'inherits', 'implements', 'depends_on'].includes(e.edge_type)
+                );
+
+                for (const edge of outgoing) {
+                    if (!visited.has(edge.to_id)) {
+                        stack.push({ kind: 'enter', nodeId: edge.to_id, path: currentPath });
+                    } else if (recStack.has(edge.to_id)) {
+                        // Cycle found
+                        const cycleStartIdx = currentPath.indexOf(edge.to_id);
+                        if (cycleStartIdx !== -1) {
+                            cycles.push(currentPath.slice(cycleStartIdx));
+                        }
+                    }
+                }
             }
         }
 

@@ -340,6 +340,11 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             return { content: [{ type: "text", text: JSON.stringify(profile, null, 2) }] };
         }
         case 'get_hotspots': {
+            const ALLOWED_METRICS = ['cyclomatic', 'fan_in', 'fan_out', 'loc'] as const;
+            type AllowedMetric = typeof ALLOWED_METRICS[number];
+            if (!ALLOWED_METRICS.includes(args.metric as AllowedMetric)) {
+                return { isError: true, content: [{ type: 'text', text: `Invalid metric '${args.metric}'. Allowed values: ${ALLOWED_METRICS.join(', ')}` }] };
+            }
             const ctx = deps.getContext();
             const db = ctx.dbManager!.getDb();
             const hotspots = db.prepare(`SELECT qualified_name, symbol_type, ${args.metric} FROM nodes WHERE ${args.metric} >= ? ORDER BY ${args.metric} DESC LIMIT 20`).all(args.threshold || 0);

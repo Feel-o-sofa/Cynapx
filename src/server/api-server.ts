@@ -111,16 +111,25 @@ export class ApiServer {
             res.on('finish', () => {
                 const duration = Date.now() - start;
                 const status = res.statusCode;
-                console.log(`[${new Date().toISOString()}] ${method} ${url} from ${remoteAddr} - Status: ${status} (${duration}ms)`);
+                console.error(`[${new Date().toISOString()}] ${method} ${url} from ${remoteAddr} - Status: ${status} (${duration}ms)`);
                 if (method === 'POST' && body && Object.keys(body).length > 0) {
-                    console.log(`  Payload: ${JSON.stringify(body).substring(0, 200)}`);
+                    if (process.env.CYNAPX_LOG_PAYLOADS === '1') {
+                        console.error(`  Payload: ${JSON.stringify(body).substring(0, 200)}`);
+                    }
                 }
             });
             next();
         });
 
         this.app.use((req, res, next) => {
-            if ((req.path === '/mcp' && req.method === 'GET') || req.path.startsWith('/api/docs')) return next();
+            if (req.path.startsWith('/api/docs')) return next();
+            if (req.path === '/mcp' && req.method === 'GET') {
+                // Allow if no-auth mode, or if a valid sessionId is present
+                // (MCP Streamable HTTP uses sessionId for reconnection)
+                const sessionId = req.query['sessionId'] as string | undefined;
+                if (!AUTH_TOKEN || sessionId) return next();
+                // Otherwise fall through to auth check below
+            }
             const authHeader = req.headers.authorization;
             if (!authHeader || authHeader !== `Bearer ${AUTH_TOKEN}`) {
                 return res.status(401).json({ error_code: 'UNAUTHORIZED', message: 'Invalid or missing Bearer Token' });

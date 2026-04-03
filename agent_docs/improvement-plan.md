@@ -122,3 +122,8 @@ HIGH/MEDIUM/LOW 3단계 분리 구현 완료. `potentialDeadCode` 후방 호환 
 > **Phase 2+3+4 상태** (2026-04-03, 9차 세션): 28개 항목 **전부 완료**.
 > M-1(tool-dispatcher.ts 추출 578→168줄), M-5(EmbeddingManager queue 분리 + 2분 타임아웃), L-2(Label Propagation O(V²)→O(V+E)) 모두 완료.
 > 상세 내역 → [`diagnostic-v2.md`](./diagnostic-v2.md) 참조.
+>
+> **Phase 5 계획** (2026-04-03, 9차 세션): Phase 4 완료 후 신규 진단 16개 항목 발굴.
+> 2 CRITICAL (SQL 인젝션, null 역참조), 4 HIGH, 5 MEDIUM, 5 LOW.
+> Wave 1 (7 병렬 체인) + Wave 2 (3 병렬 체인) 설계 완료.
+> 상세 내역 → [`diagnostic-v3.md`](./diagnostic-v3.md) 참조.
