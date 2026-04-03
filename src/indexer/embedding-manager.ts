@@ -20,15 +20,15 @@ export interface EmbeddingProvider {
 /**
  * Hybrid implementation using a Python Sidecar for full Jina 0.5b support.
  * Leverages GPU (CUDA) if available and supports bulk processing.
+ *
+ * Pure process + IPC transport — no internal request queue.
+ * EmbeddingManager serializes calls via its own queue.
  */
 export class PythonEmbeddingProvider implements EmbeddingProvider {
     private child: ChildProcess | null = null;
     private ready: boolean = false;
-    // H-2(1): 동시 요청 큐 — pending 단일 콜백 대신 Promise 기반 큐로 교체
-    private currentResolver: ((v: any) => void) | null = null;
-    private currentRejecter: ((e: any) => void) | null = null;
-    private requestQueue: Array<{ resolve: (v: any) => void; reject: (e: any) => void; texts: string[] }> = [];
-    private processing: boolean = false;
+    private pendingResolve: ((v: any) => void) | null = null;
+    private pendingReject: ((e: any) => void) | null = null;
     private dimensions: number = 896;
     // H-2(3): FTS5 폴백 모드 플래그 및 경고 출력 여부
     public fallbackMode: boolean = false;
@@ -55,21 +55,21 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
                     this.restartAttempts = 0; // 정상 기동 시 재시도 카운터 초기화
                     this.dimensions = data.dim;
                     console.error(`[Embedding] Python Sidecar Ready (${data.device}, Dim: ${this.dimensions})`);
-                } else if (data.vectors && this.currentResolver) {
-                    this.currentResolver(data.vectors);
-                    this.currentResolver = null;
-                    this.currentRejecter = null;
-                    this._processNext();
-                } else if (data.vector && this.currentResolver) {
-                    this.currentResolver([data.vector]);
-                    this.currentResolver = null;
-                    this.currentRejecter = null;
-                    this._processNext();
-                } else if (data.error && this.currentRejecter) {
-                    this.currentRejecter(new Error(data.error));
-                    this.currentResolver = null;
-                    this.currentRejecter = null;
-                    this._processNext();
+                } else if (data.vectors && this.pendingResolve) {
+                    const resolve = this.pendingResolve;
+                    this.pendingResolve = null;
+                    this.pendingReject = null;
+                    resolve(data.vectors);
+                } else if (data.vector && this.pendingResolve) {
+                    const resolve = this.pendingResolve;
+                    this.pendingResolve = null;
+                    this.pendingReject = null;
+                    resolve([data.vector]);
+                } else if (data.error && this.pendingReject) {
+                    const reject = this.pendingReject;
+                    this.pendingResolve = null;
+                    this.pendingReject = null;
+                    reject(new Error(data.error));
                 }
             } catch (e) {}
         });
@@ -93,32 +93,15 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
                     this.fallbackWarned = true;
                     console.error(`[Embedding] WARNING: Python Sidecar unavailable after ${PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS} retries. Switching to FTS5 fallback mode. Semantic search disabled.`);
                 }
-                // 현재 대기 중인 모든 요청을 null로 해소
-                if (this.currentRejecter) {
-                    this.currentRejecter(new Error('Sidecar unavailable; fallback mode active'));
-                    this.currentResolver = null;
-                    this.currentRejecter = null;
+                // 현재 대기 중인 요청을 거절
+                if (this.pendingReject) {
+                    const reject = this.pendingReject;
+                    this.pendingResolve = null;
+                    this.pendingReject = null;
+                    reject(new Error('Sidecar unavailable; fallback mode active'));
                 }
-                for (const pending of this.requestQueue) {
-                    pending.reject(new Error('Sidecar unavailable; fallback mode active'));
-                }
-                this.requestQueue = [];
-                this.processing = false;
             }
         });
-    }
-
-    // H-2(1): 큐에서 다음 요청을 순차적으로 처리
-    private _processNext() {
-        const next = this.requestQueue.shift();
-        if (!next) {
-            this.processing = false;
-            return;
-        }
-        this.processing = true;
-        this.currentResolver = next.resolve;
-        this.currentRejecter = next.reject;
-        this.child?.stdin?.write(JSON.stringify({ texts: next.texts }) + '\n');
     }
 
     public async generate(text: string): Promise<number[]> {
@@ -145,16 +128,11 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
             if (++waitCount > maxWait) throw new Error("Python sidecar startup timed out.");
         }
 
-        // H-2(1): 현재 처리 중인 요청이 있으면 큐에 추가하여 순차 대기
+        // Send one request and await one response — EmbeddingManager serializes calls
         return new Promise((resolve, reject) => {
-            if (this.processing) {
-                this.requestQueue.push({ resolve, reject, texts });
-            } else {
-                this.processing = true;
-                this.currentResolver = resolve;
-                this.currentRejecter = reject;
-                this.child?.stdin?.write(JSON.stringify({ texts }) + '\n');
-            }
+            this.pendingResolve = resolve;
+            this.pendingReject = reject;
+            this.child?.stdin?.write(JSON.stringify({ texts }) + '\n');
         });
     }
 
@@ -162,12 +140,16 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
     public getModelName(): string { return 'jinaai/jina-code-embeddings-0.5b (GPU Hybrid)'; }
 
     public dispose() {
+        if (this.pendingReject) {
+            const reject = this.pendingReject;
+            this.pendingResolve = null;
+            this.pendingReject = null;
+            reject(new Error('PythonEmbeddingProvider disposed'));
+        }
         if (this.child) {
             this.child.kill();
             this.child = null;
         }
-        this.requestQueue = [];
-        this.processing = false;
     }
 }
 
@@ -193,9 +175,12 @@ export class NullEmbeddingProvider implements EmbeddingProvider {
 
 /**
  * Manages the lifecycle of embeddings for the knowledge graph.
+ * Owns the serialization queue and per-batch timeout for all provider calls.
  */
 export class EmbeddingManager {
     private provider: EmbeddingProvider;
+    private queueTail: Promise<void> = Promise.resolve();
+    private static readonly BATCH_TIMEOUT_MS = 120_000; // 2 minutes per batch
 
     constructor(
         private db: Database,
@@ -209,14 +194,37 @@ export class EmbeddingManager {
     public createSnippet(node: CodeNode): string {
         let snippet = `Symbol: ${node.qualified_name}\nType: ${node.symbol_type}\n`;
         if (node.signature) snippet += `Signature: ${node.signature}\n`;
-        
+
         let tags: string[] = [];
         if (node.tags) {
             tags = typeof node.tags === 'string' ? JSON.parse(node.tags) : node.tags;
         }
         if (tags.length > 0) snippet += `Context: ${tags.join(', ')}\n`;
-        
+
         return snippet;
+    }
+
+    /**
+     * Enqueues a batch request through the sequential promise chain and wraps it
+     * with a per-batch timeout. On timeout, rejects this batch but allows
+     * refreshAll() to catch and continue processing remaining batches.
+     */
+    private enqueuedBatch(texts: string[]): Promise<number[][]> {
+        const timeoutMs = EmbeddingManager.BATCH_TIMEOUT_MS;
+        let resolve!: (result: Promise<number[][]>) => void;
+        const slot = new Promise<number[][]>((res) => { resolve = res; });
+
+        this.queueTail = this.queueTail.then(() => {
+            const batchPromise = this.provider.generateBatch(texts);
+            const timeoutPromise = new Promise<never>((_res, rej) =>
+                setTimeout(() => rej(new Error(`Batch timed out after ${timeoutMs}ms`)), timeoutMs)
+            );
+            resolve(Promise.race([batchPromise, timeoutPromise]));
+            // Wait for the batch (or timeout) before releasing the queue slot
+            return Promise.race([batchPromise, timeoutPromise]).then(() => {}, () => {});
+        });
+
+        return slot;
     }
 
     public async refreshAll(): Promise<void> {
@@ -259,15 +267,15 @@ export class EmbeddingManager {
         if (nodesToProcess.length === 0) return;
 
         console.error(`[EmbeddingManager] Refreshing embeddings for ${nodesToProcess.length} nodes...`);
-        
-        const batchSize = 50; 
+
+        const batchSize = 50;
         for (let i = 0; i < nodesToProcess.length; i += batchSize) {
             const batch = nodesToProcess.slice(i, i + batchSize);
             const snippets = batch.map(node => this.createSnippet(node));
-            
+
             try {
-                const vectors = await this.provider.generateBatch(snippets);
-                
+                const vectors = await this.enqueuedBatch(snippets);
+
                 this.db.transaction(() => {
                     vectors.forEach((vector, idx) => {
                         const node = batch[idx];
@@ -279,13 +287,13 @@ export class EmbeddingManager {
                         );
                     });
                 })();
-                
+
                 console.error(`[EmbeddingManager] Progress: ${Math.min(i + batchSize, nodesToProcess.length)}/${nodesToProcess.length}`);
             } catch (err) {
                 console.error(`[EmbeddingManager] Batch failed: ${err}`);
             }
         }
-        
+
         console.error(`[EmbeddingManager] Refresh complete.`);
     }
 }
