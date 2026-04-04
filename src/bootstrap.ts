@@ -177,7 +177,8 @@ async function bootstrap() {
                 });
             } catch (err) {
                 console.error(`[!] Stale lock? Retrying...`);
-                setTimeout(acquireAndRun, 2000);
+                const retryTimer = setTimeout(acquireAndRun, 2000);
+                lifecycle.track({ dispose: () => clearTimeout(retryTimer) });
                 return;
             }
         } else {

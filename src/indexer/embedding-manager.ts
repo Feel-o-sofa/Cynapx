@@ -24,11 +24,15 @@ export interface EmbeddingProvider {
  * Pure process + IPC transport — no internal request queue.
  * EmbeddingManager serializes calls via its own queue.
  */
+type PendingRequest = {
+    resolve: (v: number[][]) => void;
+    reject: (e: Error) => void;
+} | null;
+
 export class PythonEmbeddingProvider implements EmbeddingProvider {
     private child: ChildProcess | null = null;
     private ready: boolean = false;
-    private pendingResolve: ((v: any) => void) | null = null;
-    private pendingReject: ((e: any) => void) | null = null;
+    private pendingRequest: PendingRequest = null;
     private dimensions: number = 896;
     // H-2(3): FTS5 폴백 모드 플래그 및 경고 출력 여부
     public fallbackMode: boolean = false;
@@ -55,21 +59,18 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
                     this.restartAttempts = 0; // 정상 기동 시 재시도 카운터 초기화
                     this.dimensions = data.dim;
                     console.error(`[Embedding] Python Sidecar Ready (${data.device}, Dim: ${this.dimensions})`);
-                } else if (data.vectors && this.pendingResolve) {
-                    const resolve = this.pendingResolve;
-                    this.pendingResolve = null;
-                    this.pendingReject = null;
-                    resolve(data.vectors);
-                } else if (data.vector && this.pendingResolve) {
-                    const resolve = this.pendingResolve;
-                    this.pendingResolve = null;
-                    this.pendingReject = null;
-                    resolve([data.vector]);
-                } else if (data.error && this.pendingReject) {
-                    const reject = this.pendingReject;
-                    this.pendingResolve = null;
-                    this.pendingReject = null;
-                    reject(new Error(data.error));
+                } else if (data.vectors && this.pendingRequest) {
+                    const pending = this.pendingRequest;
+                    this.pendingRequest = null;
+                    pending.resolve(data.vectors);
+                } else if (data.vector && this.pendingRequest) {
+                    const pending = this.pendingRequest;
+                    this.pendingRequest = null;
+                    pending.resolve([data.vector]);
+                } else if (data.error && this.pendingRequest) {
+                    const pending = this.pendingRequest;
+                    this.pendingRequest = null;
+                    pending.reject(new Error(data.error));
                 }
             } catch (e) {}
         });
@@ -94,11 +95,10 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
                     console.error(`[Embedding] WARNING: Python Sidecar unavailable after ${PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS} retries. Switching to FTS5 fallback mode. Semantic search disabled.`);
                 }
                 // 현재 대기 중인 요청을 거절
-                if (this.pendingReject) {
-                    const reject = this.pendingReject;
-                    this.pendingResolve = null;
-                    this.pendingReject = null;
-                    reject(new Error('Sidecar unavailable; fallback mode active'));
+                const pendingOnFallback = this.pendingRequest;
+                this.pendingRequest = null;
+                if (pendingOnFallback) {
+                    pendingOnFallback.reject(new Error('Sidecar unavailable; fallback mode active'));
                 }
             }
         });
@@ -130,8 +130,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
 
         // Send one request and await one response — EmbeddingManager serializes calls
         return new Promise((resolve, reject) => {
-            this.pendingResolve = resolve;
-            this.pendingReject = reject;
+            this.pendingRequest = { resolve, reject };
             this.child?.stdin?.write(JSON.stringify({ texts }) + '\n');
         });
     }
@@ -140,11 +139,10 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
     public getModelName(): string { return 'jinaai/jina-code-embeddings-0.5b (GPU Hybrid)'; }
 
     public dispose() {
-        if (this.pendingReject) {
-            const reject = this.pendingReject;
-            this.pendingResolve = null;
-            this.pendingReject = null;
-            reject(new Error('PythonEmbeddingProvider disposed'));
+        const pendingOnDispose = this.pendingRequest;
+        this.pendingRequest = null;
+        if (pendingOnDispose) {
+            pendingOnDispose.reject(new Error('PythonEmbeddingProvider disposed'));
         }
         if (this.child) {
             this.child.kill();

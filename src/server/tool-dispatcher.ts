@@ -240,7 +240,7 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
         }
         case 'search_symbols': {
             const limit = args.limit || 10;
-            const results = await Promise.all(deps.workspaceManager.getAllContexts().map(async (ctx) => {
+            const settled = await Promise.allSettled(deps.workspaceManager.getAllContexts().map(async (ctx) => {
                 const keywordNodes = ctx.graphEngine!.nodeRepo.searchSymbols(args.query, limit, { symbol_type: args.symbol_type });
                 if (!args.semantic) return keywordNodes;
                 try {
@@ -250,12 +250,23 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
                     return mergeResultsRRF(keywordNodes, vectorNodes, limit);
                 } catch { return keywordNodes; }
             }));
+            const results = settled
+                .filter((r): r is PromiseFulfilledResult<any[]> => r.status === 'fulfilled')
+                .map(r => r.value);
             const flat = results.flat().slice(0, limit);
             return { content: [{ type: "text", text: JSON.stringify(flat.map(n => ({ qname: n.qualified_name, type: n.symbol_type, file: n.file_path, tags: n.tags })), null, 2) }] };
         }
         case 'get_symbol_details': {
+            // M-4: validate args.qualified_name is a string
+            if (typeof args.qualified_name !== 'string' || args.qualified_name.trim() === '') {
+                return { isError: true, content: [{ type: 'text', text: 'Invalid argument: qualified_name must be a non-empty string.' }] };
+            }
+            // C-1: null guard for context
             const ctx = deps.getContext();
-            const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+            if (!ctx || !ctx.graphEngine) {
+                return { isError: true, content: [{ type: 'text', text: 'No active project. Call initialize_project first.' }] };
+            }
+            const node = ctx.graphEngine.getNodeByQualifiedName(args.qualified_name);
             if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
 
             if (args.summary_only) return { content: [{ type: "text", text: JSON.stringify({ qname: node.qualified_name, type: node.symbol_type, metrics: { loc: node.loc, cyclomatic: node.cyclomatic, fan_in: node.fan_in, fan_out: node.fan_out } }, null, 2) }] };
@@ -265,8 +276,9 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             if (node.signature) text += `- **Signature**: ${node.signature}\n`;
             text += `- **File**: ${node.file_path} (line ${node.start_line}-${node.end_line})\n`;
 
+            // L-2: tags is always string[] | undefined per type definition — Array.isArray branch removed
             if (node.tags && node.tags.length > 0) {
-                text += `- **Structural Tags**: ${Array.isArray(node.tags) ? node.tags.map(t => `${t}`).join(', ') : node.tags}\n`;
+                text += `- **Structural Tags**: ${node.tags.join(', ')}\n`;
             }
 
             if (node.history && node.history.length > 0) {
@@ -285,21 +297,40 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
                     try {
                         ctx.securityProvider.validatePath(node.file_path);
                         const content = fs.readFileSync(node.file_path, 'utf8').split('\n');
-                        const snippet = content.slice(node.start_line - 1, node.end_line);
-                        const display = snippet.length > 100 ?
-                            snippet.slice(0, 50).join('\n') + "\n\n// ... [Truncated for Token Optimization: Use read_file for full content] ..." :
-                            snippet.join('\n');
-                        text += '\n#### Source Code Snippet:\n```\n' + display + '\n```\n';
-                    } catch (e) { text += `\n> [!WARNING] Source unavailable: ${e}`; }
+                        // M-6: validate start_line/end_line before slicing
+                        if (node.start_line < 1 || node.end_line < node.start_line) {
+                            text += '\n> [!WARNING] Invalid line range in database record.';
+                        } else {
+                            const snippet = content.slice(node.start_line - 1, node.end_line);
+                            const display = snippet.length > 100 ?
+                                snippet.slice(0, 50).join('\n') + "\n\n// ... [Truncated for Token Optimization: Use read_file for full content] ..." :
+                                snippet.join('\n');
+                            text += '\n#### Source Code Snippet:\n```\n' + display + '\n```\n';
+                        }
+                    } catch (e: any) {
+                        // L-1: distinguish ENOENT vs EACCES
+                        const reason = e.code === 'ENOENT' ? 'File not found'
+                            : e.code === 'EACCES' ? 'Permission denied'
+                            : String(e);
+                        text += `\n> [!WARNING] Source unavailable: ${reason}`;
+                    }
                 }
             }
             return { content: [{ type: "text", text }] };
         }
         case 'analyze_impact': {
+            // M-4: validate args.qualified_name is a string
+            if (typeof args.qualified_name !== 'string' || args.qualified_name.trim() === '') {
+                return { isError: true, content: [{ type: 'text', text: 'Invalid argument: qualified_name must be a non-empty string.' }] };
+            }
+            // C-1: null guard for context
             const ctx = deps.getContext();
-            const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+            if (!ctx || !ctx.graphEngine) {
+                return { isError: true, content: [{ type: 'text', text: 'No active project. Call initialize_project first.' }] };
+            }
+            const node = ctx.graphEngine.getNodeByQualifiedName(args.qualified_name);
             if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-            const results = ctx.graphEngine!.traverse(node.id!, 'BFS', { direction: 'incoming', maxDepth: args.max_depth || 3, useCache: args.use_cache });
+            const results = ctx.graphEngine.traverse(node.id!, 'BFS', { direction: 'incoming', maxDepth: args.max_depth || 3, useCache: args.use_cache });
             const formatted = results.map(r => ({
                 node: r.node.qualified_name,
                 distance: r.distance,
@@ -308,18 +339,36 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             return { content: [{ type: "text", text: JSON.stringify(formatted, null, 2) }] };
         }
         case 'get_callers': {
+            // M-4: validate args.qualified_name is a string
+            if (typeof args.qualified_name !== 'string' || args.qualified_name.trim() === '') {
+                return { isError: true, content: [{ type: 'text', text: 'Invalid argument: qualified_name must be a non-empty string.' }] };
+            }
+            // C-1: null guard for context
             const ctx = deps.getContext();
-            const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+            if (!ctx || !ctx.graphEngine) {
+                return { isError: true, content: [{ type: 'text', text: 'No active project. Call initialize_project first.' }] };
+            }
+            const node = ctx.graphEngine.getNodeByQualifiedName(args.qualified_name);
             if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-            const callers = ctx.graphEngine!.getIncomingEdges(node.id!).map(e => ({ qname: ctx.graphEngine!.getNodeById(e.from_id)?.qualified_name, line: e.call_site_line }));
-            return { content: [{ type: "text", text: JSON.stringify(callers, null, 2) }] };
+            // M-3: use JOIN query to avoid N+1 getNodeById calls
+            const callers = ctx.graphEngine.getIncomingEdgesWithCallerNames(node.id!);
+            return { content: [{ type: "text", text: JSON.stringify(callers.map(r => ({ qname: r.qualified_name, line: r.call_site_line })), null, 2) }] };
         }
         case 'get_callees': {
+            // M-4: validate args.qualified_name is a string
+            if (typeof args.qualified_name !== 'string' || args.qualified_name.trim() === '') {
+                return { isError: true, content: [{ type: 'text', text: 'Invalid argument: qualified_name must be a non-empty string.' }] };
+            }
+            // C-1: null guard for context
             const ctx = deps.getContext();
-            const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
+            if (!ctx || !ctx.graphEngine) {
+                return { isError: true, content: [{ type: 'text', text: 'No active project. Call initialize_project first.' }] };
+            }
+            const node = ctx.graphEngine.getNodeByQualifiedName(args.qualified_name);
             if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-            const callees = ctx.graphEngine!.getOutgoingEdges(node.id!).map(e => ({ qname: ctx.graphEngine!.getNodeById(e.to_id)?.qualified_name, line: e.call_site_line }));
-            return { content: [{ type: "text", text: JSON.stringify(callees, null, 2) }] };
+            // M-3: use JOIN query to avoid N+1 getNodeById calls
+            const callees = ctx.graphEngine.getOutgoingEdgesWithCalleeNames(node.id!);
+            return { content: [{ type: "text", text: JSON.stringify(callees.map(r => ({ qname: r.qualified_name, line: r.call_site_line })), null, 2) }] };
         }
         case 'get_related_tests': {
             const ctx = deps.getContext();
@@ -353,11 +402,22 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
         case 'get_hotspots': {
             const ALLOWED_METRICS = ['cyclomatic', 'fan_in', 'fan_out', 'loc'] as const;
             type AllowedMetric = typeof ALLOWED_METRICS[number];
+            // M-4: validate metric type and threshold type
+            if (typeof args.metric !== 'string') {
+                return { isError: true, content: [{ type: 'text', text: 'Invalid argument: metric must be a string.' }] };
+            }
             if (!ALLOWED_METRICS.includes(args.metric as AllowedMetric)) {
                 return { isError: true, content: [{ type: 'text', text: `Invalid metric '${args.metric}'. Allowed values: ${ALLOWED_METRICS.join(', ')}` }] };
             }
+            if (args.threshold !== undefined && typeof args.threshold !== 'number') {
+                return { isError: true, content: [{ type: 'text', text: 'Invalid argument: threshold must be a number.' }] };
+            }
+            // C-1: null guard for context
             const ctx = deps.getContext();
-            const db = ctx.dbManager!.getDb();
+            if (!ctx || !ctx.dbManager) {
+                return { isError: true, content: [{ type: 'text', text: 'No active project. Call initialize_project first.' }] };
+            }
+            const db = ctx.dbManager.getDb();
             const hotspots = db.prepare(`SELECT qualified_name, symbol_type, ${args.metric} FROM nodes WHERE ${args.metric} >= ? ORDER BY ${args.metric} DESC LIMIT 20`).all(args.threshold || 0);
             return { content: [{ type: "text", text: JSON.stringify(hotspots, null, 2) }] };
         }

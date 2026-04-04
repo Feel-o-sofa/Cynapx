@@ -138,6 +138,14 @@ export class GraphEngine {
         return this._edgeRepo.getIncomingEdges(nodeId, edgeType);
     }
 
+    public getIncomingEdgesWithCallerNames(nodeId: number): { qualified_name: string | null; call_site_line: number | null }[] {
+        return this._edgeRepo.getIncomingEdgesWithCallerNames(nodeId);
+    }
+
+    public getOutgoingEdgesWithCalleeNames(nodeId: number): { qualified_name: string | null; call_site_line: number | null }[] {
+        return this._edgeRepo.getOutgoingEdgesWithCalleeNames(nodeId);
+    }
+
     /**
      * Returns all edges in the knowledge graph.
      */
