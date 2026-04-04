@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import { getLocksDir, getProjectHash } from './paths';
+import { getLocksDir, getProjectHash, getCentralStorageDir } from './paths';
 
 export interface LockInfo {
     pid: number;
@@ -64,7 +64,10 @@ export class LockManager {
                 if (fs.existsSync(this.lockPath)) fs.unlinkSync(this.lockPath);
 
                 // 2. Clear residual DB journal files that might keep the DB locked
-                const dbFile = path.join(path.dirname(path.dirname(this.lockPath)), `${path.basename(this.lockPath, '.lock')}.db`);
+                // SEC-H-4: use getCentralStorageDir() for correct DB path (~/.cynapx/<hash>_v2.db)
+                // lockPath = ~/.cynapx/locks/<hash>.lock → hash = basename without extension
+                const lockHash = path.basename(this.lockPath, '.lock');
+                const dbFile = path.join(getCentralStorageDir(), `${lockHash}_v2.db`);
 
                 ['', '-wal', '-shm'].forEach(suffix => {
                     const file = `${dbFile}${suffix}`;
@@ -83,14 +86,17 @@ export class LockManager {
 
     /**
      * Attempts to acquire the lock.
+     * @param ipcPort - The IPC port the Host is listening on.
+     * @param nonce - Session nonce generated before starting the IPC server; stored so
+     *                Terminal sessions can read it and respond to the challenge.
      */
-    public async acquire(ipcPort: number): Promise<void> {
+    public async acquire(ipcPort: number, nonce: string): Promise<void> {
         this.currentLock = {
             pid: process.pid,
             ipcPort,
             lastHeartbeat: new Date().toISOString(),
             status: 'active',
-            nonce: crypto.randomUUID()
+            nonce,
         };
         fs.writeFileSync(this.lockPath, JSON.stringify(this.currentLock, null, 2), 'utf8');
     }

@@ -12,6 +12,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import * as path from 'path';
 import * as fs from 'fs';
+import * as os from 'os';
 import { EngineContext, WorkspaceManager } from './workspace-manager.js';
 import { EmbeddingProvider } from '../indexer/embedding-manager.js';
 import { RemediationEngine } from '../graph/remediation-engine.js';
@@ -223,6 +224,13 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
         }
         case 'initialize_project': {
             let target = args.path ? path.resolve(args.path) : process.cwd();
+            if (args.path) {
+                const homeDir = os.homedir();
+                const allowed = [homeDir, process.cwd()];
+                if (!allowed.some(base => target === base || target.startsWith(base + path.sep))) {
+                    return { isError: true, content: [{ type: 'text', text: `Path '${target}' is outside allowed boundaries (home dir or cwd).` }] };
+                }
+            }
             if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
             if (!args.zero_pollution) fs.writeFileSync(path.join(target, ANCHOR_FILE), JSON.stringify({ created_at: new Date().toISOString() }));
             addToRegistry(target);
@@ -271,16 +279,19 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             text += `\n#### Metrics:\n- LOC: ${node.loc}, CC: ${node.cyclomatic}\n- Static Coupling: Fan-in: ${node.fan_in || 0}, Fan-out: ${node.fan_out || 0}\n`;
 
             if (args.include_source !== false) {
-                try {
-                    const security = ctx.securityProvider;
-                    if (security) security.validatePath(node.file_path);
-                    const content = fs.readFileSync(node.file_path, 'utf8').split('\n');
-                    const snippet = content.slice(node.start_line - 1, node.end_line);
-                    const display = snippet.length > 100 ?
-                        snippet.slice(0, 50).join('\n') + "\n\n// ... [Truncated for Token Optimization: Use read_file for full content] ..." :
-                        snippet.join('\n');
-                    text += '\n#### Source Code Snippet:\n```\n' + display + '\n```\n';
-                } catch (e) { text += `\n> [!WARNING] Source unavailable: ${e}`; }
+                if (!ctx.securityProvider) {
+                    text += '\n\n> [!WARNING] Source code unavailable: security provider not initialized.';
+                } else {
+                    try {
+                        ctx.securityProvider.validatePath(node.file_path);
+                        const content = fs.readFileSync(node.file_path, 'utf8').split('\n');
+                        const snippet = content.slice(node.start_line - 1, node.end_line);
+                        const display = snippet.length > 100 ?
+                            snippet.slice(0, 50).join('\n') + "\n\n// ... [Truncated for Token Optimization: Use read_file for full content] ..." :
+                            snippet.join('\n');
+                        text += '\n#### Source Code Snippet:\n```\n' + display + '\n```\n';
+                    } catch (e) { text += `\n> [!WARNING] Source unavailable: ${e}`; }
+                }
             }
             return { content: [{ type: "text", text }] };
         }

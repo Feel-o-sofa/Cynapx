@@ -24,6 +24,8 @@ export interface IpcResponse {
     error?: string;
 }
 
+const MAX_MSG_BYTES = 1 * 1024 * 1024; // 1 MB
+
 /**
  * Coordinates communication between Host and Terminal sessions.
  */
@@ -44,8 +46,9 @@ export class IpcCoordinator extends EventEmitter {
 
     /**
      * Starts as a Host (IPC Server).
+     * @param nonce - Session nonce stored in lock file; used for challenge-response auth.
      */
-    public async startHost(): Promise<number> {
+    public async startHost(nonce: string): Promise<number> {
         this.close();
         return new Promise((resolve, reject) => {
             this.server = net.createServer((socket) => {
@@ -54,12 +57,38 @@ export class IpcCoordinator extends EventEmitter {
                     console.error('[IPC Host] Socket error:', err.message);
                 });
 
+                // SEC-H-3: Track cumulative received bytes and enforce 1 MB limit.
+                let totalBytes = 0;
+                socket.on('data', (chunk) => {
+                    totalBytes += chunk.length;
+                    if (totalBytes > MAX_MSG_BYTES) {
+                        socket.destroy(new Error('IPC message size limit exceeded'));
+                    }
+                });
+
+                // SEC-C-1: Send challenge immediately on connection.
+                socket.write(JSON.stringify({ challenge: nonce }) + '\n');
+
+                let authenticated = false;
+
                 const rl = readline.createInterface({ input: socket });
                 rl.on('error', (err) => {
                     console.error('[IPC Host] Readline error:', err.message);
                 });
                 rl.on('line', async (line) => {
                     try {
+                        // SEC-C-1: If not yet authenticated, expect auth response first.
+                        if (!authenticated) {
+                            const msg: { auth?: string } = JSON.parse(line);
+                            if (msg.auth !== nonce) {
+                                console.error('[IPC Host] Authentication failed — closing socket.');
+                                socket.destroy();
+                                return;
+                            }
+                            authenticated = true;
+                            return;
+                        }
+
                         const req: IpcRequest = JSON.parse(line);
                         if (req.method === 'executeTool' && this.mcpServer) {
                             try {
@@ -86,13 +115,12 @@ export class IpcCoordinator extends EventEmitter {
 
     /**
      * Starts as a Terminal (IPC Client).
+     * @param port - Host IPC port to connect to.
+     * @param nonce - Session nonce read from lock file; used to respond to challenge.
      */
-    public async connectToHost(port: number): Promise<void> {
+    public async connectToHost(port: number, nonce: string): Promise<void> {
         return new Promise((resolve, reject) => {
-            this.client = net.createConnection({ port, host: '127.0.0.1' }, () => {
-                console.error(`[IPC Terminal] Connected to Host on port ${port}`);
-                resolve();
-            });
+            this.client = net.createConnection({ port, host: '127.0.0.1' });
 
             this.client.on('error', (err) => {
                 console.error('[IPC Terminal] Connection error:', err);
@@ -104,12 +132,30 @@ export class IpcCoordinator extends EventEmitter {
                 this.emit('disconnected');
             });
 
+            let authResolved = false;
             const rl = readline.createInterface({ input: this.client });
             rl.on('error', (err) => {
                 console.error('[IPC Terminal] Readline error:', err.message);
             });
             rl.on('line', (line) => {
                 try {
+                    // SEC-C-1: First message from Host is the challenge; respond with nonce.
+                    if (!authResolved) {
+                        const msg: { challenge?: string } = JSON.parse(line);
+                        if (msg.challenge === undefined) {
+                            const err = new Error('[IPC Terminal] Expected challenge from Host but got unexpected message.');
+                            reject(err);
+                            this.client?.destroy();
+                            return;
+                        }
+                        // Send auth response with the nonce from lock file.
+                        this.client!.write(JSON.stringify({ auth: nonce }) + '\n');
+                        authResolved = true;
+                        console.error(`[IPC Terminal] Connected to Host on port ${port}`);
+                        resolve();
+                        return;
+                    }
+
                     const res: IpcResponse = JSON.parse(line);
                     const pending = this.pendingRequests.get(res.id);
                     if (pending) {

@@ -21,6 +21,16 @@ import { registerPromptHandlers } from './prompt-provider';
 import { HealthMonitor } from './health-monitor';
 import { registerToolHandlers, ToolDeps, executeTool } from './tool-dispatcher';
 
+const CYNAPX_INSTRUCTIONS = `
+# Cynapx Operator Manual (Phase 14)
+You are operating the Cynapx high-performance code knowledge engine. Adhere to these protocol invariants:
+1. **Investigation-First**: Before modifying code, always use 'analyze_impact' and 'get_symbol_details'.
+2. **Context Efficiency**: For symbols with >100 lines, 'get_symbol_details' automatically prunes the output. Use 'read_file' with specific offsets for full logic.
+3. **Architectural Integrity**: Use 'check_architecture_violations' after major refactors.
+4. **Data Purity**: Follow the Zero-Pollution principle. No local configs unless asked.
+5. **Consistency**: Monitor 'graph://ledger'. Use 'check_consistency --repair' if sums do not match.
+`;
+
 export class McpServer {
     private sdkServer: SdkMcpServer;
     public workspaceManager: WorkspaceManager;
@@ -49,15 +59,7 @@ export class McpServer {
             version
         }, {
             capabilities: { resources: {}, tools: {}, prompts: {} },
-            instructions: `
-# Cynapx Operator Manual (Phase 14)
-You are operating the Cynapx high-performance code knowledge engine. Adhere to these protocol invariants:
-1. **Investigation-First**: Before modifying code, always use 'analyze_impact' and 'get_symbol_details'.
-2. **Context Efficiency**: For symbols with >100 lines, 'get_symbol_details' automatically prunes the output. Use 'read_file' with specific offsets for full logic.
-3. **Architectural Integrity**: Use 'check_architecture_violations' after major refactors.
-4. **Data Purity**: Follow the Zero-Pollution principle. No local configs unless asked.
-5. **Consistency**: Monitor 'graph://ledger'. Use 'check_consistency --repair' if sums do not match.
-`
+            instructions: CYNAPX_INSTRUCTIONS
         });
 
         this.workspaceManager = workspaceManager || new WorkspaceManager();
@@ -136,6 +138,35 @@ You are operating the Cynapx high-performance code knowledge engine. Adhere to t
 
     public async connectTransport(transport: any) {
         await this.sdkServer.connect(transport);
+    }
+
+    /**
+     * H-1: Create a fresh SdkMcpServer instance with all handlers registered for a new HTTP session.
+     * The MCP SDK allows connect() only once per server instance, so each StreamableHTTP session
+     * needs its own SdkMcpServer. This method constructs one and wires up all tool/resource/prompt
+     * handlers so each session behaves identically to the singleton stdio server.
+     */
+    public createSdkServerForSession(): SdkMcpServer {
+        let version = "1.0.5";
+        try {
+            const pkgPath = path.join(__dirname, '..', '..', 'package.json');
+            if (fs.existsSync(pkgPath)) version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
+        } catch (e) {}
+
+        const sessionServer = new SdkMcpServer({
+            name: "cynapx",
+            version
+        }, {
+            capabilities: { resources: {}, tools: {}, prompts: {} },
+            instructions: CYNAPX_INSTRUCTIONS
+        });
+
+        // Re-register all handlers on the per-session server using shared deps
+        registerResourceHandlers(sessionServer, this.waitUntilReady.bind(this), this.getContext.bind(this));
+        registerToolHandlers(sessionServer, this.toolDeps);
+        registerPromptHandlers(sessionServer, this.waitUntilReady.bind(this));
+
+        return sessionServer;
     }
 
     /**
