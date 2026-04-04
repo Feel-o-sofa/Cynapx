@@ -101,9 +101,9 @@ describe('executeTool: get_symbol_details', () => {
         const deps = makeDeps();
         // getContext().graphEngine.getNodeByQualifiedName returns null (default mock)
         const result = await executeTool('get_symbol_details', { qualified_name: undefined }, deps);
-        // Symbol not found should yield an error response, not throw
+        // M-4 validation: empty/undefined qualified_name is caught before DB lookup
         expect(result.isError).toBe(true);
-        expect(result.content[0].text).toMatch(/not found/i);
+        expect(result.content[0].text).toMatch(/qualified_name|not found/i);
     });
 });
 

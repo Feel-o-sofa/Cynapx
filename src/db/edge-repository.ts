@@ -18,6 +18,8 @@ export class EdgeRepository {
     private _inAllStmt?: Statement;
     private _inTypedStmt?: Statement;
     private _deleteStmt?: Statement;
+    private _inWithCallerStmt?: Statement;
+    private _outWithCalleeStmt?: Statement;
 
     constructor(private db: Database) { }
 
@@ -61,6 +63,38 @@ export class EdgeRepository {
             this._inAllStmt = this.db.prepare('SELECT * FROM edges WHERE to_id = ?');
         }
         return (this._inAllStmt.all(nodeId) as any[]).map(row => this.mapRowToEdge(row));
+    }
+
+    /**
+     * Returns incoming edges for a node, including the caller's qualified_name via JOIN.
+     * Avoids N+1 getNodeById calls in get_callers.
+     */
+    public getIncomingEdgesWithCallerNames(nodeId: number): { qualified_name: string | null; call_site_line: number | null }[] {
+        if (!this._inWithCallerStmt) {
+            this._inWithCallerStmt = this.db.prepare(
+                `SELECT n.qualified_name, e.call_site_line
+                 FROM edges e
+                 LEFT JOIN nodes n ON n.id = e.from_id
+                 WHERE e.to_id = ?`
+            );
+        }
+        return this._inWithCallerStmt.all(nodeId) as { qualified_name: string | null; call_site_line: number | null }[];
+    }
+
+    /**
+     * Returns outgoing edges for a node, including the callee's qualified_name via JOIN.
+     * Avoids N+1 getNodeById calls in get_callees.
+     */
+    public getOutgoingEdgesWithCalleeNames(nodeId: number): { qualified_name: string | null; call_site_line: number | null }[] {
+        if (!this._outWithCalleeStmt) {
+            this._outWithCalleeStmt = this.db.prepare(
+                `SELECT n.qualified_name, e.call_site_line
+                 FROM edges e
+                 LEFT JOIN nodes n ON n.id = e.to_id
+                 WHERE e.from_id = ?`
+            );
+        }
+        return this._outWithCalleeStmt.all(nodeId) as { qualified_name: string | null; call_site_line: number | null }[];
     }
 
     public deleteEdgesByNodeId(nodeId: number): void {

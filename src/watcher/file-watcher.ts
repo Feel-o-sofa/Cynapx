@@ -17,6 +17,8 @@ export class FileWatcher implements Disposable {
     private timer: NodeJS.Timeout | null = null;
     private readonly BATCH_THRESHOLD = 50;
     private readonly BATCH_WINDOW_MS = 1000;
+    private syncFailedCount = 0;
+    private static readonly MAX_SYNC_RETRIES = 3;
 
     constructor(
         private pipeline: UpdatePipeline,
@@ -67,12 +69,22 @@ export class FileWatcher implements Disposable {
             this.timer = null;
         }
 
-        if (currentQueue.length >= this.BATCH_THRESHOLD) {
-            console.log(`Large change detected (${currentQueue.length} files). Triggering Git sync instead of individual processing.`);
+        if (currentQueue.length >= this.BATCH_THRESHOLD || this.syncFailedCount > 0) {
+            if (this.syncFailedCount > 0) {
+                console.log(`Retrying failed Git sync (attempt after ${this.syncFailedCount} failure(s))...`);
+            } else {
+                console.log(`Large change detected (${currentQueue.length} files). Triggering Git sync instead of individual processing.`);
+            }
             try {
                 await this.pipeline.syncWithGit(this.projectPath);
+                this.syncFailedCount = 0;
             } catch (error) {
-                console.error('Error during Git-based catch-up from watcher:', error);
+                this.syncFailedCount++;
+                if (this.syncFailedCount >= FileWatcher.MAX_SYNC_RETRIES) {
+                    console.error(`[ERROR] Git sync has failed ${this.syncFailedCount} consecutive time(s) — index may be inconsistent. Manual intervention may be required.`, error);
+                } else {
+                    console.error(`Error during Git-based catch-up from watcher (failure ${this.syncFailedCount}/${FileWatcher.MAX_SYNC_RETRIES}):`, error);
+                }
             }
         } else {
             console.log(`Processing ${currentQueue.length} buffered file changes...`);

@@ -46,6 +46,39 @@ export class UpdatePipeline {
 
     public async reTagAllNodes(): Promise<void> {
         const nodes = this.nodeRepo.getAllNodes();
+
+        // 1. First pass: Initialize node map with baseline tags (no DB write yet)
+        const nodeMap = new Map<number, { node: CodeNode, tags: string[] }>();
+        for (const node of nodes) {
+            if (node.id) {
+                const baselineTags = StructuralTagger.tagNode(node);
+                nodeMap.set(node.id, { node, tags: baselineTags });
+            }
+        }
+
+        // 2. Propagation passes: yield to event loop between passes to avoid blocking
+        const MAX_PASSES = 5;
+        for (let i = 0; i < MAX_PASSES; i++) {
+            await new Promise<void>(resolve => setImmediate(resolve)); // yield event loop
+            let changed = false;
+            for (const [id, data] of nodeMap.entries()) {
+                const outgoing = this.edgeRepo.getOutgoingEdges(id).filter(e => e.edge_type === 'inherits' || e.edge_type === 'implements');
+
+                for (const edge of outgoing) {
+                    const parentData = nodeMap.get(edge.to_id);
+                    if (parentData && parentData.tags.length > 0) {
+                        const newTags = StructuralTagger.mergeRoles(data.tags, parentData.tags);
+                        if (newTags.length !== data.tags.length || !newTags.every(t => data.tags.includes(t))) {
+                            data.tags = newTags;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if (!changed) break;
+        }
+
+        // 3. Persist updated tags to DB under write lock
         const previousLock = this.writeLock;
         let resolveLock: () => void;
         this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
@@ -53,36 +86,6 @@ export class UpdatePipeline {
 
         try {
             const txn = this.db.transaction(() => {
-                // 1. First pass: Initialize node map with baseline tags
-                const nodeMap = new Map<number, { node: CodeNode, tags: string[] }>();
-                for (const node of nodes) {
-                    if (node.id) {
-                        const baselineTags = StructuralTagger.tagNode(node);
-                        nodeMap.set(node.id, { node, tags: baselineTags });
-                    }
-                }
-
-                // 2. Second pass: Propagate roles via inheritance (multiple passes to reach stability)
-                for (let i = 0; i < 5; i++) {
-                    let changed = false;
-                    for (const [id, data] of nodeMap.entries()) {
-                        const outgoing = this.edgeRepo.getOutgoingEdges(id).filter(e => e.edge_type === 'inherits' || e.edge_type === 'implements');
-
-                        for (const edge of outgoing) {
-                            const parentData = nodeMap.get(edge.to_id);
-                            if (parentData && parentData.tags.length > 0) {
-                                const newTags = StructuralTagger.mergeRoles(data.tags, parentData.tags);
-                                if (newTags.length !== data.tags.length || !newTags.every(t => data.tags.includes(t))) {
-                                    data.tags = newTags;
-                                    changed = true;
-                                }
-                            }
-                        }
-                    }
-                    if (!changed) break;
-                }
-
-                // 3. Persist updated tags to DB
                 const updateStmt = this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?');
                 for (const [id, data] of nodeMap.entries()) {
                     updateStmt.run(JSON.stringify(data.tags), id);
@@ -173,16 +176,20 @@ export class UpdatePipeline {
     public async processBatch(events: FileChangeEvent[], version: number): Promise<void> {
         console.error(`Processing batch of ${events.length} files...`);
         
-        const results = await Promise.all(events.map(async (event) => {
+        type BatchResult =
+            | { event: FileChangeEvent; delta: DeltaGraph; status: 'success' }
+            | { event: FileChangeEvent; status: 'error'; error: string };
+
+        const results = await Promise.all(events.map(async (event): Promise<BatchResult> => {
             if (event.event === 'DELETE') return { event, delta: { nodes: [], edges: [] }, status: 'success' as const };
             try {
-                const delta = this.workerPool 
+                const delta = this.workerPool
                     ? await this.workerPool.runTask({ filePath: event.file_path, commit: event.commit, version })
                     : await this.parser.parse(event.file_path, event.commit, version);
                 return { event, delta, status: 'success' as const };
             } catch (error) {
                 console.error(`Failed to parse ${event.file_path}:`, error);
-                return { event, status: 'error' as const };
+                return { event, status: 'error' as const, error: (error as Error).message ?? String(error) };
             }
         }));
 
