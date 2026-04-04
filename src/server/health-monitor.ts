@@ -44,7 +44,7 @@ export class HealthMonitor {
                         this.isChecking = false;
                     }
                 }
-            } catch { }
+            } catch (e) { console.error('[HealthMonitor] Check failed:', e); }
         }, 5 * 60 * 1000);
     }
 

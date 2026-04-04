@@ -152,17 +152,33 @@ src/
 
 ---
 
-## 3. 미완료 항목 (Phase 6)
+### Phase 6 — 기능·안정성·보안 (12차 세션, PR #15)
 
-1개 항목. 상세 내역: [`diagnostic-v4.md`](./diagnostic-v4.md)
+17개 항목 완료. 상세 내역: [`diagnostic-v4.md`](./diagnostic-v4.md)
 
-| ID | 우선순위 | 내용 | 상태 |
-|----|----------|------|------|
-| H-1 | 🟠 HIGH | MCP StreamableHTTP 다중 세션 크래시 — `SdkMcpServer` 싱글톤에 `connect()` 재호출 불가, 두 번째 클라이언트 연결 시 서버 exit(1) | ⬜ 미착수 |
+| ID | 분류 | 내용 |
+|----|------|------|
+| H-1 | 🟠 일반 | MCP StreamableHTTP 다중 세션 크래시 — 세션별 SdkMcpServer 인스턴스 생성 |
+| H-2 | 🟠 일반 | `edgeRepo as any` 캡슐화 파괴 → `public get edgeRepo()` getter 추가 |
+| M-1 | 🟡 일반 | HealthMonitor `catch {}` 예외 묵살 → `console.error` 로깅 |
+| M-2 | 🟡 일반 | MCP 모드 `console.log` stdout 오염 → `console.error` 교체 |
+| M-3 | 🟡 일반 | `BEGIN/COMMIT` raw SQL → `db.transaction()` 패턴 통일 |
+| M-4 | 🟡 일반 | mcpTransports 메모리 누수 → 세션 종료 시 SdkMcpServer까지 정리 |
+| L-1 | 🟢 일반 | `handleHotspots SELECT *` → 명시적 컬럼 선택 |
+| L-2 | 🟢 일반 | 인프라 테스트 29개 신규 (WorkspaceManager/IpcCoordinator/HealthMonitor) |
+| SEC-C-1 | 🔴 보안 | IPC 채널 인증 없음 → nonce 챌린지-응답 방식 추가 |
+| SEC-C-2 | 🔴 보안 | `initialize_project` 임의 경로 쓰기 → 홈/cwd 범위 검증 |
+| SEC-H-1 | 🟠 보안 | GET /mcp sessionId 인증 우회 → mcpSessions 맵 존재 검증 |
+| SEC-H-2 | 🟠 보안 | `get_symbol_details` null securityProvider → 파일 읽기 차단 |
+| SEC-H-3 | 🟠 보안 | IPC 메시지 크기 제한 없음 → 1MB 초과 시 연결 종료 |
+| SEC-H-4 | 🟠 보안 | LockManager DB 경로 계산 오류 → `getCentralStorageDir()` 사용 |
+| SEC-M-1 | 🟡 보안 | Rate Limiter X-Forwarded-For 스푸핑 → `socket.remoteAddress` keyGenerator |
+| SEC-M-2 | 🟡 보안 | Swagger UI 인증 없이 노출 → `NODE_ENV !== production` 조건부 등록 |
+| SEC-M-3 | 🟡 보안 | .server-port CWD 노출 → `~/.cynapx/api-server.port`로 이동 |
 
-**수정 방향**: `handleMcp()`에서 세션마다 새 `SdkMcpServer` 인스턴스를 생성하고 `registerToolHandlers()`로 핸들러 재등록.
-**관련 파일**: `src/server/api-server.ts` (handleMcp), `src/server/mcp-server.ts` (connectTransport)
-**신규 테스트**: `tests/mcp-transport.test.ts` — 동시 2개 세션 연결 후 크래시 없음 검증
+## 3. 미완료 항목
+
+없음. 모든 Phase 1–6 항목 완료.
 
 ---
 
@@ -175,7 +191,7 @@ src/
 
 ---
 
-## 5. 분석 엔진 정확도 (Phase 5 완료 기준)
+## 4. 분석 엔진 정확도 (Phase 6 완료 기준)
 
 | 항목 | 초기 | 현재 |
 |------|------|------|
@@ -183,6 +199,8 @@ src/
 | CC 정확도 | Native/JS 불일치 | `??` 추가, 양 경로 일관성 향상 |
 | purge_index 성공률 | MCP 중 실패 | 항상 성공 |
 | 엣지 타입 활용률 | 4/15 | 8/15 (`calls`, `contains`, `overrides`, `implements`, `inherits`, `defines`, `imports`, `file`) |
-| 테스트 커버리지 | 0개 | **117개** (9개 파일) |
+| 테스트 커버리지 | 0개 | **146개** (10개 파일) |
 | API 문서 | 없음 | OpenAPI 3.0.3 (`/api/docs`) |
 | 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) |
+| IPC 보안 | 인증 없음 | nonce 챌린지-응답, 1MB 메시지 크기 제한 |
+| 경로 보안 | 검증 없음 | initialize_project 홈/cwd 범위 검증, null securityProvider 차단 |

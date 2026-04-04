@@ -12,12 +12,16 @@ import rateLimit from 'express-rate-limit';
 import { z, ZodSchema } from 'zod';
 import swaggerUi from 'swagger-ui-express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { Server as SdkMcpServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { TraversalResult } from '../graph/graph-engine';
 import { CodeNode, CodeEdge } from '../types';
 import { McpServer } from './mcp-server';
 import { EngineContext } from './workspace-manager';
 import { openApiSpec } from './openapi';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
+import { getCentralStorageDir } from '../utils/paths';
 
 // --- Zod Schemas (M-4) ---
 const SymbolRefSchema = z.object({
@@ -73,14 +77,27 @@ function validate<T>(schema: ZodSchema<T>, req: Request, res: Response): T | nul
     return result.data;
 }
 
-// --- Rate limiters (H-1) ---
-const globalLimiter = rateLimit({ windowMs: 60_000, max: 100 });
-const analyzeLimiter = rateLimit({ windowMs: 60_000, max: 10 });
+// --- Rate limiters (SEC-M-1: keyGenerator fixed to socket remoteAddress to prevent X-Forwarded-For spoofing) ---
+const globalLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 100,
+    keyGenerator: (req) => req.socket.remoteAddress ?? 'unknown',
+});
+const analyzeLimiter = rateLimit({
+    windowMs: 60_000,
+    max: 10,
+    keyGenerator: (req) => req.socket.remoteAddress ?? 'unknown',
+});
+
+interface McpSession {
+    transport: StreamableHTTPServerTransport;
+    sdkServer: SdkMcpServer;
+}
 
 export class ApiServer {
     private app: express.Application;
     private mcpServer?: McpServer;
-    private mcpTransports: Map<string, StreamableHTTPServerTransport> = new Map();
+    private mcpSessions: Map<string, McpSession> = new Map();
 
     constructor(private httpsOptions?: https.ServerOptions) {
         this.app = express();
@@ -124,10 +141,11 @@ export class ApiServer {
         this.app.use((req, res, next) => {
             if (req.path.startsWith('/api/docs')) return next();
             if (req.path === '/mcp' && req.method === 'GET') {
-                // Allow if no-auth mode, or if a valid sessionId is present
+                // Allow if no-auth mode, or if a valid (known) sessionId is present
                 // (MCP Streamable HTTP uses sessionId for reconnection)
+                // SEC-H-1: validate sessionId against known sessions to prevent auth bypass
                 const sessionId = req.query['sessionId'] as string | undefined;
-                if (!AUTH_TOKEN || sessionId) return next();
+                if (!AUTH_TOKEN || (sessionId && this.mcpSessions.has(sessionId))) return next();
                 // Otherwise fall through to auth check below
             }
             const authHeader = req.headers.authorization;
@@ -150,8 +168,10 @@ export class ApiServer {
     }
 
     private setupRoutes(): void {
-        // OpenAPI / Swagger UI (no auth required for documentation)
-        this.app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec));
+        // SEC-M-2: Swagger UI exposed only in non-production environments
+        if (process.env['NODE_ENV'] !== 'production') {
+            this.app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec));
+        }
 
         this.app.all('/mcp', this.handleMcp.bind(this));
         this.app.post('/api/symbol/get', this.handleGetSymbol.bind(this));
@@ -167,19 +187,29 @@ export class ApiServer {
 
     private async handleMcp(req: Request, res: Response) {
         if (!this.mcpServer) return res.status(503).json({ error: "MCP Server not initialized" });
-        
+
         const querySid = req.query.sessionId as string;
         const headerSid = req.headers['mcp-session-id'] as string;
         const sessionId = querySid || headerSid || crypto.randomUUID();
 
-        if (this.mcpTransports.has(sessionId)) {
-            await this.mcpTransports.get(sessionId)!.handleRequest(req, res, req.body);
+        if (this.mcpSessions.has(sessionId)) {
+            await this.mcpSessions.get(sessionId)!.transport.handleRequest(req, res, req.body);
             return;
         }
+
+        // H-1: create a fresh SdkMcpServer per session — SDK only allows connect() once per instance
+        // M-4: track both transport and sdkServer together; clean up both on session end
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => sessionId });
-        this.mcpTransports.set(sessionId, transport);
-        await this.mcpServer.connectTransport(transport);
-        transport.onclose = () => this.mcpTransports.delete(sessionId);
+        const sdkServer = this.mcpServer.createSdkServerForSession();
+        const session: McpSession = { transport, sdkServer };
+        this.mcpSessions.set(sessionId, session);
+
+        transport.onclose = () => {
+            this.mcpSessions.delete(sessionId);
+            sdkServer.close().catch(() => {});
+        };
+
+        await sdkServer.connect(transport);
         await transport.handleRequest(req, res, req.body);
     }
 
@@ -313,7 +343,13 @@ export class ApiServer {
                 params.push(symbol_type);
             }
 
-            const hotspots = db.prepare(`SELECT * FROM nodes WHERE ${metric} >= ? ${typeFilter} ORDER BY ${metric} DESC LIMIT 100`).all(...params);
+            // L-1: explicit column list — no SELECT *; include the requested metric column if not already in base set
+            const baseColumns = 'qualified_name, symbol_type, file_path, start_line, end_line, loc, cyclomatic, fan_in, fan_out';
+            const baseSet = new Set(['loc', 'cyclomatic', 'fan_in', 'fan_out']);
+            const selectColumns = baseSet.has(metric) ? baseColumns : `${baseColumns}, ${metric}`;
+            const hotspots = db.prepare(
+                `SELECT ${selectColumns} FROM nodes WHERE ${metric} >= ? ${typeFilter} ORDER BY ${metric} DESC LIMIT 100`
+            ).all(...params);
             res.json({ hotspots: hotspots.map((h: any) => ({ node: this.mapToGraphNode(ctx.graphEngine!.nodeRepo.mapRowToNode(h)), metric_value: h[metric] })) });
         } catch (e: any) {
             res.status(500).json({ error_code: 'INTERNAL_ERROR', message: e.message });
@@ -383,7 +419,11 @@ export class ApiServer {
         server.listen(port, bindAddress, () => {
             const protocol = this.httpsOptions ? 'HTTPS' : 'HTTP';
             console.log(`API Server listening on ${bindAddress}:${port} (${protocol})`);
-            try { fs.writeFileSync('.server-port', String(port)); } catch(e) {}
+            // SEC-M-3: store port file in central storage dir (~/.cynapx/) instead of cwd to avoid git exposure
+            try {
+                const portFile = path.join(getCentralStorageDir(), 'api-server.port');
+                fs.writeFileSync(portFile, String(port));
+            } catch(e) {}
         });
     }
 }

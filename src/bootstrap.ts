@@ -4,6 +4,7 @@
  * See LICENSE in the project root for license information. 
  */
 import { Command } from 'commander';
+import * as crypto from 'crypto';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -105,7 +106,7 @@ async function bootstrap() {
             const updatePipeline = new UpdatePipeline(
                 ctx.dbManager!.getDb(),
                 ctx.graphEngine!.nodeRepo,
-                (ctx.graphEngine! as any).edgeRepo,
+                ctx.graphEngine!.edgeRepo,
                 compositeParser,
                 ctx.metadataRepo!,
                 gitService,
@@ -142,23 +143,24 @@ async function bootstrap() {
         const lock = await lockManager.getValidLock();
         if (!lock) {
             console.error(`[*] Host lost. Attempting promotion...`);
-            const ipcPort = await ipcCoordinator.startHost();
-            
+            const sessionNonce = crypto.randomBytes(32).toString('hex');
+            const ipcPort = await ipcCoordinator.startHost(sessionNonce);
+
             // Atomic re-check
             const finalCheck = await lockManager.getValidLock();
             if (finalCheck) {
-                await ipcCoordinator.connectToHost(finalCheck.ipcPort);
+                await ipcCoordinator.connectToHost(finalCheck.ipcPort, finalCheck.nonce);
                 return;
             }
 
-            await lockManager.acquire(ipcPort);
+            await lockManager.acquire(ipcPort, sessionNonce);
             mcpServer.promoteToHost();
-            
+
             // Re-start services for all contexts
             await startHostServices();
             mcpServer.markReady(true);
         } else {
-            await ipcCoordinator.connectToHost(lock.ipcPort);
+            await ipcCoordinator.connectToHost(lock.ipcPort, lock.nonce);
         }
     };
 
@@ -167,11 +169,11 @@ async function bootstrap() {
         if (lock && lock.pid !== process.pid) {
             console.error(`[*] Found Host (PID: ${lock.pid}). Starting Terminal mode...`);
             try {
-                await ipcCoordinator.connectToHost(lock.ipcPort); 
+                await ipcCoordinator.connectToHost(lock.ipcPort, lock.nonce);
                 mcpServer.setTerminal(ipcCoordinator);
-                ipcCoordinator.on('disconnected', () => { 
+                ipcCoordinator.on('disconnected', () => {
                     console.error("[!] Connection lost. Retrying failover...");
-                    attemptFailover().catch(() => process.exit(1)); 
+                    attemptFailover().catch(() => process.exit(1));
                 });
             } catch (err) {
                 console.error(`[!] Stale lock? Retrying...`);
@@ -179,8 +181,9 @@ async function bootstrap() {
                 return;
             }
         } else {
-            const port = await ipcCoordinator.startHost();
-            await lockManager.acquire(port);
+            const sessionNonce = crypto.randomBytes(32).toString('hex');
+            const port = await ipcCoordinator.startHost(sessionNonce);
+            await lockManager.acquire(port, sessionNonce);
             console.error(`[*] Host mode active (Singleton Lock Acquired)`);
             
             await startHostServices();

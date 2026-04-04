@@ -52,46 +52,44 @@ export class UpdatePipeline {
         await previousLock;
 
         try {
-            this.db.prepare('BEGIN').run();
-            
-            // 1. First pass: Initialize node map with baseline tags
-            const nodeMap = new Map<number, { node: CodeNode, tags: string[] }>();
-            for (const node of nodes) {
-                if (node.id) {
-                    const baselineTags = StructuralTagger.tagNode(node);
-                    nodeMap.set(node.id, { node, tags: baselineTags });
+            const txn = this.db.transaction(() => {
+                // 1. First pass: Initialize node map with baseline tags
+                const nodeMap = new Map<number, { node: CodeNode, tags: string[] }>();
+                for (const node of nodes) {
+                    if (node.id) {
+                        const baselineTags = StructuralTagger.tagNode(node);
+                        nodeMap.set(node.id, { node, tags: baselineTags });
+                    }
                 }
-            }
 
-            // 2. Second pass: Propagate roles via inheritance (multiple passes to reach stability)
-            for (let i = 0; i < 5; i++) {
-                let changed = false;
-                for (const [id, data] of nodeMap.entries()) {
-                    const outgoing = this.edgeRepo.getOutgoingEdges(id).filter(e => e.edge_type === 'inherits' || e.edge_type === 'implements');
-                    
-                    for (const edge of outgoing) {
-                        const parentData = nodeMap.get(edge.to_id);
-                        if (parentData && parentData.tags.length > 0) {
-                            const newTags = StructuralTagger.mergeRoles(data.tags, parentData.tags);
-                            if (newTags.length !== data.tags.length || !newTags.every(t => data.tags.includes(t))) {
-                                data.tags = newTags;
-                                changed = true;
+                // 2. Second pass: Propagate roles via inheritance (multiple passes to reach stability)
+                for (let i = 0; i < 5; i++) {
+                    let changed = false;
+                    for (const [id, data] of nodeMap.entries()) {
+                        const outgoing = this.edgeRepo.getOutgoingEdges(id).filter(e => e.edge_type === 'inherits' || e.edge_type === 'implements');
+
+                        for (const edge of outgoing) {
+                            const parentData = nodeMap.get(edge.to_id);
+                            if (parentData && parentData.tags.length > 0) {
+                                const newTags = StructuralTagger.mergeRoles(data.tags, parentData.tags);
+                                if (newTags.length !== data.tags.length || !newTags.every(t => data.tags.includes(t))) {
+                                    data.tags = newTags;
+                                    changed = true;
+                                }
                             }
                         }
                     }
+                    if (!changed) break;
                 }
-                if (!changed) break;
-            }
 
-            // 3. Persist updated tags to DB
-            const updateStmt = this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?');
-            for (const [id, data] of nodeMap.entries()) {
-                updateStmt.run(JSON.stringify(data.tags), id);
-            }
-
-            this.db.prepare('COMMIT').run();
+                // 3. Persist updated tags to DB
+                const updateStmt = this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?');
+                for (const [id, data] of nodeMap.entries()) {
+                    updateStmt.run(JSON.stringify(data.tags), id);
+                }
+            });
+            txn();
         } catch (e) {
-            if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
             throw e;
         } finally {
             resolveLock!();
@@ -149,7 +147,7 @@ export class UpdatePipeline {
         const { event: type, file_path, commit } = event;
 
         try {
-            console.log(`Processing ${type} for ${file_path}`);
+            console.error(`Processing ${type} for ${file_path}`);
 
             let delta: DeltaGraph;
             if (type === 'ADD' || type === 'MODIFY') {
@@ -173,7 +171,7 @@ export class UpdatePipeline {
     }
 
     public async processBatch(events: FileChangeEvent[], version: number): Promise<void> {
-        console.log(`Processing batch of ${events.length} files...`);
+        console.error(`Processing batch of ${events.length} files...`);
         
         const results = await Promise.all(events.map(async (event) => {
             if (event.event === 'DELETE') return { event, delta: { nodes: [], edges: [] }, status: 'success' as const };

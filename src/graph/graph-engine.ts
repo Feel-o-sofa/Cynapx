@@ -80,8 +80,12 @@ export class GraphEngine {
 
     constructor(
         public nodeRepo: NodeRepository,
-        private edgeRepo: EdgeRepository
+        private _edgeRepo: EdgeRepository
     ) { }
+
+    public get edgeRepo(): EdgeRepository {
+        return this._edgeRepo;
+    }
 
     public invalidateCache(): void {
         this.impactCache = new LRUCache<string, { timestamp: number, results: TraversalResult[] }>(5_000);
@@ -127,18 +131,18 @@ export class GraphEngine {
     }
 
     public getOutgoingEdges(nodeId: number, edgeType?: EdgeType): CodeEdge[] {
-        return this.edgeRepo.getOutgoingEdges(nodeId, edgeType);
+        return this._edgeRepo.getOutgoingEdges(nodeId, edgeType);
     }
 
     public getIncomingEdges(nodeId: number, edgeType?: EdgeType): CodeEdge[] {
-        return this.edgeRepo.getIncomingEdges(nodeId, edgeType);
+        return this._edgeRepo.getIncomingEdges(nodeId, edgeType);
     }
 
     /**
      * Returns all edges in the knowledge graph.
      */
     public getAllEdges(): CodeEdge[] {
-        return this.edgeRepo.getAllEdges();
+        return this._edgeRepo.getAllEdges();
     }
 
     /**
@@ -155,7 +159,7 @@ export class GraphEngine {
      */
     public async performClustering(): Promise<{ clusterCount: number, nodesClustered: number }> {
         const nodes = this.nodeRepo.getAllNodes();
-        const edges = this.edgeRepo.getAllEdges();
+        const edges = this._edgeRepo.getAllEdges();
         if (nodes.length === 0) return { clusterCount: 0, nodesClustered: 0 };
 
         // Build adjacency (undirected) — O(E)
@@ -507,8 +511,8 @@ export class GraphEngine {
             if (entry.depth >= maxDepth) continue;
 
             const edges = direction === 'outgoing'
-                ? this.edgeRepo.getOutgoingEdges(entry.id, edgeType)
-                : this.edgeRepo.getIncomingEdges(entry.id, edgeType);
+                ? this._edgeRepo.getOutgoingEdges(entry.id, edgeType)
+                : this._edgeRepo.getIncomingEdges(entry.id, edgeType);
 
             for (const edge of edges) {
                 const nextId = direction === 'outgoing' ? edge.to_id : edge.from_id;
@@ -559,8 +563,8 @@ export class GraphEngine {
 
             if (entry.depth < maxDepth) {
                 const edges = direction === 'outgoing'
-                    ? this.edgeRepo.getOutgoingEdges(entry.id, edgeType)
-                    : this.edgeRepo.getIncomingEdges(entry.id, edgeType);
+                    ? this._edgeRepo.getOutgoingEdges(entry.id, edgeType)
+                    : this._edgeRepo.getIncomingEdges(entry.id, edgeType);
 
                 for (const edge of edges) {
                     const nextId = direction === 'outgoing' ? edge.to_id : edge.from_id;
