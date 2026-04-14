@@ -27,7 +27,7 @@ export class OptimizationEngine {
      * LOW    : public symbols without trait:internal — may be external API surface
      */
     public async findDeadCode(): Promise<OptimizationReport> {
-        const db = (this.graphEngine.nodeRepo as any).db;
+        const db = this.graphEngine.nodeRepo.getDb();
 
         const COMMON_FILTER = `
             WHERE fan_in = 0
@@ -53,10 +53,14 @@ export class OptimizationEngine {
 
         const highQuery = `SELECT * FROM nodes ${COMMON_FILTER} AND visibility = 'private'`;
 
+        // H-2: Removed the impossible `tags LIKE '%trait:internal%'` condition.
+        // trait:internal is only set on methods/fields, but symbol_type NOT IN ('class','interface','function')
+        // already restricts to those types — making the previous AND contradictory and always returning 0 rows.
+        // MEDIUM tier now finds public non-class/interface/function symbols with no callers that are not entry points.
         const mediumQuery = `SELECT * FROM nodes ${COMMON_FILTER}
             AND visibility = 'public'
             AND symbol_type NOT IN ('class', 'interface', 'function')
-            AND tags LIKE '%trait:internal%'`;
+            AND (tags NOT LIKE '%entry_point%' OR tags IS NULL)`;
 
         const lowQuery = `SELECT * FROM nodes ${COMMON_FILTER}
             AND visibility = 'public'
@@ -72,7 +76,7 @@ export class OptimizationEngine {
         const mediumRows: CodeNode[] = db.prepare(mediumQuery).all().map(mapRow);
         const lowRows: CodeNode[] = db.prepare(lowQuery).all().map(mapRow);
 
-        const totalSymbols: number = db.prepare('SELECT COUNT(*) as count FROM nodes').get().count;
+        const totalSymbols: number = (db.prepare('SELECT COUNT(*) as count FROM nodes').get() as { count: number }).count;
 
         return {
             high: highRows,

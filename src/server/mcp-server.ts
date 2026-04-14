@@ -22,7 +22,7 @@ import { HealthMonitor } from './health-monitor';
 import { registerToolHandlers, ToolDeps, executeTool } from './tool-dispatcher';
 
 const CYNAPX_INSTRUCTIONS = `
-# Cynapx Operator Manual (Phase 14)
+# Cynapx Operator Manual (v1.0.6)
 You are operating the Cynapx high-performance code knowledge engine. Adhere to these protocol invariants:
 1. **Investigation-First**: Before modifying code, always use 'analyze_impact' and 'get_symbol_details'.
 2. **Context Efficiency**: For symbols with >100 lines, 'get_symbol_details' automatically prunes the output. Use 'read_file' with specific offsets for full logic.

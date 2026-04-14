@@ -31,6 +31,7 @@ type PendingRequest = {
 
 export class PythonEmbeddingProvider implements EmbeddingProvider {
     private child: ChildProcess | null = null;
+    private rl: readline.Interface | null = null;
     private ready: boolean = false;
     private pendingRequest: PendingRequest = null;
     private dimensions: number = 896;
@@ -48,7 +49,13 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
         console.error(`[Embedding] Starting Python ML Sidecar...`);
         this.child = spawn('python', [scriptPath]);
 
-        const reader = readline.createInterface({ input: this.child.stdout! });
+        // M-7: Close any existing readline interface before creating a new one
+        if (this.rl) {
+            this.rl.close();
+            this.rl = null;
+        }
+        this.rl = readline.createInterface({ input: this.child.stdout! });
+        const reader = this.rl;
         this.child.stderr!.on('data', (d) => console.error(`[Python-ML] ${d.toString().trim()}`));
 
         reader.on('line', (line) => {
@@ -143,6 +150,11 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
         this.pendingRequest = null;
         if (pendingOnDispose) {
             pendingOnDispose.reject(new Error('PythonEmbeddingProvider disposed'));
+        }
+        // M-7: Close readline interface to prevent resource leak
+        if (this.rl) {
+            this.rl.close();
+            this.rl = null;
         }
         if (this.child) {
             this.child.kill();

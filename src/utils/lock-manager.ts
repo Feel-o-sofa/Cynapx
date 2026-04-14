@@ -98,7 +98,7 @@ export class LockManager {
             status: 'active',
             nonce,
         };
-        fs.writeFileSync(this.lockPath, JSON.stringify(this.currentLock, null, 2), 'utf8');
+        fs.writeFileSync(this.lockPath, JSON.stringify(this.currentLock, null, 2), { encoding: 'utf8', mode: 0o600 });
     }
 
     /**
@@ -107,7 +107,7 @@ export class LockManager {
     public async heartbeat(): Promise<void> {
         if (!this.currentLock) return;
         this.currentLock.lastHeartbeat = new Date().toISOString();
-        fs.writeFileSync(this.lockPath, JSON.stringify(this.currentLock, null, 2), 'utf8');
+        fs.writeFileSync(this.lockPath, JSON.stringify(this.currentLock, null, 2), { encoding: 'utf8', mode: 0o600 });
     }
 
     /**
@@ -128,7 +128,7 @@ export class LockManager {
     public async signalShutdown(): Promise<void> {
         if (this.currentLock) {
             this.currentLock.status = 'shutting-down';
-            fs.writeFileSync(this.lockPath, JSON.stringify(this.currentLock, null, 2), 'utf8');
+            fs.writeFileSync(this.lockPath, JSON.stringify(this.currentLock, null, 2), { encoding: 'utf8', mode: 0o600 });
         }
     }
 }
