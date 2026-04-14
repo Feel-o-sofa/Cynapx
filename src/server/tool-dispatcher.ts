@@ -18,7 +18,7 @@ import { EmbeddingProvider } from '../indexer/embedding-manager.js';
 import { RemediationEngine } from '../graph/remediation-engine.js';
 import { IpcCoordinator } from './ipc-coordinator.js';
 import { ConsistencyChecker } from '../indexer/consistency-checker.js';
-import { addToRegistry, getDatabasePath, readRegistry, removeFromRegistry, ANCHOR_FILE } from '../utils/paths.js';
+import { addToRegistry, getDatabasePath, getProjectHash, readRegistry, removeFromRegistry, ANCHOR_FILE } from '../utils/paths.js';
 
 export interface ToolDeps {
     waitUntilReady: () => Promise<void>;
@@ -150,12 +150,13 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
             },
             {
                 name: "export_graph",
-                description: "Generate Mermaid visualization and structural summary.",
+                description: "Export the dependency graph. Supports json (Mermaid summary), graphml, and dot formats.",
                 inputSchema: {
                     type: "object",
                     properties: {
                         root_qname: { type: "string" },
-                        max_depth: { type: "number", default: 2 }
+                        max_depth: { type: "number", default: 2 },
+                        format: { type: "string", enum: ["json", "graphml", "dot"], default: "json" }
                     }
                 }
             },
@@ -211,6 +212,9 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
     });
 }
 
+// H-6: Module-level mutex flag to prevent concurrent initialization across sessions
+let initializationInProgress = false;
+
 export async function executeTool(name: string, args: any, deps: ToolDeps): Promise<any> {
     if (deps.isTerminal() && deps.getTerminalCoordinator()) {
         return deps.getTerminalCoordinator()!.forwardExecuteTool(name, args);
@@ -223,20 +227,94 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             return { content: [{ type: "text", text: JSON.stringify({ status: deps.getIsInitialized() ? "ALREADY_INITIALIZED" : "INITIALIZATION_REQUIRED", current_path: process.cwd(), registered_projects: registry }, null, 2) }] };
         }
         case 'initialize_project': {
-            let target = args.path ? path.resolve(args.path) : process.cwd();
-            if (args.path) {
-                const homeDir = os.homedir();
-                const allowed = [homeDir, process.cwd()];
-                if (!allowed.some(base => target === base || target.startsWith(base + path.sep))) {
-                    return { isError: true, content: [{ type: 'text', text: `Path '${target}' is outside allowed boundaries (home dir or cwd).` }] };
-                }
+            // H-6: Prevent concurrent initialization across multiple MCP sessions
+            if (initializationInProgress) {
+                return { content: [{ type: 'text', text: 'Initialization already in progress. Please wait and retry.' }], isError: true };
             }
-            if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
-            if (!args.zero_pollution) fs.writeFileSync(path.join(target, ANCHOR_FILE), JSON.stringify({ created_at: new Date().toISOString() }));
-            addToRegistry(target);
-            if (deps.onInitialize) await deps.onInitialize(target);
-            deps.markReady(true);
-            return { content: [{ type: "text", text: `Successfully initialized project at ${target}. Analysis engine is now active.` }] };
+            initializationInProgress = true;
+            try {
+
+            const mode = args.mode ?? 'current';
+
+            if (mode !== 'current' && mode !== 'existing' && mode !== 'custom') {
+                return { content: [{ type: 'text', text: `Unknown mode: ${mode}. Valid values: current, existing, custom` }], isError: true };
+            }
+
+            // Determine raw path
+            const rawPath: string = args.path ? args.path : process.cwd();
+
+            // H-5: Resolve symlinks before boundary check
+            let resolvedPath: string;
+            try {
+                resolvedPath = fs.realpathSync(rawPath);
+            } catch {
+                // Path doesn't exist yet — realpathSync fails on non-existent paths.
+                // Fall back to path.resolve() for new project paths.
+                resolvedPath = path.resolve(rawPath);
+            }
+
+            if (mode === 'current') {
+                // Existing behavior: use args.path resolved or fall back to cwd.
+                // Apply boundary check when an explicit path was provided.
+                if (args.path) {
+                    const homeDir = os.homedir();
+                    const allowed = [homeDir, process.cwd()];
+                    if (!allowed.some(base => resolvedPath === base || resolvedPath.startsWith(base + path.sep))) {
+                        return { isError: true, content: [{ type: 'text', text: `Path '${resolvedPath}' is outside allowed boundaries (home dir or cwd).` }] };
+                    }
+                }
+                const target = resolvedPath;
+                if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+                if (!args.zero_pollution) fs.writeFileSync(path.join(target, ANCHOR_FILE), JSON.stringify({ created_at: new Date().toISOString() }));
+                addToRegistry(target);
+                if (deps.onInitialize) await deps.onInitialize(target);
+                deps.markReady(true);
+                return { content: [{ type: "text", text: `Successfully initialized project at ${target}. Analysis engine is now active.` }] };
+
+            } else if (mode === 'existing') {
+                // Re-use existing indexed DB without re-scanning the filesystem.
+                // Apply boundary check when an explicit path was provided.
+                if (args.path) {
+                    const homeDir = os.homedir();
+                    const allowed = [homeDir, process.cwd()];
+                    if (!allowed.some(base => resolvedPath === base || resolvedPath.startsWith(base + path.sep))) {
+                        return { isError: true, content: [{ type: 'text', text: `Path '${resolvedPath}' is outside allowed boundaries (home dir or cwd).` }] };
+                    }
+                }
+                const target = resolvedPath;
+                // Mount the project but skip full init if DB already has data.
+                await deps.workspaceManager.mountProject(target);
+                const hash = getProjectHash(target);
+                const existingCtx = deps.workspaceManager.getContextByHash(hash);
+                if (existingCtx && existingCtx.dbManager) {
+                    // Already initialized — skip re-indexing
+                    deps.markReady(true);
+                    return { content: [{ type: 'text', text: `Project already indexed. Use mode 'current' to re-index.` }] };
+                }
+                // Not yet initialized — fall through to normal initialization
+                if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+                if (!args.zero_pollution) fs.writeFileSync(path.join(target, ANCHOR_FILE), JSON.stringify({ created_at: new Date().toISOString() }));
+                addToRegistry(target);
+                if (deps.onInitialize) await deps.onInitialize(target);
+                deps.markReady(true);
+                return { content: [{ type: "text", text: `Successfully initialized project at ${target}. Analysis engine is now active.` }] };
+
+            } else {
+                // mode === 'custom'
+                // Use args.projectPath / args.path as-is. Skip home/cwd boundary check.
+                // Still apply the symlink fix (realpathSync already applied above).
+                const target = resolvedPath;
+                if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
+                if (!args.zero_pollution) fs.writeFileSync(path.join(target, ANCHOR_FILE), JSON.stringify({ created_at: new Date().toISOString() }));
+                addToRegistry(target);
+                if (deps.onInitialize) await deps.onInitialize(target);
+                deps.markReady(true);
+                return { content: [{ type: "text", text: `Successfully initialized project at ${target}. Analysis engine is now active.` }] };
+            }
+
+            } finally {
+                initializationInProgress = false;
+            }
         }
         case 'search_symbols': {
             const limit = args.limit || 10;
@@ -330,7 +408,8 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             }
             const node = ctx.graphEngine.getNodeByQualifiedName(args.qualified_name);
             if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-            const results = ctx.graphEngine.traverse(node.id!, 'BFS', { direction: 'incoming', maxDepth: args.max_depth || 3, useCache: args.use_cache });
+            const depth = Math.min(typeof args.max_depth === 'number' && !Number.isNaN(args.max_depth) ? args.max_depth : 5, 20);
+            const results = ctx.graphEngine.traverse(node.id!, 'BFS', { direction: 'incoming', maxDepth: depth, useCache: args.use_cache });
             const formatted = results.map(r => ({
                 node: r.node.qualified_name,
                 distance: r.distance,
@@ -372,13 +451,20 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
         }
         case 'get_related_tests': {
             const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
             const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
             if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
             const tests = ctx.graphEngine!.getIncomingEdges(node.id!).filter(e => e.edge_type === 'tests').map(e => ctx.graphEngine!.getNodeById(e.from_id)?.qualified_name);
             return { content: [{ type: "text", text: JSON.stringify(tests, null, 2) }] };
         }
         case 'check_architecture_violations': {
-            const violations = await deps.getContext().archEngine!.checkViolations();
+            const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
+            const violations = await ctx.archEngine!.checkViolations();
             return { content: [{ type: "text", text: JSON.stringify(violations, null, 2) }] };
         }
         case 'get_remediation_strategy': {
@@ -392,11 +478,25 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             return { content: [{ type: "text", text: JSON.stringify(strategy, null, 2) }] };
         }
         case 'propose_refactor': {
-            const proposal = await deps.getContext().refactorEngine!.proposeRefactor(args.qualified_name);
+            if (typeof args.qualified_name !== 'string' || args.qualified_name.trim() === '') {
+                return { content: [{ type: 'text', text: 'Invalid argument: qualified_name must be a non-empty string.' }], isError: true };
+            }
+            const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
+            const proposal = await ctx.refactorEngine!.proposeRefactor(args.qualified_name);
             return { content: [{ type: "text", text: JSON.stringify(proposal, null, 2) }] };
         }
         case 'get_risk_profile': {
-            const profile = await deps.getContext().refactorEngine!.getRiskProfile(args.qualified_name);
+            if (typeof args.qualified_name !== 'string' || args.qualified_name.trim() === '') {
+                return { content: [{ type: 'text', text: 'Invalid argument: qualified_name must be a non-empty string.' }], isError: true };
+            }
+            const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
+            const profile = await ctx.refactorEngine!.getRiskProfile(args.qualified_name);
             return { content: [{ type: "text", text: JSON.stringify(profile, null, 2) }] };
         }
         case 'get_hotspots': {
@@ -409,7 +509,7 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             if (!ALLOWED_METRICS.includes(args.metric as AllowedMetric)) {
                 return { isError: true, content: [{ type: 'text', text: `Invalid metric '${args.metric}'. Allowed values: ${ALLOWED_METRICS.join(', ')}` }] };
             }
-            if (args.threshold !== undefined && typeof args.threshold !== 'number') {
+            if (args.threshold !== undefined && (typeof args.threshold !== 'number' || Number.isNaN(args.threshold))) {
                 return { isError: true, content: [{ type: 'text', text: 'Invalid argument: threshold must be a number.' }] };
             }
             // C-1: null guard for context
@@ -422,7 +522,11 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             return { content: [{ type: "text", text: JSON.stringify(hotspots, null, 2) }] };
         }
         case 'find_dead_code': {
-            const report = await deps.getContext().optEngine!.findDeadCode();
+            const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
+            const report = await ctx.optEngine!.findDeadCode();
             const totalDead = report.summary.deadSymbols;
             let text = `Found ${totalDead} potential dead code symbols:\n`;
             text += `- HIGH confidence (private, fan_in=0): ${report.summary.highConfidenceDead} symbols\n`;
@@ -453,13 +557,60 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
         }
         case 'export_graph': {
             const ctx = deps.getContext();
-            const mermaid = await ctx.graphEngine!.exportToMermaid({ rootQName: args.root_qname, maxDepth: args.max_depth || 2 });
-            const data = await ctx.graphEngine!.getGraphData({ rootQName: args.root_qname, maxDepth: args.max_depth || 2 });
-            const summary = `### Graph Export: ${args.root_qname || 'Root'}\n- Nodes: ${data.nodes.length}\n- Edges: ${data.edges.length}\n\n${mermaid}\n`;
-            return { content: [{ type: "text", text: summary }] };
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
+            const format = args.format ?? 'json';
+            const graphOptions = { rootQName: args.root_qname, maxDepth: args.max_depth || 2 };
+
+            if (format === 'json') {
+                const mermaid = await ctx.graphEngine!.exportToMermaid(graphOptions);
+                const data = await ctx.graphEngine!.getGraphData(graphOptions);
+                const summary = `### Graph Export: ${args.root_qname || 'Root'}\n- Nodes: ${data.nodes.length}\n- Edges: ${data.edges.length}\n\n${mermaid}\n`;
+                return { content: [{ type: "text", text: summary }] };
+            } else if (format === 'graphml') {
+                const data = await ctx.graphEngine!.getGraphData(graphOptions);
+                const nodeMap = new Map<number, string>(
+                    data.nodes.map(n => [n.id!, n.qualified_name ?? String(n.id!)])
+                );
+                let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
+                xml += '<graphml xmlns="http://graphml.graphdrawing.org/graphml">\n';
+                xml += '  <graph id="G" edgedefault="directed">\n';
+                for (const n of data.nodes) {
+                    xml += `    <node id="${escapeXml(n.qualified_name ?? String(n.id!))}"/>\n`;
+                }
+                for (const e of data.edges) {
+                    const src = nodeMap.get(e.from_id) ?? String(e.from_id);
+                    const tgt = nodeMap.get(e.to_id) ?? String(e.to_id);
+                    xml += `    <edge source="${escapeXml(src)}" target="${escapeXml(tgt)}"/>\n`;
+                }
+                xml += '  </graph>\n</graphml>';
+                return { content: [{ type: 'text', text: xml }] };
+            } else if (format === 'dot') {
+                const data = await ctx.graphEngine!.getGraphData(graphOptions);
+                const nodeMap = new Map<number, string>(
+                    data.nodes.map(n => [n.id!, n.qualified_name ?? String(n.id!)])
+                );
+                let dot = 'digraph G {\n';
+                for (const n of data.nodes) {
+                    dot += `  "${escapeDot(n.qualified_name ?? String(n.id!))}";\n`;
+                }
+                for (const e of data.edges) {
+                    const src = nodeMap.get(e.from_id) ?? String(e.from_id);
+                    const tgt = nodeMap.get(e.to_id) ?? String(e.to_id);
+                    dot += `  "${escapeDot(src)}" -> "${escapeDot(tgt)}";\n`;
+                }
+                dot += '}';
+                return { content: [{ type: 'text', text: dot }] };
+            } else {
+                return { content: [{ type: 'text', text: `Unknown format: ${format}. Supported: json, graphml, dot` }], isError: true };
+            }
         }
         case 'check_consistency': {
             const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
             const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, ctx.gitService!, ctx.updatePipeline!, ctx.projectPath);
             const results = await checker.validate(args.repair, args.force);
             return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
@@ -467,6 +618,9 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
         case 'purge_index': {
             if (!args.confirm) return { content: [{ type: "text", text: "WARNING: This deletes all index data. Confirm with 'confirm: true'" }] };
             const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
             const dbPath = getDatabasePath(ctx.projectPath);
             if (deps.onPurge) await deps.onPurge();
             ctx.dbManager?.dispose();
@@ -476,17 +630,43 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             return { content: [{ type: "text", text: "Project index purged successfully. Server in PENDING mode." }] };
         }
         case 're_tag_project': {
-            const pipeline = deps.getContext().updatePipeline!;
+            const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
+            // H-6: Terminal mode guard — long-running operations unavailable in Terminal mode
+            if (deps.isTerminal()) {
+                return { content: [{ type: 'text', text: 'This operation is not available in Terminal mode.' }], isError: true };
+            }
+            const pipeline = ctx.updatePipeline!;
             await pipeline.reTagAllNodes();
             return { content: [{ type: "text", text: "Successfully re-tagged all nodes." }] };
         }
         case 'backfill_history': {
-            const pipeline = deps.getContext().updatePipeline!;
+            const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
+            // H-6: Terminal mode guard — long-running operations unavailable in Terminal mode
+            if (deps.isTerminal()) {
+                return { content: [{ type: 'text', text: 'This operation is not available in Terminal mode.' }], isError: true };
+            }
+            const pipeline = ctx.updatePipeline!;
             await pipeline.mapHistoryToProject();
             return { content: [{ type: "text", text: "Successfully backfilled Git history." }] };
         }
         case 'discover_latent_policies': {
-            const policies = await deps.getContext().policyDiscoverer!.discoverPolicies(args.threshold, args.min_count);
+            const ctx = deps.getContext();
+            if (!ctx) {
+                return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
+            }
+            if (args.min_confidence !== undefined && (typeof args.min_confidence !== 'number' || Number.isNaN(args.min_confidence) || args.min_confidence < 0 || args.min_confidence > 1)) {
+                return { content: [{ type: 'text', text: 'Invalid argument: min_confidence must be a number between 0 and 1.' }], isError: true };
+            }
+            if (args.max_policies !== undefined && (typeof args.max_policies !== 'number' || Number.isNaN(args.max_policies) || args.max_policies < 1 || !Number.isInteger(args.max_policies))) {
+                return { content: [{ type: 'text', text: 'Invalid argument: max_policies must be a positive integer.' }], isError: true };
+            }
+            const policies = await ctx.policyDiscoverer!.discoverPolicies(args.threshold, args.min_count);
             return { content: [{ type: "text", text: JSON.stringify(policies, null, 2) }] };
         }
         default: throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
@@ -507,4 +687,12 @@ function mergeResultsRRF(keywordNodes: any[], vectorNodes: any[], limit: number)
     applyRRF(keywordNodes);
     applyRRF(vectorNodes);
     return Array.from(scores.entries()).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id]) => nodeMap.get(id));
+}
+
+function escapeXml(s: string): string {
+    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function escapeDot(s: string): string {
+    return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }

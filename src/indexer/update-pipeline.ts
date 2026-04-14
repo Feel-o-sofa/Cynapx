@@ -45,47 +45,53 @@ export class UpdatePipeline {
     private crossProjectResolver?: CrossProjectResolver;
 
     public async reTagAllNodes(): Promise<void> {
-        const nodes = this.nodeRepo.getAllNodes();
-
-        // 1. First pass: Initialize node map with baseline tags (no DB write yet)
-        const nodeMap = new Map<number, { node: CodeNode, tags: string[] }>();
-        for (const node of nodes) {
-            if (node.id) {
-                const baselineTags = StructuralTagger.tagNode(node);
-                nodeMap.set(node.id, { node, tags: baselineTags });
-            }
-        }
-
-        // 2. Propagation passes: yield to event loop between passes to avoid blocking
-        const MAX_PASSES = 5;
-        for (let i = 0; i < MAX_PASSES; i++) {
-            await new Promise<void>(resolve => setImmediate(resolve)); // yield event loop
-            let changed = false;
-            for (const [id, data] of nodeMap.entries()) {
-                const outgoing = this.edgeRepo.getOutgoingEdges(id).filter(e => e.edge_type === 'inherits' || e.edge_type === 'implements');
-
-                for (const edge of outgoing) {
-                    const parentData = nodeMap.get(edge.to_id);
-                    if (parentData && parentData.tags.length > 0) {
-                        const newTags = StructuralTagger.mergeRoles(data.tags, parentData.tags);
-                        if (newTags.length !== data.tags.length || !newTags.every(t => data.tags.includes(t))) {
-                            data.tags = newTags;
-                            changed = true;
-                        }
-                    }
-                }
-            }
-            if (!changed) break;
-        }
-
-        // 3. Persist updated tags to DB under write lock
+        // Acquire write lock before starting the transaction so concurrent
+        // processBatch() calls cannot interleave with our multi-pass propagation.
         const previousLock = this.writeLock;
         let resolveLock: () => void;
         this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
         await previousLock;
 
         try {
+            // Wrap the entire 5-pass propagation + persist in a single atomic
+            // transaction.  better-sqlite3 is fully synchronous, so no await /
+            // setImmediate is needed (or permitted) inside the transaction body.
             const txn = this.db.transaction(() => {
+                const nodes = this.nodeRepo.getAllNodes();
+
+                // Pass 0: build node map with baseline tags
+                const nodeMap = new Map<number, { node: CodeNode, tags: string[] }>();
+                for (const node of nodes) {
+                    if (node.id) {
+                        const baselineTags = StructuralTagger.tagNode(node);
+                        nodeMap.set(node.id, { node, tags: baselineTags });
+                    }
+                }
+
+                // Passes 1-5: propagate tags through inheritance / implements edges
+                const MAX_PASSES = 5;
+                for (let i = 0; i < MAX_PASSES; i++) {
+                    let changed = false;
+                    for (const [id, data] of nodeMap.entries()) {
+                        const outgoing = this.edgeRepo.getOutgoingEdges(id).filter(
+                            e => e.edge_type === 'inherits' || e.edge_type === 'implements'
+                        );
+
+                        for (const edge of outgoing) {
+                            const parentData = nodeMap.get(edge.to_id);
+                            if (parentData && parentData.tags.length > 0) {
+                                const newTags = StructuralTagger.mergeRoles(data.tags, parentData.tags);
+                                if (newTags.length !== data.tags.length || !newTags.every(t => data.tags.includes(t))) {
+                                    data.tags = newTags;
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    if (!changed) break;
+                }
+
+                // Final: persist all updated tags
                 const updateStmt = this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?');
                 for (const [id, data] of nodeMap.entries()) {
                     updateStmt.run(JSON.stringify(data.tags), id);

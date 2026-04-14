@@ -422,7 +422,7 @@ export class ApiServer {
             // SEC-M-3: store port file in central storage dir (~/.cynapx/) instead of cwd to avoid git exposure
             try {
                 const portFile = path.join(getCentralStorageDir(), 'api-server.port');
-                fs.writeFileSync(portFile, String(port));
+                fs.writeFileSync(portFile, String(port), { mode: 0o600 });
             } catch(e) {}
         });
     }

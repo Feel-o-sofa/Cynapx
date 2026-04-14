@@ -7,6 +7,18 @@ import { Database } from 'better-sqlite3';
 import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
 
 /**
+ * Safely parses a JSON string, returning a fallback value on parse failure or empty input.
+ */
+function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
+    if (!value) return fallback;
+    try {
+        return JSON.parse(value) as T;
+    } catch {
+        return fallback;
+    }
+}
+
+/**
  * NodeRepository handles CRUD operations for the 'nodes' table.
  */
 export class NodeRepository {
@@ -215,7 +227,7 @@ export class NodeRepository {
             last_updated_commit: row.last_updated_commit,
             version: row.version,
             checksum: row.checksum,
-            modifiers: row.modifiers ? JSON.parse(row.modifiers) : undefined,
+            modifiers: row.modifiers ? safeJsonParse<string[]>(row.modifiers, []) : undefined,
             signature: row.signature,
             return_type: row.return_type,
             field_type: row.field_type,
@@ -227,8 +239,8 @@ export class NodeRepository {
             fan_out_dynamic: row.fan_out_dynamic,
             cluster_id: row.cluster_id,
             remote_project_path: row.remote_project_path,
-            tags: row.tags ? JSON.parse(row.tags) : undefined,
-            history: row.history ? JSON.parse(row.history) : undefined
+            tags: row.tags ? safeJsonParse<string[]>(row.tags, []) : undefined,
+            history: row.history ? safeJsonParse<{ hash: string; message: string; author: string; date: string }[]>(row.history, []) : undefined
         };
     }
 }

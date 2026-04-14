@@ -105,6 +105,11 @@ export class FileWatcher implements Disposable {
      * Stops the watcher.
      */
     public dispose(): void {
+        // M-8: Clear the flush timer before stopping to prevent post-dispose callbacks
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
         if (this.watcher) {
             this.watcher.close();
             this.watcher = null;
