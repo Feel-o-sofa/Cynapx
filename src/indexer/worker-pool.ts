@@ -29,6 +29,8 @@ export class WorkerPool implements Disposable {
     private workers: Worker[] = [];
     private freeWorkers: Worker[] = [];
     private queue: QueueEntry[] = [];
+    /** Maps each Worker to its currently executing task (replaces (worker as any).currentTask). */
+    private readonly taskMap = new WeakMap<Worker, ActiveTask | null>();
 
     /** Maximum number of tasks that may sit in the pending queue. */
     private _maxQueueSize: number;
@@ -65,11 +67,11 @@ export class WorkerPool implements Disposable {
         const worker = new Worker(this.workerPath, { execArgv: this.workerExecArgv });
 
         worker.on('message', (result) => {
-            const active: ActiveTask | null = (worker as any).currentTask ?? null;
+            const active: ActiveTask | null = this.taskMap.get(worker) ?? null;
             if (!active) return; // should not happen, but guard anyway
 
             clearTimeout(active.timeoutHandle);
-            (worker as any).currentTask = null;
+            this.taskMap.set(worker, null);
 
             // Return worker to the free pool before processing the next item
             this.freeWorkers.push(worker);
@@ -84,7 +86,7 @@ export class WorkerPool implements Disposable {
 
         worker.on('error', (err) => {
             console.error('Worker error:', err);
-            const active: ActiveTask | null = (worker as any).currentTask ?? null;
+            const active: ActiveTask | null = this.taskMap.get(worker) ?? null;
             this.replaceWorker(worker, active, err);
         });
 
@@ -150,11 +152,11 @@ export class WorkerPool implements Disposable {
             const timeoutErr = new Error(
                 `WorkerPool task timed out after ${TASK_TIMEOUT_MS}ms`
             );
-            this.replaceWorker(worker, (worker as any).currentTask ?? null, timeoutErr);
+            this.replaceWorker(worker, this.taskMap.get(worker) ?? null, timeoutErr);
         }, TASK_TIMEOUT_MS);
 
         const active: ActiveTask = { entry, timeoutHandle };
-        (worker as any).currentTask = active;
+        this.taskMap.set(worker, active);
         worker.postMessage(entry.task);
     }
 
@@ -170,7 +172,7 @@ export class WorkerPool implements Disposable {
 
         // Terminate all workers (clear in-flight timeouts first)
         for (const worker of this.workers) {
-            const active: ActiveTask | null = (worker as any).currentTask ?? null;
+            const active: ActiveTask | null = this.taskMap.get(worker) ?? null;
             if (active) {
                 clearTimeout(active.timeoutHandle);
                 if (!active.entry.settled) {

@@ -171,6 +171,43 @@ describe('executeTool: get_related_tests', () => {
 });
 
 // ---------------------------------------------------------------------------
+// backfill_history
+// ---------------------------------------------------------------------------
+
+describe('executeTool: backfill_history', () => {
+    it('returns isError when context is missing', async () => {
+        const deps = makeDeps({ getContext: vi.fn().mockReturnValue(null) });
+        const result = await executeTool('backfill_history', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/No active project/i);
+    });
+
+    it('returns isError in Terminal mode', async () => {
+        const deps = makeDeps({ isTerminal: vi.fn().mockReturnValue(true) });
+        const result = await executeTool('backfill_history', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/Terminal mode/i);
+    });
+
+    it('calls mapHistoryToProject and returns success when context + pipeline exist', async () => {
+        const mapHistoryToProject = vi.fn().mockResolvedValue(undefined);
+        const deps = makeDeps({
+            getContext: vi.fn().mockReturnValue({
+                graphEngine: {
+                    getNodeByQualifiedName: vi.fn().mockReturnValue(null),
+                    nodeRepo: { searchSymbols: vi.fn().mockReturnValue([]) },
+                },
+                updatePipeline: { mapHistoryToProject },
+                projectPath: '/mock/project',
+            }),
+        });
+        const result = await executeTool('backfill_history', {}, deps);
+        expect(mapHistoryToProject).toHaveBeenCalledOnce();
+        expect(result.isError).toBeUndefined();
+    });
+});
+
+// ---------------------------------------------------------------------------
 // get_setup_context — embeddings field
 // ---------------------------------------------------------------------------
 

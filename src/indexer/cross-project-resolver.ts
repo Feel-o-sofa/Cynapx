@@ -7,7 +7,22 @@ import SQLiteDatabase from 'better-sqlite3';
 import * as fs from 'fs';
 import { NodeRepository } from '../db/node-repository';
 import { readRegistry, toCanonical } from '../utils/paths';
-import { CodeNode } from '../types';
+import { CodeNode, SymbolType, Visibility } from '../types';
+
+/** Raw SQLite row from a remote project's nodes table */
+interface RemoteNodeRow {
+    qualified_name: string;
+    symbol_type: SymbolType;
+    language: string;
+    file_path: string;
+    start_line: number;
+    end_line: number;
+    visibility: Visibility;
+    signature?: string;
+    return_type?: string;
+    tags?: string;
+    history?: string;
+}
 
 /**
  * CrossProjectResolver handles resolution of symbols that live in other
@@ -47,7 +62,7 @@ export class CrossProjectResolver {
                     const remoteStmt = remoteDb.prepare(
                         'SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LIKE ? COLLATE NOCASE LIMIT 1'
                     );
-                    const remoteMatch = remoteStmt.get(canonicalQName, `%#${symbolName}`) as any;
+                    const remoteMatch = remoteStmt.get(canonicalQName, `%#${symbolName}`) as RemoteNodeRow | undefined;
 
                     if (remoteMatch) {
                         const shadowNodeId = this.nodeRepo.createNode({

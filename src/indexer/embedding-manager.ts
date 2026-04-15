@@ -263,8 +263,8 @@ export class EmbeddingManager {
         const modelName = this.provider.getModelName();
 
         try {
-            const schema = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'node_embeddings'").get() as any;
-            if (schema && !schema.sql.includes(`float[${dim}]`)) {
+            const schema = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'node_embeddings'").get() as { sql?: string } | undefined;
+            if (schema?.sql && !schema.sql.includes(`float[${dim}]`)) {
                 console.error(`[EmbeddingManager] Dimension mismatch detected. Recreating node_embeddings table (Target: ${dim})...
 `);
                 this.db.exec('DROP TABLE IF EXISTS node_embeddings');
@@ -279,7 +279,7 @@ export class EmbeddingManager {
             SELECT n.* FROM nodes n
             LEFT JOIN embedding_metadata m ON n.id = m.node_id
             WHERE m.node_id IS NULL OR n.checksum != m.checksum
-        `).all() as any[];
+        `).all() as (CodeNode & { id: number })[];
 
         if (nodesToProcess.length === 0) return;
 

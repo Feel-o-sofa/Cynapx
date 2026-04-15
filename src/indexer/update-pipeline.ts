@@ -376,7 +376,7 @@ export class UpdatePipeline {
             events = await Promise.all(allFiles.map(async (f) => {
                 const fullPath = path.resolve(projectPath, f);
                 const commit = await this.gitService!.getLatestCommit(fullPath).catch(() => currentHead);
-                return { event: 'ADD' as any, file_path: fullPath, commit };
+                return { event: 'ADD' as ChangeType, file_path: fullPath, commit };
             }));
         } else {
             // Incremental: process only files changed since last indexed commit
@@ -385,7 +385,7 @@ export class UpdatePipeline {
             events = await Promise.all(diffs.map(async (d) => {
                 const fullPath = path.resolve(projectPath, d.file);
                 const commit = d.status === 'DELETE' ? 'deleted' : await this.gitService!.getLatestCommit(fullPath);
-                return { event: d.status as any, file_path: fullPath, commit };
+                return { event: d.status as ChangeType, file_path: fullPath, commit };
             }));
         }
 

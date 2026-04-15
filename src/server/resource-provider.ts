@@ -12,6 +12,11 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { EngineContext } from './workspace-manager';
 
+/** SQLite COUNT(*) row shape */
+interface CountRow { count: number; }
+/** Cluster row shape from logical_clusters table */
+interface ClusterRow { id: number; [key: string]: unknown; }
+
 export function registerResourceHandlers(
     sdkServer: SdkMcpServer,
     waitUntilReady: () => Promise<void>,
@@ -36,9 +41,9 @@ export function registerResourceHandlers(
             return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(ctx.metadataRepo!.getLedgerStats(), null, 2) }] };
         }
         if (uri === "graph://summary") {
-            const nodeCount = (db.prepare("SELECT COUNT(*) as count FROM nodes").get() as any).count;
-            const edgeCount = (db.prepare("SELECT COUNT(*) as count FROM edges").get() as any).count;
-            const fileCount = (db.prepare("SELECT COUNT(DISTINCT file_path) as count FROM nodes").get() as any).count;
+            const nodeCount = (db.prepare("SELECT COUNT(*) as count FROM nodes").get() as CountRow).count;
+            const edgeCount = (db.prepare("SELECT COUNT(*) as count FROM edges").get() as CountRow).count;
+            const fileCount = (db.prepare("SELECT COUNT(DISTINCT file_path) as count FROM nodes").get() as CountRow).count;
             return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ nodes: nodeCount, edges: edgeCount, files: fileCount, project: ctx.projectPath, last_updated: new Date().toISOString() }, null, 2) }] };
         }
         if (uri === "graph://hotspots") {
@@ -48,8 +53,8 @@ export function registerResourceHandlers(
         }
         if (uri === "graph://clusters") {
             const clusters = db.prepare("SELECT * FROM logical_clusters").all();
-            const result = clusters.map((c: any) => {
-                const count = (db.prepare("SELECT COUNT(*) as count FROM nodes WHERE cluster_id = ?").get(c.id) as any).count;
+            const result = (clusters as ClusterRow[]).map((c) => {
+                const count = (db.prepare("SELECT COUNT(*) as count FROM nodes WHERE cluster_id = ?").get(c.id) as CountRow).count;
                 return { ...c, node_count: count };
             });
             return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(result, null, 2) }] };

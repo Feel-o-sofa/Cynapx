@@ -6,6 +6,16 @@
 import { Database, Statement } from 'better-sqlite3';
 import { CodeEdge, EdgeType } from '../types';
 
+/** Raw SQLite row from the edges table */
+interface EdgeRow {
+    id: number;
+    from_id: number;
+    to_id: number;
+    edge_type: EdgeType;
+    dynamic: 0 | 1;
+    call_site_line: number | null;
+}
+
 /**
  * EdgeRepository handles CRUD operations for the 'edges' table.
  */
@@ -36,7 +46,7 @@ export class EdgeRepository {
         if (!this._allStmt) {
             this._allStmt = this.db.prepare('SELECT * FROM edges');
         }
-        return (this._allStmt.all() as any[]).map(row => this.mapRowToEdge(row));
+        return (this._allStmt.all() as EdgeRow[]).map(row => this.mapRowToEdge(row));
     }
 
     public getOutgoingEdges(nodeId: number, edgeType?: EdgeType): CodeEdge[] {
@@ -44,12 +54,12 @@ export class EdgeRepository {
             if (!this._outTypedStmt) {
                 this._outTypedStmt = this.db.prepare('SELECT * FROM edges WHERE from_id = ? AND edge_type = ?');
             }
-            return (this._outTypedStmt.all(nodeId, edgeType) as any[]).map(row => this.mapRowToEdge(row));
+            return (this._outTypedStmt.all(nodeId, edgeType) as EdgeRow[]).map(row => this.mapRowToEdge(row));
         }
         if (!this._outAllStmt) {
             this._outAllStmt = this.db.prepare('SELECT * FROM edges WHERE from_id = ?');
         }
-        return (this._outAllStmt.all(nodeId) as any[]).map(row => this.mapRowToEdge(row));
+        return (this._outAllStmt.all(nodeId) as EdgeRow[]).map(row => this.mapRowToEdge(row));
     }
 
     public getIncomingEdges(nodeId: number, edgeType?: EdgeType): CodeEdge[] {
@@ -57,12 +67,12 @@ export class EdgeRepository {
             if (!this._inTypedStmt) {
                 this._inTypedStmt = this.db.prepare('SELECT * FROM edges WHERE to_id = ? AND edge_type = ?');
             }
-            return (this._inTypedStmt.all(nodeId, edgeType) as any[]).map(row => this.mapRowToEdge(row));
+            return (this._inTypedStmt.all(nodeId, edgeType) as EdgeRow[]).map(row => this.mapRowToEdge(row));
         }
         if (!this._inAllStmt) {
             this._inAllStmt = this.db.prepare('SELECT * FROM edges WHERE to_id = ?');
         }
-        return (this._inAllStmt.all(nodeId) as any[]).map(row => this.mapRowToEdge(row));
+        return (this._inAllStmt.all(nodeId) as EdgeRow[]).map(row => this.mapRowToEdge(row));
     }
 
     /**

@@ -6,6 +6,11 @@
 import * as ts from 'typescript';
 import * as fs from 'fs';
 import { CodeParser, DeltaGraph, RawCodeEdge } from './types';
+
+/** Augments ts.Symbol with the optional `parent` property used internally by the TS compiler */
+interface SymbolWithParent extends ts.Symbol {
+    parent?: ts.Symbol;
+}
 import { CodeNode, SymbolType, Visibility } from '../types';
 import { MetricsCalculator } from './metrics-calculator';
 import { calculateChecksum } from '../utils/checksum';
@@ -84,8 +89,8 @@ export class TypeScriptParser implements CodeParser {
                     if (ts.isMethodDeclaration(node) &&
                         (ts.isClassDeclaration(node.parent) || ts.isClassExpression(node.parent))) {
                         const parentClass = node.parent;
-                        if ((parentClass as any).name) {
-                            const classSymbol = this.typeChecker?.getSymbolAtLocation((parentClass as any).name);
+                        if (parentClass.name) {
+                            const classSymbol = this.typeChecker?.getSymbolAtLocation(parentClass.name);
                             if (classSymbol) {
                                 const classQName = toCanonical(this.getName(classSymbol));
                                 edges.push({
@@ -289,7 +294,7 @@ export class TypeScriptParser implements CodeParser {
         let current: ts.Symbol | undefined = symbol;
         while (current && current.getName() !== '__export' && current.getName() !== 'default' && !(current.flags & ts.SymbolFlags.Module)) {
             parts.unshift(current.getName());
-            current = (current as any).parent;
+            current = (current as SymbolWithParent).parent;
         }
 
         const decl = symbol.valueDeclaration || symbol.declarations?.[0];
@@ -302,8 +307,8 @@ export class TypeScriptParser implements CodeParser {
         while (parent && !ts.isClassDeclaration(parent) && !ts.isMethodDeclaration(parent) && !ts.isFunctionDeclaration(parent)) {
             parent = parent.parent;
         }
-        if (parent && (parent as any).name) {
-            return this.typeChecker?.getSymbolAtLocation((parent as any).name);
+        if (parent && 'name' in parent && (parent as ts.NamedDeclaration).name) {
+            return this.typeChecker?.getSymbolAtLocation((parent as ts.NamedDeclaration).name!);
         }
         return undefined;
     }
