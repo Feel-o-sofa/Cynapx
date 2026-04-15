@@ -1,6 +1,6 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-15 (Phase 8 + 통합 테스트 완료)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-15 (Phase 9 개선 과제 추가)
 > **대상 버전**: v1.0.6
 
 ---
@@ -257,7 +257,54 @@ src/
 
 ---
 
-## 4. 분석 엔진 정확도 (Phase 8 완료 기준)
+## 5. Phase 9 개선 과제 (2026-04-15 기준 미구현)
+
+Phase 8 완료 + 통합 테스트(56/56) 결과를 바탕으로 도출한 차기 개선 항목.  
+통합 테스트 중 발견된 기능 공백(★), 코드 정적 분석 결과(☆)로 구분한다.
+
+### 🔴 HIGH — 실제 기능 공백
+
+| ID | 항목 | 파일 | 발견 경위 | 상세 |
+|----|------|------|-----------|------|
+| P9-H-1 | **`get_related_tests` 항상 빈 배열 반환** ★ | `src/server/tool-dispatcher.ts:452`, `src/indexer/typescript-parser.ts` | 통합 테스트 — 모든 심볼에 대해 `[]` 반환 | 도구 코드는 `edge_type === 'tests'` 엣지를 조회하지만 TypeScript 파서가 이 엣지 타입을 **한 번도 생성하지 않는다**. `*.test.ts`/`*.spec.ts` 파일 내 `describe()`/`it()` 호출을 분석해 대응 프로덕션 심볼에 `tests` 엣지를 연결하는 로직 자체가 없음. **해결**: (a) 파서에 테스트 파일 전용 분석 패스 추가 후 `tests` 엣지 생성, 또는 (b) 파일명 컨벤션(`foo.ts` ↔ `foo.test.ts`) 기반 링킹 레이어 구현. |
+| P9-H-2 | **WorkerPool `maxQueueSize=100` 고정 — 100개 초과 파일 무음 누락** ★ | `src/indexer/worker-pool.ts:40,122` | 통합 테스트 — 120개 파일 프로젝트에서 20개 파일 `"queue is full"` 오류로 누락 | 생성자 옵션으로 설정 가능하지만 `bootstrap.ts`가 기본값(100)을 그대로 사용. 101번째 이후 파일은 오류를 로깅하고 조용히 건너뜀 — `processBatch()` 호출자도 이 실패를 집계하지 않아 누락 여부를 알 수 없음. **해결**: `processBatch()` 전에 프로젝트 파일 수를 카운트해 `maxQueueSize`를 동적으로 설정, 또는 파일 목록을 100개 청크로 나눠 순차 `processBatch()` 호출. |
+
+---
+
+### 🟡 MEDIUM — 기능 있지만 제한적
+
+| ID | 항목 | 파일 | 발견 경위 | 상세 |
+|----|------|------|-----------|------|
+| P9-M-1 | **`check_architecture_violations` — 레이어 규칙 하드코딩** ★ | `src/graph/architecture-engine.ts` | 통합 테스트 — 반환 결과가 엔진 내부 고정 규칙에만 의존 | `ArchitectureEngine.checkViolations()`는 실행되지만 프로젝트별 레이어 정의(예: `server → graph → db` 단방향)를 외부에서 주입할 방법이 없다. 모든 프로젝트가 동일한 내장 규칙을 공유함. **해결**: `initialize_project`에 `archRulesPath` 옵션 추가, 또는 프로젝트 루트 `arch-rules.json`을 자동 탐색해 `ArchitectureEngine`에 주입. |
+| P9-M-2 | **비-TypeScript 파일 인덱싱 없음** ★ | `src/indexer/update-pipeline.ts`, `src/indexer/worker-pool.ts` | 통합 테스트 — `YAML`/`JSON`/`.md`/`.gitignore` 등 조용히 건너뜀 | 인덱싱된 64개 노드는 TS 파일만 해당; CI/CD 워크플로우(`*.yml`), `package.json`, `tsconfig.json` 등 설정 파일은 `"No parser found"` 메시지와 함께 무시됨. 코드 분석 맥락에서 중요한 의존성 정보가 누락될 수 있음. **해결**: 경량 "metadata-only" 파서 추가 — JSON(name/version/dependencies), YAML(job steps), Markdown(링크/코드블록) 정도만 추출해 `file` 타입 노드로 등록. |
+| P9-M-3 | **Embedding Manager Python sidecar 부재 시 상태 불투명** ☆ | `src/indexer/embedding-manager.ts` | 정적 분석 — sidecar 없을 때 `refreshAll()` 백그라운드 오류만 로깅 | Python sidecar(`cynapx-embed`)가 없으면 `refreshAll()`이 백그라운드 `catch`에서 오류를 출력하고 종료. `search_symbols`의 시맨틱 검색 경로가 **silently disabled** 되어 사용자/에이전트가 임베딩이 동작 중인지 아닌지 알 수 없음. `get_setup_context` 응답에도 임베딩 상태가 반영되지 않음. **해결**: `EmbeddingManager`에 `isAvailable(): boolean` 상태 메서드 추가, `get_setup_context` 도구 응답에 `"embeddings": "enabled"/"disabled"` 필드 포함. |
+| P9-M-4 | **`scripts/integration-test.js` `.gitignore` 우회 필요** ★ | `.gitignore`, `scripts/integration-test.js` | 통합 테스트 운영 — 매 커밋마다 `git add -f` 필요 | 현재 `.gitignore`가 `scripts/*.js` 또는 유사 패턴을 차단해 `git add -f`로만 추적 가능. 통합 테스트 자산임에도 정식 버전 관리되지 않아 팀 협업 시 유실 위험이 있음. **해결**: `.gitignore`에 `!scripts/integration-test.js` 예외 추가, 또는 파일을 `tests/integration/` 디렉토리로 이동해 vitest `integration` 설정 suite로 통합. |
+
+---
+
+### 🟢 LOW — 기술 부채 정리
+
+| ID | 항목 | 파일(수) | 발견 경위 | 상세 |
+|----|------|----------|-----------|------|
+| P9-L-1 | **`as any` 캐스트 34개 — 타입 안전성 부채** ☆ | 11개 파일 (`edge-repository.ts` 5, `typescript-parser.ts` 5, `node-repository.ts` 4, 기타) | 정적 분석 | Phase 7 diagnostic-v6 L-1/L-2 항목으로 지적됐으나 미해결. 대부분 DB 레이어와 파서에 집중돼 있어 런타임 오류 위험은 낮지만 타입 안전성 보장이 없음. `better-sqlite3` 반환 타입 명시(`RunResult`, `Statement<Params>`) + 파서 AST 타입 정의로 순차 제거 가능. |
+| P9-L-2 | **`backfill_history` 실 git 데이터 정확도 미검증** ★ | `src/server/tool-dispatcher.ts:645`, `src/indexer/update-pipeline.ts:108` | 통합 테스트 — 도구 크래시 없음, 반환값 내용 미확인 | 통합 테스트에서 `backfill_history`가 오류 없이 완료됐음을 확인했지만, 실제 다중 커밋 히스토리가 있는 파일에서 반환되는 `history` 배열의 정확성(hash, author, date 필드)은 검증하지 않았다. **해결**: 통합 테스트에 커밋 히스토리 3개 이상인 파일을 대상으로 `backfill_history` 후 DB에서 직접 `history` 컬럼을 쿼리해 구조 검증하는 어서션 추가. |
+| P9-L-3 | **`diagnostic-v7.md` 미작성 — 다음 진단 사이클 없음** ☆ | `agent_docs/` | 프로세스 | Phase 8 + PR #18 이후 상태를 반영한 새 진단 문서가 없다. 현재 `diagnostic-v6.md`에 통합 테스트 결과(Section 7)가 추가됐지만, `P9-H-1`(테스트 엣지 없음), `P9-H-2`(큐 오버플로우) 등 새로 발견된 이슈들이 공식 진단 문서에 기록되지 않음. **해결**: Phase 9 구현 착수 전 `diagnostic-v7.md` 작성 — 20개 도구 재평가 + 4관점 정적 분석 + P9 항목 우선순위 책정. |
+
+---
+
+### Phase 9 권장 실행 순서
+
+```
+Week 1:  P9-M-4 (.gitignore 정리)  →  P9-L-3 (diagnostic-v7.md 작성)
+Week 2:  P9-H-2 (WorkerPool 동적 큐)  →  P9-H-1 (get_related_tests 구현)
+Week 3:  P9-M-3 (Embedding 상태 노출)  →  P9-M-1 (arch-rules 외부 설정)
+Week 4:  P9-L-1 (as any 34개 제거)  →  P9-L-2 (backfill_history 검증)
+Week 5:  P9-M-2 (비-TS 파일 인덱싱) — 독립 스코프, 일정 유동
+```
+
+---
+
+## 6. 분석 엔진 정확도 (Phase 8 완료 기준)
 
 | 항목 | 초기 | 현재 |
 |------|------|------|
