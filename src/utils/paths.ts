@@ -35,8 +35,20 @@ export interface ProjectEntry {
     name: string;
     path: string;
     db_path: string;
+    /** ISO timestamp of last completed index run */
     last_indexed_at?: string;
     last_accessed_at: string;
+    /** Number of code nodes in the index at last index completion */
+    node_count?: number;
+    /** Number of edges in the index at last index completion */
+    edge_count?: number;
+    /** Cynapx version that produced the current index */
+    cynapx_version?: string;
+    /**
+     * Health status — populated by `cynapx-admin doctor`.
+     * 'ok' | 'stale' (DB file missing or project path gone)
+     */
+    status?: 'ok' | 'stale';
 }
 
 export function getProjectName(projectPath: string): string {
@@ -95,6 +107,35 @@ export function removeFromRegistry(projectPath: string): void {
         fs.writeFileSync(tmpPath, JSON.stringify(newRegistry, null, 2), 'utf8');
         fs.renameSync(tmpPath, registryPath);
     }
+}
+
+/**
+ * Updates the registry entry for a project with post-index statistics.
+ * Called by WorkspaceManager after a successful indexing run.
+ */
+export function updateRegistryStats(
+    projectPath: string,
+    stats: { node_count: number; edge_count: number; cynapx_version: string }
+): void {
+    const absolutePath = path.resolve(projectPath);
+    const registry = readRegistry();
+    const index = registry.findIndex(p => p.path.toLowerCase() === absolutePath.toLowerCase());
+    if (index === -1) return; // Not registered yet — addToRegistry will populate on next access
+
+    const now = new Date().toISOString();
+    registry[index] = {
+        ...registry[index],
+        last_indexed_at: now,
+        node_count: stats.node_count,
+        edge_count: stats.edge_count,
+        cynapx_version: stats.cynapx_version,
+        status: 'ok'
+    };
+
+    const registryPath = getRegistryPath();
+    const tmpPath = registryPath + '.tmp';
+    fs.writeFileSync(tmpPath, JSON.stringify(registry, null, 2), 'utf8');
+    fs.renameSync(tmpPath, registryPath);
 }
 
 export function findProjectAnchor(startPath: string): string | null {

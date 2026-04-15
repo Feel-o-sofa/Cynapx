@@ -389,7 +389,85 @@ Week 3-4
 
 ---
 
-## 7. 분석 엔진 정확도 (Phase 9 완료 기준)
+## 7. 조직 배포·관리 계획 (2026-04-15 수립)
+
+> **배경**: Cynapx v1.0.6은 기술적으로 프로덕션 수준에 도달했으나,  
+> 조직 내 다수 개발자가 공유·관리하기 위한 **레지스트리 무결성, 버전 추적,  
+> 관리자 CLI, 감사 로그** 등 운영 인프라가 부재하다.  
+> 사용자 요구사항 4가지 + 부가 제안 7가지를 이 섹션에 통합 기록한다.
+
+---
+
+### 7-1. 요구사항 정의
+
+#### 필수 요구사항 (Req 1~4) — 이번 Phase 구현 대상
+
+| ID | 요구사항 | 상세 |
+|----|---------|------|
+| **Req-1** | **레지스트리 정합성** | `~/.cynapx/registry.json` 각 항목에 `node_count`, `edge_count`, `cynapx_version`, `last_indexed_at` 필드 추가. 인덱싱 완료 시 자동 갱신. |
+| **Req-2** | **Stale 항목 감지** | DB 파일이 없거나 경로가 사라진 레지스트리 항목을 감지해 `status: "stale"` 마킹. `doctor` 명령으로 일괄 정리 가능. |
+| **Req-3** | **버전 불일치 자동 재인덱싱** | DB 내부 `index_metadata` 테이블에 `cynapx_version` 키 저장. 서버 기동 시 현재 버전과 비교해 major/minor 변경 시 자동 purge + 전체 재인덱싱 트리거. `audit.log`에 이벤트 기록. |
+| **Req-4** | **cynapx-admin CLI** | `src/cli/admin.ts` 신규. `npx cynapx-admin [command]` 형태로 서버 없이 직접 SQLite를 읽어 프로젝트 상태 출력. 명령: `status`(기본 대시보드), `list`, `inspect <name>`, `doctor`, `reindex <name>`, `purge <name>`, `unregister <name>`, `compact`. |
+
+#### 부가 제안 (A1~A3) — 이번 Phase 구현 대상
+
+| ID | 제안 | 상세 |
+|----|------|------|
+| **A-1** | **스키마 마이그레이션 레이어** | `PRAGMA user_version` 기반 마이그레이션. `src/db/database.ts`에 `runMigrations()` 추가. 마이그레이션 0→1: `index_metadata` 테이블에 `cynapx_version`·`indexed_at` 기본값 삽입. |
+| **A-2** | **프로젝트 프로파일 파일** | `~/.cynapx/profiles/{hash}.json` — `excludePatterns`, `maxFileSize`, `languageOverrides` 등 프로젝트별 인덱싱 옵션 저장. `workspace-manager.ts`에서 자동 로드해 파이프라인에 주입. |
+| **A-3** | **감사 로그 (Audit Log)** | `~/.cynapx/audit.log` NDJSON 형식. 이벤트: `index_start`, `index_complete`, `index_error`, `version_mismatch`, `reindex_triggered`, `purge`, `unregister`. `src/utils/audit-logger.ts` 신규 파일. |
+
+#### 부가 제안 (A4~A7) — 향후 Phase 이관 (문서화만)
+
+| ID | 제안 | 이관 사유 |
+|----|------|-----------|
+| **A-4** | **디스크 임계값 알림** | `~/.cynapx/` 총 사용량이 설정값(기본 1GB) 초과 시 `get_setup_context` 응답에 경고 포함. `compact` 명령으로 WAL 플러시 + `VACUUM`. → 독립 모니터링 루프 필요, 별도 Phase. |
+| **A-5** | **백업/복원 지원** | `cynapx-admin backup <name>` — DB 파일을 `~/.cynapx/backups/` 타임스탬프 디렉토리로 복사. `restore <backup-path>` — 백업 복원. → 파일 I/O 안전성(잠금 중 복사 방지) 보장 필요, 별도 Phase. |
+| **A-6** | **웹훅 이벤트 발행** | 인덱싱 완료·오류 시 `POST <webhook_url>` JSON 페이로드 발송. 프로파일 파일에 `webhookUrl` 필드 추가. → 재시도 로직·타임아웃 정책 필요, 별도 Phase. |
+| **A-7** | **멀티 머신 공유 인덱스** | 공유 네트워크 드라이브나 S3에 DB를 저장해 팀 간 인덱스 공유. → 동시성·잠금 전략이 근본적으로 다름(분산 잠금), 대형 스코프로 별도 Phase. |
+
+---
+
+### 7-2. 구현 계획 (Wave 1 + Wave 2)
+
+#### Wave 1 — 코어 인프라
+
+```
+1. A-1: src/db/database.ts — runMigrations() (PRAGMA user_version 0→1)
+2. Req-3: src/db/metadata-repository.ts — getCynapxVersion/setCynapxVersion/getIndexedAt/setIndexedAt
+3. Req-3: src/server/workspace-manager.ts — 버전 비교 + 자동 재인덱싱 로직
+4. A-3: src/utils/audit-logger.ts — NDJSON append 감사 로그
+5. A-2: src/utils/profile.ts — ProjectProfile 로드/저장
+6. Req-1+2: src/utils/paths.ts — registry 갱신 (node_count, edge_count, cynapx_version, last_indexed_at)
+7. 연동: workspace-manager.ts, update-pipeline.ts 감사 로그 + 프로파일 통합
+```
+
+#### Wave 2 — Admin CLI
+
+```
+8. Req-4: src/cli/admin.ts — status/list/inspect/doctor/reindex/purge/unregister/compact
+9. package.json — "admin": "ts-node src/cli/admin.ts" 스크립트 추가
+10. 유닛 테스트 ≥ 10개 신규
+```
+
+---
+
+### 7-3. Phase 완료 목표 수치
+
+| 항목 | 현재 (Phase 10) | 목표 |
+|------|----------------|------|
+| 단위 테스트 | 168개 | **~180개** |
+| 통합 테스트 | 56/56 | 56/56 (유지) |
+| tsc 오류 | 0 | 0 |
+| 레지스트리 메타데이터 | 부재 | node/edge count + 버전 추적 |
+| 버전 불일치 대응 | 없음 | 자동 재인덱싱 |
+| 감사 로그 | 없음 | NDJSON audit.log |
+| 프로젝트 프로파일 | 없음 | JSON 프로파일 파일 |
+| Admin CLI | 없음 | 8개 명령 |
+
+---
+
+## 8. 분석 엔진 정확도 (Phase 9 완료 기준)
 
 | 항목 | 초기 | 현재 |
 |------|------|------|

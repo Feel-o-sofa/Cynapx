@@ -12,6 +12,7 @@ import { McpServer } from './server/mcp-server';
 import { IpcCoordinator } from './server/ipc-coordinator';
 import { LockManager } from './utils/lock-manager';
 import { findProjectAnchor, addToRegistry, getDatabasePath } from './utils/paths';
+import { getAuditLogger } from './utils/audit-logger';
 import { InteractiveShell } from './server/interactive-shell';
 import { WorkspaceManager, EngineContext } from './server/workspace-manager';
 import { LanguageRegistry } from './indexer/language-registry';
@@ -134,9 +135,22 @@ async function bootstrap() {
             if (!options.noIndex) {
                 const head = await gitService.getCurrentHead();
                 const last = ctx.metadataRepo!.getLastIndexedCommit();
-                if (head !== last || options.force) {
+                if (head !== last || options.force || ctx.reindexTriggeredByVersion) {
                     console.error(`[*] Synchronizing index...`);
-                    await updatePipeline.syncWithGit(ctx.projectPath);
+                    const audit = getAuditLogger();
+                    audit.log('index_start', { project: ctx.projectPath });
+                    try {
+                        await updatePipeline.syncWithGit(ctx.projectPath);
+                        // Update version, timestamp, and registry stats (Req-1+3)
+                        const nodeCount = ctx.graphEngine!.nodeRepo.getAllNodes().length;
+                        const edgeCount = (ctx.dbManager!.getDb()
+                            .prepare('SELECT COUNT(*) as c FROM edges').get() as { c: number }).c;
+                        await workspaceManager.onIndexComplete(ctx.projectHash, nodeCount, edgeCount);
+                    } catch (err: unknown) {
+                        const msg = err instanceof Error ? err.message : String(err);
+                        audit.log('index_error', { project: ctx.projectPath, error: msg });
+                        throw err;
+                    }
                 }
             }
 

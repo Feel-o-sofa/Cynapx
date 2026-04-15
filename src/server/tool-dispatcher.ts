@@ -19,6 +19,7 @@ import { RemediationEngine } from '../graph/remediation-engine.js';
 import { IpcCoordinator } from './ipc-coordinator.js';
 import { ConsistencyChecker } from '../indexer/consistency-checker.js';
 import { addToRegistry, getDatabasePath, getProjectHash, readRegistry, removeFromRegistry, ANCHOR_FILE, toCanonical } from '../utils/paths.js';
+import { getAuditLogger } from '../utils/audit-logger.js';
 
 export interface ToolDeps {
     waitUntilReady: () => Promise<void>;
@@ -651,7 +652,12 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             ctx.dbManager?.dispose();
             deps.setIsInitialized(false);
             [dbPath, `${dbPath}-wal`, `${dbPath}-shm`].forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
-            if (args.unregister) removeFromRegistry(ctx.projectPath);
+            const auditPurge = getAuditLogger();
+            if (args.unregister) {
+                removeFromRegistry(ctx.projectPath);
+                auditPurge.log('unregister', { project: ctx.projectPath });
+            }
+            auditPurge.log('purge', { project: ctx.projectPath });
             return { content: [{ type: "text", text: "Project index purged successfully. Server in PENDING mode." }] };
         }
         case 're_tag_project': {

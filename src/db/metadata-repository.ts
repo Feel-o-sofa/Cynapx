@@ -35,6 +35,24 @@ export class MetadataRepository {
         return val ? parseInt(val, 10) : 0;
     }
 
+    public getCynapxVersion(): string | undefined {
+        const val = this.getValue('cynapx_version');
+        return val === '' ? undefined : val;
+    }
+
+    public setCynapxVersion(version: string): void {
+        this.setValue('cynapx_version', version);
+    }
+
+    public getIndexedAt(): string | undefined {
+        const val = this.getValue('indexed_at');
+        return val === '' ? undefined : val;
+    }
+
+    public setIndexedAt(isoTimestamp: string): void {
+        this.setValue('indexed_at', isoTimestamp);
+    }
+
     public getLedgerStats() {
         const metadata = {
             total_calls_count: this.getTotalCallsCount(),
