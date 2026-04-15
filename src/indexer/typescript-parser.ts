@@ -212,7 +212,76 @@ export class TypeScriptParser implements CodeParser {
         };
 
         visit(sourceFile);
+
+        if (this.isTestFile(filePath)) {
+            this.emitTestEdges(sourceFile, filePath, canonicalFilePath, edges);
+        }
+
         return { nodes, edges };
+    }
+
+    private isTestFile(filePath: string): boolean {
+        // Match *.test.ts, *.test.js, *.spec.ts, *.spec.js and tsx/jsx variants
+        if (/\.(test|spec)\.(ts|js|tsx|jsx)$/.test(filePath)) {
+            return true;
+        }
+        // Match paths containing /__tests__/ or \__tests__\
+        if (filePath.includes('/__tests__/') || filePath.includes('\\__tests__\\')) {
+            return true;
+        }
+        return false;
+    }
+
+    private inferProductionFilePath(testFilePath: string): string | null {
+        // foo.test.ts → foo.ts, foo.spec.tsx → foo.tsx, etc.
+        const testSpecMatch = testFilePath.match(/^(.*)\.(test|spec)\.(ts|js|tsx|jsx)$/);
+        if (testSpecMatch) {
+            return `${testSpecMatch[1]}.${testSpecMatch[3]}`;
+        }
+        // path/__tests__/foo.ts → path/foo.ts
+        const testsDir = testFilePath.replace('/__tests__/', '/').replace('\\__tests__\\', '\\');
+        if (testsDir !== testFilePath) {
+            return testsDir;
+        }
+        return null;
+    }
+
+    private emitTestEdges(sourceFile: ts.SourceFile, testFilePath: string, testFileQname: string, edges: RawCodeEdge[]): void {
+        const prodFilePath = this.inferProductionFilePath(testFilePath);
+        if (prodFilePath === null) return;
+
+        const prodFileQname = toCanonical(prodFilePath);
+
+        // Always emit a file-level tests edge
+        edges.push({
+            from_qname: testFileQname,
+            to_qname: prodFileQname,
+            edge_type: 'tests',
+            dynamic: false
+        });
+
+        // Walk AST looking for describe(...) calls
+        const walkForDescribe = (node: ts.Node) => {
+            if (
+                ts.isCallExpression(node) &&
+                ts.isIdentifier(node.expression) &&
+                node.expression.text === 'describe' &&
+                node.arguments.length > 0 &&
+                ts.isStringLiteral(node.arguments[0])
+            ) {
+                const describeName = (node.arguments[0] as ts.StringLiteral).text;
+                edges.push({
+                    from_qname: testFileQname,
+                    to_qname: `${prodFileQname}#${describeName}`,
+                    edge_type: 'tests',
+                    dynamic: false,
+                    target_file_hint: prodFilePath
+                });
+            }
+            ts.forEachChild(node, walkForDescribe);
+        };
+
+        walkForDescribe(sourceFile);
     }
 
     private getName(symbol: ts.Symbol): string {

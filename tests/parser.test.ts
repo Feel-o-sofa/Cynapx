@@ -194,6 +194,33 @@ describe('tree-sitter parser — JavaScript (sample.js)', () => {
     });
 });
 
+// ─── TypeScriptParser — test edge detection ──────────────────────────────────
+
+import { TypeScriptParser } from '../src/indexer/typescript-parser';
+
+describe('TypeScriptParser — test edge detection', () => {
+    it('isTestFile returns true for *.test.ts', () => {
+        const parser = new TypeScriptParser();
+        expect((parser as any).isTestFile('/src/foo.test.ts')).toBe(true);
+        expect((parser as any).isTestFile('/src/foo.spec.ts')).toBe(true);
+        expect((parser as any).isTestFile('/src/__tests__/foo.ts')).toBe(true);
+    });
+
+    it('isTestFile returns false for non-test files', () => {
+        const parser = new TypeScriptParser();
+        expect((parser as any).isTestFile('/src/foo.ts')).toBe(false);
+        expect((parser as any).isTestFile('/src/foo-test.ts')).toBe(false);
+    });
+
+    it('inferProductionFilePath strips .test suffix', () => {
+        const parser = new TypeScriptParser();
+        expect((parser as any).inferProductionFilePath('/src/foo.test.ts')).toBe('/src/foo.ts');
+        expect((parser as any).inferProductionFilePath('/src/foo.spec.ts')).toBe('/src/foo.ts');
+        expect((parser as any).inferProductionFilePath('/src/__tests__/foo.ts')).toBe('/src/foo.ts');
+        expect((parser as any).inferProductionFilePath('/src/bar.ts')).toBeNull();
+    });
+});
+
 // ─── Go ──────────────────────────────────────────────────────────────────────
 
 describe('tree-sitter parser — Go (sample.go)', () => {

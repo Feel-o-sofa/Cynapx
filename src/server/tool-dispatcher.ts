@@ -18,7 +18,7 @@ import { EmbeddingProvider } from '../indexer/embedding-manager.js';
 import { RemediationEngine } from '../graph/remediation-engine.js';
 import { IpcCoordinator } from './ipc-coordinator.js';
 import { ConsistencyChecker } from '../indexer/consistency-checker.js';
-import { addToRegistry, getDatabasePath, getProjectHash, readRegistry, removeFromRegistry, ANCHOR_FILE } from '../utils/paths.js';
+import { addToRegistry, getDatabasePath, getProjectHash, readRegistry, removeFromRegistry, ANCHOR_FILE, toCanonical } from '../utils/paths.js';
 
 export interface ToolDeps {
     waitUntilReady: () => Promise<void>;
@@ -454,10 +454,33 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
             if (!ctx) {
                 return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
             }
+            if (!args.qualified_name) {
+                return { content: [{ type: 'text', text: 'Error: qualified_name is required.' }], isError: true };
+            }
             const node = ctx.graphEngine!.getNodeByQualifiedName(args.qualified_name);
             if (!node) return { isError: true, content: [{ type: "text", text: "Symbol not found" }] };
-            const tests = ctx.graphEngine!.getIncomingEdges(node.id!).filter(e => e.edge_type === 'tests').map(e => ctx.graphEngine!.getNodeById(e.from_id)?.qualified_name);
-            return { content: [{ type: "text", text: JSON.stringify(tests, null, 2) }] };
+
+            // 1. Direct tests edges pointing to this node
+            const directTests = ctx.graphEngine!.getIncomingEdges(node.id!)
+                .filter(e => e.edge_type === 'tests')
+                .map(e => ctx.graphEngine!.getNodeById(e.from_id)?.qualified_name)
+                .filter((q): q is string => q != null);
+
+            // 2. File-level tests edges (test file → production file that contains this symbol)
+            let fileTests: string[] = [];
+            if (node.symbol_type !== 'file') {
+                const fileQname = toCanonical(node.file_path);
+                const fileNode = ctx.graphEngine!.getNodeByQualifiedName(fileQname);
+                if (fileNode) {
+                    fileTests = ctx.graphEngine!.getIncomingEdges(fileNode.id!)
+                        .filter(e => e.edge_type === 'tests')
+                        .map(e => ctx.graphEngine!.getNodeById(e.from_id)?.qualified_name)
+                        .filter((q): q is string => q != null);
+                }
+            }
+
+            const allTests = [...new Set([...directTests, ...fileTests])];
+            return { content: [{ type: "text", text: JSON.stringify(allTests, null, 2) }] };
         }
         case 'check_architecture_violations': {
             const ctx = deps.getContext();
