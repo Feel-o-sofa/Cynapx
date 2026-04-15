@@ -1,6 +1,6 @@
 # Cynapx 서브에이전트 오케스트레이션 워크플로우
 
-> **작성일**: 2026-03-31 (4차 세션)
+> **작성일**: 2026-03-31 (4차 세션) / **최종 갱신**: 2026-04-15 (Phase 8 완료)
 > **적용 범위**: 이 프로젝트의 모든 구현 작업에 적용
 
 ---
@@ -9,7 +9,7 @@
 
 | 역할 | 모델 | 책임 |
 |------|------|------|
-| **Head Agent** | Opus | 설계, 계획, 의존성 분석, 병렬체인 구성, 오케스트레이션, Gate 실패 분석 |
+| **Head Agent** | Opus or Sonnet | 설계, 계획, 의존성 분석, 병렬체인 구성, 오케스트레이션, Gate 실패 분석 |
 | **Worker Agent** | Sonnet (서브에이전트) | 할당된 체인의 atomic task 순차 실행 + self-check |
 | **Verifier Agent** | Sonnet (서브에이전트, 일회용) | Gate 검증 (체인 간 정합성, 통합 테스트) |
 
@@ -141,7 +141,48 @@ Head Agent (Opus)
 
 ---
 
-## 6. 커밋 규칙
+## 6. 통합 테스트 (실제 프로젝트 검증)
+
+MCP 도구들의 실제 동작을 실 프로젝트 인덱싱 후 검증하는 방법.
+
+### 6.1 통합 테스트 스크립트
+
+`scripts/integration-test.js` — 빌드된 dist/ 바이너리를 직접 임포트하여 HTTP 프로토콜 없이 `executeTool()`을 호출.
+
+```bash
+# 1. 빌드
+npm run build
+
+# 2. 실행 (실제 인덱싱 포함, 1~2분 소요)
+node scripts/integration-test.js
+```
+
+### 6.2 테스트 범위
+
+- **Phase 0**: 10개 도구의 pre-init null guard 검증
+- **Phase 1**: 인수 유효성 검사 (NaN, SQL injection, 잘못된 mode, 경계 밖 경로)
+- **Phase 2**: `initialize_project` 실제 인덱싱 (syncWithGit → git ls-files → 파일 파싱)
+- **Phase 3–20**: 20개 MCP 도구 전체 실 데이터 검증
+
+### 6.3 주의사항
+
+- `scripts/` 디렉토리는 `.gitignore`에 포함되어 있어 `git add -f` 로 강제 추가 필요
+- `onInitialize` 콜백에서 `UpdatePipeline` + `GitService` + `WorkerPool` 전체를 직접 설정해야 실제 인덱싱이 수행됨
+- `syncWithGit()`은 `lastCommit === null`(신규 DB)일 때 `getAllTrackedFiles()`(git ls-files)로 전체 파일을 스캔함 (PR #18에서 수정)
+
+### 6.4 Gate 정책 (Phase 8~)
+
+Phase 8부터 Gate는 2단계:
+
+| 단계 | 명령 | 통과 기준 |
+|------|------|-----------|
+| Gate 1 | `npx tsc --noEmit` | 0 errors |
+| Gate 2 | `npx vitest run` | 전체 통과 |
+| Gate 3 (선택) | `node scripts/integration-test.js` | 56/56 어서션 |
+
+---
+
+## 7. 커밋 규칙
 
 - 커밋은 **Head Agent만** 수행 (서브에이전트는 커밋하지 않음)
 - Gate 통과 후 Wave 단위로 커밋

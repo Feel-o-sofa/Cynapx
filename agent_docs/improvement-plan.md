@@ -1,6 +1,6 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-03 (10차 세션)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-15 (Phase 8 + 통합 테스트 완료)
 > **대상 버전**: v1.0.6
 
 ---
@@ -19,7 +19,7 @@ src/
 └── bootstrap.ts — CLI 진입점 및 서비스 오케스트레이션
 ```
 
-**테스트 커버리지**: 117개 (9개 파일) — Phase 5 완료 기준
+**테스트 커버리지**: 146개 (10개 파일) — Phase 8 완료 기준
 
 ---
 
@@ -176,9 +176,75 @@ src/
 | SEC-M-2 | 🟡 보안 | Swagger UI 인증 없이 노출 → `NODE_ENV !== production` 조건부 등록 |
 | SEC-M-3 | 🟡 보안 | .server-port CWD 노출 → `~/.cynapx/api-server.port`로 이동 |
 
+---
+
+### Phase 7 — 동시성·에러 처리·타입 안전성 (PR #16, 2026-04-04)
+
+13개 항목 완료. 상세 내역: [`diagnostic-v5.md`](./diagnostic-v5.md)
+
+| ID | 분류 | 내용 |
+|----|------|------|
+| C-1 | 🔴 | getContext() null 역참조 — 10개 MCP 도구 null guard 추가 (1차) |
+| H-1 | 🟠 | EmbeddingManager Python sidecar 레이스 컨디션 — PendingRequest 원자적 처리 |
+| H-2 | 🟠 | search_symbols Promise.all 실패 전파 → Promise.allSettled() + partial 결과 반환 |
+| H-3 | 🟠 | reTagAllNodes 이벤트 루프 블로킹 → setImmediate() 비동기 분할 (후속 C-2로 재수정) |
+| H-4 | 🟠 | bootstrap 예외 시 타이머/리소스 미정리 → lifecycle.track() 적용 |
+| M-1 | 🟡 | IPC timeout handler pendingRequests 누수 → timeout 핸들러에서 Map.delete() |
+| M-2 | 🟡 | file-watcher syncWithGit 실패 복구 없음 → syncFailedCount + 재시도 로직 |
+| M-3 | 🟡 | get_callers/callees N+1 쿼리 → EdgeRepository JOIN 메서드로 단일 쿼리 |
+| M-4 | 🟡 | MCP 도구 인수 런타임 검증 부재 → metric whitelist, threshold 타입 검사 등 |
+| M-5 | 🟡 | processBatch 파싱 실패 시 에러 메시지 미저장 → BatchResult discriminated union |
+| M-6 | 🟡 | get_symbol_details node 타입 가드 불완전 → 명시적 타입 체크 |
+| L-1 | 🟢 | readFileSync ENOENT/EACCES 구분 없음 → 에러 코드별 메시지 분기 |
+| L-2 | 🟢 | Array.isArray(node.tags) 불필요한 이중 체크 제거 |
+
+---
+
+### Phase 8 — MCP Tool 기능 평가 + 정적 분석 전체 수정 (PR #17, 2026-04-14)
+
+20개 항목 완료. 상세 내역: [`diagnostic-v6.md`](./diagnostic-v6.md)
+
+#### Wave 1 — Critical 수정
+
+| ID | 분류 | 내용 |
+|----|------|------|
+| C-1 | 🔴 | 10개 MCP Tool getContext() null guard 완전 적용 (get_related_tests 등 누락분 전체) |
+| C-2 | 🔴 | reTagAllNodes 5-pass → 단일 db.transaction() 원자적 실행 (setImmediate 레이스 수정) |
+| C-3 | 🔴 | export_graph format 파라미터 구현 — json/graphml/dot 실제 직렬화 |
+| H-2 | 🟠 | find_dead_code MEDIUM SQL 버그 — NOT IN + trait:internal 논리 불가능 조합 제거 |
+| H-3 | 🟠 | get_hotspots NaN threshold 거부 (Number.isNaN() 추가) |
+| H-4 | 🟠 | propose_refactor + get_risk_profile 인수 유효성 검사 추가 |
+| M-2 | 🟡 | discover_latent_policies NaN/음수 파라미터 검증 |
+| M-4 | 🟡 | analyze_impact max_depth 상한 20 적용 |
+| M-5 | 🟡 | get_callers/get_callees null qualified_name 가드 |
+
+#### Wave 2 — High/Medium 수정
+
+| ID | 분류 | 내용 |
+|----|------|------|
+| H-1 | 🟠 | initialize_project mode 파라미터 완전 구현 (current/existing/custom 3종) |
+| H-5 | 🟠 | initialize_project fs.realpathSync() 추가 — 심볼릭 링크 경계 우회 방어 |
+| H-6 | 🟠 | onInitialize 동시 호출 뮤텍스 — initializationInProgress 모듈 레벨 플래그 |
+| M-1 | 🟡 | lock 파일 + port 파일 권한 0o600 강화 (기존 0o644) |
+| M-3 | 🟡 | optimization-engine.ts (as any).db → nodeRepo.getDb() 캡슐화 복구 |
+| M-6 | 🟡 | node-repository.ts safeJsonParse\<T\>() 헬퍼 — tags/history/modifiers JSON.parse 보호 |
+| M-7 | 🟡 | embedding-manager.ts readline 인터페이스 재시작/dispose 시 close() |
+| M-8 | 🟡 | file-watcher.ts dispose() 플러시 타이머 정리 |
+| M-9 | 🟡 | mcp-server.ts CYNAPX_INSTRUCTIONS "Phase 14" → "v1.0.6" |
+| L-3 | 🟢 | re_tag_project + backfill_history Terminal 모드 명시적 에러 반환 |
+
+### 통합 테스트 + syncWithGit 버그 수정 (PR #18, 2026-04-15)
+
+실제 프로젝트를 대상으로 20개 MCP Tool 통합 테스트 수행 중 발견·수정.
+
+| 항목 | 내용 |
+|------|------|
+| 🔴 syncWithGit 신규 DB 버그 | `lastCommit === null` 시 조기 반환 → 신규 프로젝트 인덱싱 불가. `getAllTrackedFiles()` (git ls-files) 사용으로 전체 스캔 경로 추가 |
+| 🟢 통합 테스트 | `scripts/integration-test.js` — 20개 도구 × 56개 어서션, 실제 인덱싱(64 노드, 116 엣지) 후 전체 통과 |
+
 ## 3. 미완료 항목
 
-없음. 모든 Phase 1–6 항목 완료.
+없음. 모든 Phase 1–8 항목 완료. PR #18(통합 테스트 + syncWithGit) 포함.
 
 ---
 
@@ -191,7 +257,7 @@ src/
 
 ---
 
-## 4. 분석 엔진 정확도 (Phase 6 완료 기준)
+## 4. 분석 엔진 정확도 (Phase 8 완료 기준)
 
 | 항목 | 초기 | 현재 |
 |------|------|------|
@@ -199,7 +265,7 @@ src/
 | CC 정확도 | Native/JS 불일치 | `??` 추가, 양 경로 일관성 향상 |
 | purge_index 성공률 | MCP 중 실패 | 항상 성공 |
 | 엣지 타입 활용률 | 4/15 | 8/15 (`calls`, `contains`, `overrides`, `implements`, `inherits`, `defines`, `imports`, `file`) |
-| 테스트 커버리지 | 0개 | **146개** (10개 파일) |
+| 테스트 커버리지 | 0개 | **146개** (10개 파일) + 통합 테스트 56개 어서션 |
 | API 문서 | 없음 | OpenAPI 3.0.3 (`/api/docs`) |
 | 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) |
 | IPC 보안 | 인증 없음 | nonce 챌린지-응답, 1MB 메시지 크기 제한 |
