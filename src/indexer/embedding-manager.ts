@@ -191,6 +191,11 @@ export class EmbeddingManager {
     private provider: EmbeddingProvider;
     private queueTail: Promise<void> = Promise.resolve();
     private static readonly BATCH_TIMEOUT_MS = 120_000; // 2 minutes per batch
+    private _available: boolean = false;
+
+    public get isAvailable(): boolean {
+        return this._available;
+    }
 
     constructor(
         private db: Database,
@@ -242,6 +247,7 @@ export class EmbeddingManager {
         if (this.provider instanceof PythonEmbeddingProvider && this.provider.fallbackMode) {
             console.error('[EmbeddingManager] Primary provider in fallback mode — switching to NullEmbeddingProvider');
             this.provider = new NullEmbeddingProvider();
+            this._available = false;
             this.onProviderFallback?.();
         }
 
@@ -252,6 +258,7 @@ export class EmbeddingManager {
 
         // Ensure model is ready and check dimensions
         await this.provider.generate("ping");
+        this._available = true;
         const dim = this.provider.getDimensions();
         const modelName = this.provider.getModelName();
 

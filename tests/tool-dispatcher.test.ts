@@ -169,3 +169,17 @@ describe('executeTool: get_related_tests', () => {
         expect(parsed).toHaveLength(0);
     });
 });
+
+// ---------------------------------------------------------------------------
+// get_setup_context — embeddings field
+// ---------------------------------------------------------------------------
+
+describe('executeTool: get_setup_context', () => {
+    it('includes an embeddings field in the response when context exists', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_setup_context', {}, deps);
+        expect(result.isError).toBeUndefined();
+        const parsed = JSON.parse(result.content[0].text);
+        expect(parsed).toHaveProperty('embeddings');
+    });
+});

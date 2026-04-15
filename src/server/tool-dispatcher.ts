@@ -224,7 +224,8 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
     switch (name) {
         case 'get_setup_context': {
             const registry = readRegistry();
-            return { content: [{ type: "text", text: JSON.stringify({ status: deps.getIsInitialized() ? "ALREADY_INITIALIZED" : "INITIALIZATION_REQUIRED", current_path: process.cwd(), registered_projects: registry }, null, 2) }] };
+            const setupCtx = deps.getContext();
+            return { content: [{ type: "text", text: JSON.stringify({ status: deps.getIsInitialized() ? "ALREADY_INITIALIZED" : "INITIALIZATION_REQUIRED", current_path: process.cwd(), registered_projects: registry, embeddings: setupCtx?.updatePipeline?.embeddingsAvailable ? 'enabled' : 'disabled' }, null, 2) }] };
         }
         case 'initialize_project': {
             // H-6: Prevent concurrent initialization across multiple MCP sessions

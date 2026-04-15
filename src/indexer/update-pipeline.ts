@@ -44,6 +44,10 @@ export class UpdatePipeline {
     private writeLock: Promise<void> = Promise.resolve();
     private crossProjectResolver?: CrossProjectResolver;
 
+    public get embeddingsAvailable(): boolean {
+        return this.embeddingManager.isAvailable;
+    }
+
     public async reTagAllNodes(): Promise<void> {
         // Acquire write lock before starting the transaction so concurrent
         // processBatch() calls cannot interleave with our multi-pass propagation.
