@@ -3,8 +3,16 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
+import * as fs from 'fs';
 import { GraphEngine } from './graph-engine';
 import { CodeNode, CodeEdge } from '../types';
+
+export interface ArchRule {
+    name: string;
+    from: string;  // layer name matched against file path segment
+    to: string;    // layer name matched against file path segment
+    allowed: boolean;
+}
 
 export interface ArchitecturePolicy {
     id: string;
@@ -28,6 +36,7 @@ export interface ArchitectureViolation {
  */
 export class ArchitectureEngine {
     private cycleCache: { timestamp: number; cycles: number[][] } | null = null;
+    private customRules: ArchRule[] | null = null;
 
     private policies: ArchitecturePolicy[] = [
         {
@@ -118,7 +127,42 @@ export class ArchitectureEngine {
             }
         }
 
-        // 2. Circular Dependency Detection
+        // 2. Custom rule violations
+        if (this.customRules !== null) {
+            for (const edge of edges) {
+                if (!['calls', 'depends_on', 'imports'].includes(edge.edge_type)) {
+                    continue;
+                }
+
+                const fromNode = this.graphEngine.getNodeById(edge.from_id);
+                const toNode = this.graphEngine.getNodeById(edge.to_id);
+
+                if (!fromNode || !toNode) continue;
+                if (fromNode.file_path === toNode.file_path) continue;
+
+                for (const rule of this.customRules) {
+                    if (rule.allowed) continue;
+
+                    const fromPath = (fromNode.file_path ?? '').replace(/\\/g, '/');
+                    const toPath = (toNode.file_path ?? '').replace(/\\/g, '/');
+
+                    const fromSegments = fromPath.split('/');
+                    const toSegments = toPath.split('/');
+
+                    if (fromSegments.includes(rule.from) && toSegments.includes(rule.to)) {
+                        violations.push({
+                            source: fromNode,
+                            target: toNode,
+                            edge: edge,
+                            policyId: `custom:${rule.name}`,
+                            description: `Custom rule violation "${rule.name}": ${rule.from} -> ${rule.to} is not allowed`
+                        });
+                    }
+                }
+            }
+        }
+
+        // 3. Circular Dependency Detection
         const cycles = this.detectCycles();
         for (const cycle of cycles) {
             const source = this.graphEngine.getNodeById(cycle[0]);
@@ -217,6 +261,41 @@ export class ArchitectureEngine {
         if (!node.tags) return false;
         const lowerTag = tag.toLowerCase();
         return node.tags.some(t => t.toLowerCase() === lowerTag);
+    }
+
+    /**
+     * Loads custom layer rules from a JSON file.
+     * Throws if the file contains invalid JSON or is not an array.
+     */
+    public loadRules(rulesPath: string): void {
+        let raw: string;
+        try {
+            raw = fs.readFileSync(rulesPath, 'utf-8');
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            throw new Error(`arch-rules.json: failed to read file at '${rulesPath}': ${msg}`);
+        }
+
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(raw);
+        } catch (err: unknown) {
+            const msg = err instanceof Error ? err.message : String(err);
+            throw new Error(`arch-rules.json: invalid JSON in '${rulesPath}': ${msg}`);
+        }
+
+        if (!Array.isArray(parsed)) {
+            throw new Error(`arch-rules.json: expected a JSON array in '${rulesPath}', got ${typeof parsed}`);
+        }
+
+        this.customRules = parsed as ArchRule[];
+    }
+
+    /**
+     * Returns true if custom rules have been loaded.
+     */
+    public get hasCustomRules(): boolean {
+        return this.customRules !== null;
     }
 
     /**

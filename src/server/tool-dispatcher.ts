@@ -489,7 +489,8 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
                 return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
             }
             const violations = await ctx.archEngine!.checkViolations();
-            return { content: [{ type: "text", text: JSON.stringify(violations, null, 2) }] };
+            const customRulesLoaded = ctx.archEngine!.hasCustomRules;
+            return { content: [{ type: "text", text: JSON.stringify({ violations, customRulesLoaded }, null, 2) }] };
         }
         case 'get_remediation_strategy': {
             if (!args.violation) {
