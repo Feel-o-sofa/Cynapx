@@ -129,3 +129,94 @@ describe('executeTool: purge_index', () => {
         expect(text).toMatch(/WARNING|confirm/i);
     });
 });
+
+// ---------------------------------------------------------------------------
+// get_related_tests
+// ---------------------------------------------------------------------------
+
+describe('executeTool: get_related_tests', () => {
+    it('returns isError when context is missing', async () => {
+        const deps = makeDeps({ getContext: vi.fn().mockReturnValue(null) });
+        const result = await executeTool('get_related_tests', { qualified_name: 'some#Symbol' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/No active project/i);
+    });
+
+    it('returns isError when qualified_name is missing', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_related_tests', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/qualified_name/i);
+    });
+
+    it('returns [] (not error) for a valid symbol with no tests edges', async () => {
+        const mockGraphEngine = {
+            getNodeByQualifiedName: vi.fn().mockReturnValue({ id: 42, symbol_type: 'class', file_path: '/src/foo.ts', qualified_name: '/src/foo.ts#MyClass' }),
+            getNodeById: vi.fn().mockReturnValue(null),
+            getIncomingEdges: vi.fn().mockReturnValue([]),
+        };
+        const deps = makeDeps({
+            getContext: vi.fn().mockReturnValue({
+                graphEngine: mockGraphEngine,
+                dbManager: { getDb: vi.fn().mockReturnValue({ prepare: vi.fn().mockReturnValue({ all: vi.fn().mockReturnValue([]) }) }) },
+                projectPath: '/mock/project',
+            }),
+        });
+        const result = await executeTool('get_related_tests', { qualified_name: '/src/foo.ts#MyClass' }, deps);
+        expect(result.isError).toBeUndefined();
+        const parsed = JSON.parse(result.content[0].text);
+        expect(Array.isArray(parsed)).toBe(true);
+        expect(parsed).toHaveLength(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// backfill_history
+// ---------------------------------------------------------------------------
+
+describe('executeTool: backfill_history', () => {
+    it('returns isError when context is missing', async () => {
+        const deps = makeDeps({ getContext: vi.fn().mockReturnValue(null) });
+        const result = await executeTool('backfill_history', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/No active project/i);
+    });
+
+    it('returns isError in Terminal mode', async () => {
+        const deps = makeDeps({ isTerminal: vi.fn().mockReturnValue(true) });
+        const result = await executeTool('backfill_history', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/Terminal mode/i);
+    });
+
+    it('calls mapHistoryToProject and returns success when context + pipeline exist', async () => {
+        const mapHistoryToProject = vi.fn().mockResolvedValue(undefined);
+        const deps = makeDeps({
+            getContext: vi.fn().mockReturnValue({
+                graphEngine: {
+                    getNodeByQualifiedName: vi.fn().mockReturnValue(null),
+                    nodeRepo: { searchSymbols: vi.fn().mockReturnValue([]) },
+                },
+                updatePipeline: { mapHistoryToProject },
+                projectPath: '/mock/project',
+            }),
+        });
+        const result = await executeTool('backfill_history', {}, deps);
+        expect(mapHistoryToProject).toHaveBeenCalledOnce();
+        expect(result.isError).toBeUndefined();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// get_setup_context — embeddings field
+// ---------------------------------------------------------------------------
+
+describe('executeTool: get_setup_context', () => {
+    it('includes an embeddings field in the response when context exists', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_setup_context', {}, deps);
+        expect(result.isError).toBeUndefined();
+        const parsed = JSON.parse(result.content[0].text);
+        expect(parsed).toHaveProperty('embeddings');
+    });
+});

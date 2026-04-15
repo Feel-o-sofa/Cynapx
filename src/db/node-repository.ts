@@ -6,6 +6,9 @@
 import { Database } from 'better-sqlite3';
 import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
 
+/** Raw SQLite row from the nodes table (all columns, JSON fields as strings) */
+type NodeRow = Record<string, unknown>;
+
 /**
  * Safely parses a JSON string, returning a fallback value on parse failure or empty input.
  */
@@ -78,13 +81,13 @@ export class NodeRepository {
 
     public getNodeById(id: number): CodeNode | null {
         const stmt = this.db.prepare('SELECT * FROM nodes WHERE id = ?');
-        const row = stmt.get(id) as any;
+        const row = stmt.get(id) as NodeRow | undefined;
         return row ? this.mapRowToNode(row) : null;
     }
 
     public getNodeByQualifiedName(qualifiedName: string): CodeNode | null {
         const stmt = this.db.prepare('SELECT * FROM nodes WHERE qualified_name = ?');
-        const row = stmt.get(qualifiedName) as any;
+        const row = stmt.get(qualifiedName) as NodeRow | undefined;
         return row ? this.mapRowToNode(row) : null;
     }
 
@@ -102,7 +105,7 @@ export class NodeRepository {
 
     public getNodesByFilePath(filePath: string): CodeNode[] {
         const stmt = this.db.prepare('SELECT * FROM nodes WHERE file_path = ?');
-        const rows = stmt.all(filePath) as any[];
+        const rows = stmt.all(filePath) as NodeRow[];
         return rows.map(row => this.mapRowToNode(row));
     }
 
@@ -114,7 +117,7 @@ export class NodeRepository {
 
     public getAllNodes(): CodeNode[] {
         const stmt = this.db.prepare('SELECT * FROM nodes');
-        const rows = stmt.all() as any[];
+        const rows = stmt.all() as NodeRow[];
         return rows.map(row => this.mapRowToNode(row));
     }
 

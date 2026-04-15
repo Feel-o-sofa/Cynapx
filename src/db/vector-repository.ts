@@ -22,7 +22,7 @@ export class VectorRepository {
     public search(embedding: number[], limit: number = 20): VectorSearchResult[] {
         // 0. Safety check: Verify dimension against schema
         try {
-            const schema = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'node_embeddings'").get() as any;
+            const schema = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'node_embeddings'").get() as { sql?: string } | undefined;
             if (schema && schema.sql) {
                 const match = schema.sql.match(/float\[(\d+)\]/);
                 if (match && parseInt(match[1]) !== embedding.length) {

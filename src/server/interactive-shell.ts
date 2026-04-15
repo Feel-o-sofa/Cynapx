@@ -93,7 +93,7 @@ export class InteractiveShell {
     }
 
     private getPrompt(): string {
-        const role = (this.mcpServer as any).isTerminal ? 'term' : 'host';
+        const role = this.mcpServer.isInTerminalMode ? 'term' : 'host';
         const color = role === 'host' ? '\x1b[35m' : '\x1b[34m';
         return `${color}cynapx(${role})>\x1b[0m `;
     }
@@ -151,8 +151,8 @@ export class InteractiveShell {
     }
 
     private showStatus() {
-        const isTerminal = (this.mcpServer as any).isTerminal;
-        const isInitialized = (this.mcpServer as any).isInitialized;
+        const isTerminal = this.mcpServer.isInTerminalMode;
+        const isInitialized = this.mcpServer.isReady;
         console.error(`\nSession Status:`);
         console.error(`  Role        : ${isTerminal ? 'Terminal (Proxy)' : 'Host (Direct DB)'}`);
         console.error(`  Initialized : ${isInitialized ? 'Yes' : 'No'}`);

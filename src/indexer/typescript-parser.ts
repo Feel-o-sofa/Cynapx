@@ -6,6 +6,11 @@
 import * as ts from 'typescript';
 import * as fs from 'fs';
 import { CodeParser, DeltaGraph, RawCodeEdge } from './types';
+
+/** Augments ts.Symbol with the optional `parent` property used internally by the TS compiler */
+interface SymbolWithParent extends ts.Symbol {
+    parent?: ts.Symbol;
+}
 import { CodeNode, SymbolType, Visibility } from '../types';
 import { MetricsCalculator } from './metrics-calculator';
 import { calculateChecksum } from '../utils/checksum';
@@ -84,8 +89,8 @@ export class TypeScriptParser implements CodeParser {
                     if (ts.isMethodDeclaration(node) &&
                         (ts.isClassDeclaration(node.parent) || ts.isClassExpression(node.parent))) {
                         const parentClass = node.parent;
-                        if ((parentClass as any).name) {
-                            const classSymbol = this.typeChecker?.getSymbolAtLocation((parentClass as any).name);
+                        if (parentClass.name) {
+                            const classSymbol = this.typeChecker?.getSymbolAtLocation(parentClass.name);
                             if (classSymbol) {
                                 const classQName = toCanonical(this.getName(classSymbol));
                                 edges.push({
@@ -212,7 +217,76 @@ export class TypeScriptParser implements CodeParser {
         };
 
         visit(sourceFile);
+
+        if (this.isTestFile(filePath)) {
+            this.emitTestEdges(sourceFile, filePath, canonicalFilePath, edges);
+        }
+
         return { nodes, edges };
+    }
+
+    private isTestFile(filePath: string): boolean {
+        // Match *.test.ts, *.test.js, *.spec.ts, *.spec.js and tsx/jsx variants
+        if (/\.(test|spec)\.(ts|js|tsx|jsx)$/.test(filePath)) {
+            return true;
+        }
+        // Match paths containing /__tests__/ or \__tests__\
+        if (filePath.includes('/__tests__/') || filePath.includes('\\__tests__\\')) {
+            return true;
+        }
+        return false;
+    }
+
+    private inferProductionFilePath(testFilePath: string): string | null {
+        // foo.test.ts → foo.ts, foo.spec.tsx → foo.tsx, etc.
+        const testSpecMatch = testFilePath.match(/^(.*)\.(test|spec)\.(ts|js|tsx|jsx)$/);
+        if (testSpecMatch) {
+            return `${testSpecMatch[1]}.${testSpecMatch[3]}`;
+        }
+        // path/__tests__/foo.ts → path/foo.ts
+        const testsDir = testFilePath.replace('/__tests__/', '/').replace('\\__tests__\\', '\\');
+        if (testsDir !== testFilePath) {
+            return testsDir;
+        }
+        return null;
+    }
+
+    private emitTestEdges(sourceFile: ts.SourceFile, testFilePath: string, testFileQname: string, edges: RawCodeEdge[]): void {
+        const prodFilePath = this.inferProductionFilePath(testFilePath);
+        if (prodFilePath === null) return;
+
+        const prodFileQname = toCanonical(prodFilePath);
+
+        // Always emit a file-level tests edge
+        edges.push({
+            from_qname: testFileQname,
+            to_qname: prodFileQname,
+            edge_type: 'tests',
+            dynamic: false
+        });
+
+        // Walk AST looking for describe(...) calls
+        const walkForDescribe = (node: ts.Node) => {
+            if (
+                ts.isCallExpression(node) &&
+                ts.isIdentifier(node.expression) &&
+                node.expression.text === 'describe' &&
+                node.arguments.length > 0 &&
+                ts.isStringLiteral(node.arguments[0])
+            ) {
+                const describeName = (node.arguments[0] as ts.StringLiteral).text;
+                edges.push({
+                    from_qname: testFileQname,
+                    to_qname: `${prodFileQname}#${describeName}`,
+                    edge_type: 'tests',
+                    dynamic: false,
+                    target_file_hint: prodFilePath
+                });
+            }
+            ts.forEachChild(node, walkForDescribe);
+        };
+
+        walkForDescribe(sourceFile);
     }
 
     private getName(symbol: ts.Symbol): string {
@@ -220,7 +294,7 @@ export class TypeScriptParser implements CodeParser {
         let current: ts.Symbol | undefined = symbol;
         while (current && current.getName() !== '__export' && current.getName() !== 'default' && !(current.flags & ts.SymbolFlags.Module)) {
             parts.unshift(current.getName());
-            current = (current as any).parent;
+            current = (current as SymbolWithParent).parent;
         }
 
         const decl = symbol.valueDeclaration || symbol.declarations?.[0];
@@ -233,8 +307,8 @@ export class TypeScriptParser implements CodeParser {
         while (parent && !ts.isClassDeclaration(parent) && !ts.isMethodDeclaration(parent) && !ts.isFunctionDeclaration(parent)) {
             parent = parent.parent;
         }
-        if (parent && (parent as any).name) {
-            return this.typeChecker?.getSymbolAtLocation((parent as any).name);
+        if (parent && 'name' in parent && (parent as ts.NamedDeclaration).name) {
+            return this.typeChecker?.getSymbolAtLocation((parent as ts.NamedDeclaration).name!);
         }
         return undefined;
     }

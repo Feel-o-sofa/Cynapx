@@ -44,6 +44,10 @@ export class UpdatePipeline {
     private writeLock: Promise<void> = Promise.resolve();
     private crossProjectResolver?: CrossProjectResolver;
 
+    public get embeddingsAvailable(): boolean {
+        return this.embeddingManager.isAvailable;
+    }
+
     public async reTagAllNodes(): Promise<void> {
         // Acquire write lock before starting the transaction so concurrent
         // processBatch() calls cannot interleave with our multi-pass propagation.
@@ -181,23 +185,34 @@ export class UpdatePipeline {
 
     public async processBatch(events: FileChangeEvent[], version: number): Promise<void> {
         console.error(`Processing batch of ${events.length} files...`);
-        
+
         type BatchResult =
             | { event: FileChangeEvent; delta: DeltaGraph; status: 'success' }
             | { event: FileChangeEvent; status: 'error'; error: string };
 
-        const results = await Promise.all(events.map(async (event): Promise<BatchResult> => {
-            if (event.event === 'DELETE') return { event, delta: { nodes: [], edges: [] }, status: 'success' as const };
-            try {
-                const delta = this.workerPool
-                    ? await this.workerPool.runTask({ filePath: event.file_path, commit: event.commit, version })
-                    : await this.parser.parse(event.file_path, event.commit, version);
-                return { event, delta, status: 'success' as const };
-            } catch (error) {
-                console.error(`Failed to parse ${event.file_path}:`, error);
-                return { event, status: 'error' as const, error: (error as Error).message ?? String(error) };
-            }
-        }));
+        // Chunk parse tasks to avoid overwhelming the WorkerPool's queue.
+        // Use the pool's maxQueueSize as the chunk size, capped at 100 to avoid excessive memory usage.
+        const CHUNK_SIZE = Math.min(this.workerPool?.maxQueueSize ?? 100, 100);
+        const allResults: BatchResult[] = [];
+
+        for (let i = 0; i < events.length; i += CHUNK_SIZE) {
+            const chunk = events.slice(i, i + CHUNK_SIZE);
+            const chunkResults = await Promise.all(chunk.map(async (event): Promise<BatchResult> => {
+                if (event.event === 'DELETE') return { event, delta: { nodes: [], edges: [] }, status: 'success' as const };
+                try {
+                    const delta = this.workerPool
+                        ? await this.workerPool.runTask({ filePath: event.file_path, commit: event.commit, version })
+                        : await this.parser.parse(event.file_path, event.commit, version);
+                    return { event, delta, status: 'success' as const };
+                } catch (error) {
+                    console.error(`Failed to parse ${event.file_path}:`, error);
+                    return { event, status: 'error' as const, error: (error as Error).message ?? String(error) };
+                }
+            }));
+            allResults.push(...chunkResults);
+        }
+
+        const results = allResults;
 
         const previousLock = this.writeLock;
         let resolveLock: () => void;
@@ -361,7 +376,7 @@ export class UpdatePipeline {
             events = await Promise.all(allFiles.map(async (f) => {
                 const fullPath = path.resolve(projectPath, f);
                 const commit = await this.gitService!.getLatestCommit(fullPath).catch(() => currentHead);
-                return { event: 'ADD' as any, file_path: fullPath, commit };
+                return { event: 'ADD' as ChangeType, file_path: fullPath, commit };
             }));
         } else {
             // Incremental: process only files changed since last indexed commit
@@ -370,7 +385,7 @@ export class UpdatePipeline {
             events = await Promise.all(diffs.map(async (d) => {
                 const fullPath = path.resolve(projectPath, d.file);
                 const commit = d.status === 'DELETE' ? 'deleted' : await this.gitService!.getLatestCommit(fullPath);
-                return { event: d.status as any, file_path: fullPath, commit };
+                return { event: d.status as ChangeType, file_path: fullPath, commit };
             }));
         }
 

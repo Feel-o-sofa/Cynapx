@@ -76,6 +76,9 @@ export class McpServer {
         return ctx;
     }
 
+    public get isInTerminalMode(): boolean { return this.isTerminal; }
+    public get isReady(): boolean { return this.isInitialized; }
+
     public setTerminal(coordinator: IpcCoordinator) {
         this.isTerminal = true;
         this.terminalCoordinator = coordinator;

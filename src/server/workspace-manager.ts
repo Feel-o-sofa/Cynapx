@@ -3,6 +3,8 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
+import * as fs from 'fs';
+import * as path from 'path';
 import { GraphEngine } from '../graph/graph-engine';
 import { DatabaseManager } from '../db/database';
 import { MetadataRepository } from '../db/metadata-repository';
@@ -87,6 +89,18 @@ export class WorkspaceManager {
         ctx.metadataRepo = metadataRepo;
         ctx.vectorRepo = vectorRepo;
         ctx.archEngine = new ArchitectureEngine(graphEngine);
+
+        // Load optional custom architecture rules
+        const archRulesPath = path.join(ctx.projectPath, 'arch-rules.json');
+        if (fs.existsSync(archRulesPath)) {
+            try {
+                ctx.archEngine.loadRules(archRulesPath);
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[WorkspaceManager] Warning: failed to load arch-rules.json: ${msg}`);
+            }
+        }
+
         ctx.refactorEngine = new RefactoringEngine(graphEngine);
         ctx.optEngine = new OptimizationEngine(graphEngine);
         ctx.policyDiscoverer = new PolicyDiscoverer(graphEngine);

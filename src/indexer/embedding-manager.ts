@@ -191,6 +191,11 @@ export class EmbeddingManager {
     private provider: EmbeddingProvider;
     private queueTail: Promise<void> = Promise.resolve();
     private static readonly BATCH_TIMEOUT_MS = 120_000; // 2 minutes per batch
+    private _available: boolean = false;
+
+    public get isAvailable(): boolean {
+        return this._available;
+    }
 
     constructor(
         private db: Database,
@@ -242,6 +247,7 @@ export class EmbeddingManager {
         if (this.provider instanceof PythonEmbeddingProvider && this.provider.fallbackMode) {
             console.error('[EmbeddingManager] Primary provider in fallback mode — switching to NullEmbeddingProvider');
             this.provider = new NullEmbeddingProvider();
+            this._available = false;
             this.onProviderFallback?.();
         }
 
@@ -252,12 +258,13 @@ export class EmbeddingManager {
 
         // Ensure model is ready and check dimensions
         await this.provider.generate("ping");
+        this._available = true;
         const dim = this.provider.getDimensions();
         const modelName = this.provider.getModelName();
 
         try {
-            const schema = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'node_embeddings'").get() as any;
-            if (schema && !schema.sql.includes(`float[${dim}]`)) {
+            const schema = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'node_embeddings'").get() as { sql?: string } | undefined;
+            if (schema?.sql && !schema.sql.includes(`float[${dim}]`)) {
                 console.error(`[EmbeddingManager] Dimension mismatch detected. Recreating node_embeddings table (Target: ${dim})...
 `);
                 this.db.exec('DROP TABLE IF EXISTS node_embeddings');
@@ -272,7 +279,7 @@ export class EmbeddingManager {
             SELECT n.* FROM nodes n
             LEFT JOIN embedding_metadata m ON n.id = m.node_id
             WHERE m.node_id IS NULL OR n.checksum != m.checksum
-        `).all() as any[];
+        `).all() as (CodeNode & { id: number })[];
 
         if (nodesToProcess.length === 0) return;
 

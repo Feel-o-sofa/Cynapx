@@ -29,16 +29,18 @@ export class WorkerPool implements Disposable {
     private workers: Worker[] = [];
     private freeWorkers: Worker[] = [];
     private queue: QueueEntry[] = [];
+    /** Maps each Worker to its currently executing task (replaces (worker as any).currentTask). */
+    private readonly taskMap = new WeakMap<Worker, ActiveTask | null>();
 
     /** Maximum number of tasks that may sit in the pending queue. */
-    private maxQueueSize: number;
+    private _maxQueueSize: number;
 
     /** Path & execArgv stored so replacement workers can be spawned identically. */
     private workerPath: string;
     private workerExecArgv: string[];
 
     constructor(private size: number = os.cpus().length, { maxQueueSize = 100 }: { maxQueueSize?: number } = {}) {
-        this.maxQueueSize = maxQueueSize;
+        this._maxQueueSize = maxQueueSize;
 
         const isTsNode = process.execArgv.includes('ts-node/register') || process.argv[1].endsWith('.ts');
         this.workerPath = path.resolve(__dirname, isTsNode ? 'index-worker.ts' : 'index-worker.js');
@@ -51,6 +53,13 @@ export class WorkerPool implements Disposable {
     }
 
     /**
+     * Expose the maximum queue size to allow callers to chunk task submission.
+     */
+    public get maxQueueSize(): number {
+        return this._maxQueueSize;
+    }
+
+    /**
      * Spawn a single worker, wire all event handlers, and register it as free.
      * Called both during initial construction and when replacing a crashed/timed-out worker.
      */
@@ -58,11 +67,11 @@ export class WorkerPool implements Disposable {
         const worker = new Worker(this.workerPath, { execArgv: this.workerExecArgv });
 
         worker.on('message', (result) => {
-            const active: ActiveTask | null = (worker as any).currentTask ?? null;
+            const active: ActiveTask | null = this.taskMap.get(worker) ?? null;
             if (!active) return; // should not happen, but guard anyway
 
             clearTimeout(active.timeoutHandle);
-            (worker as any).currentTask = null;
+            this.taskMap.set(worker, null);
 
             // Return worker to the free pool before processing the next item
             this.freeWorkers.push(worker);
@@ -77,7 +86,7 @@ export class WorkerPool implements Disposable {
 
         worker.on('error', (err) => {
             console.error('Worker error:', err);
-            const active: ActiveTask | null = (worker as any).currentTask ?? null;
+            const active: ActiveTask | null = this.taskMap.get(worker) ?? null;
             this.replaceWorker(worker, active, err);
         });
 
@@ -119,9 +128,9 @@ export class WorkerPool implements Disposable {
 
     public runTask(task: any): Promise<any> {
         // Backpressure: reject immediately when the queue is full
-        if (this.queue.length >= this.maxQueueSize) {
+        if (this.queue.length >= this._maxQueueSize) {
             return Promise.reject(new Error(
-                `WorkerPool queue is full (maxQueueSize=${this.maxQueueSize}). Task rejected.`
+                `WorkerPool queue is full (maxQueueSize=${this._maxQueueSize}). Task rejected.`
             ));
         }
 
@@ -143,11 +152,11 @@ export class WorkerPool implements Disposable {
             const timeoutErr = new Error(
                 `WorkerPool task timed out after ${TASK_TIMEOUT_MS}ms`
             );
-            this.replaceWorker(worker, (worker as any).currentTask ?? null, timeoutErr);
+            this.replaceWorker(worker, this.taskMap.get(worker) ?? null, timeoutErr);
         }, TASK_TIMEOUT_MS);
 
         const active: ActiveTask = { entry, timeoutHandle };
-        (worker as any).currentTask = active;
+        this.taskMap.set(worker, active);
         worker.postMessage(entry.task);
     }
 
@@ -163,7 +172,7 @@ export class WorkerPool implements Disposable {
 
         // Terminate all workers (clear in-flight timeouts first)
         for (const worker of this.workers) {
-            const active: ActiveTask | null = (worker as any).currentTask ?? null;
+            const active: ActiveTask | null = this.taskMap.get(worker) ?? null;
             if (active) {
                 clearTimeout(active.timeoutHandle);
                 if (!active.entry.settled) {
