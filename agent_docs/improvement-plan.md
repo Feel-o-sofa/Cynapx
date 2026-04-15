@@ -1,6 +1,6 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-15 (Phase 9 개선 과제 추가)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-15 (Phase 9 완료 — PR #19)
 > **대상 버전**: v1.0.6
 
 ---
@@ -292,19 +292,25 @@ Phase 8 완료 + 통합 테스트(56/56) 결과를 바탕으로 도출한 차기
 
 ---
 
-### Phase 9 권장 실행 순서
+### Phase 9 완료 현황 (PR #19, 2026-04-15)
 
-```
-Week 1:  P9-M-4 (.gitignore 정리)  →  P9-L-3 (diagnostic-v7.md 작성)
-Week 2:  P9-H-2 (WorkerPool 동적 큐)  →  P9-H-1 (get_related_tests 구현)
-Week 3:  P9-M-3 (Embedding 상태 노출)  →  P9-M-1 (arch-rules 외부 설정)
-Week 4:  P9-L-1 (as any 34개 제거)  →  P9-L-2 (backfill_history 검증)
-Week 5:  P9-M-2 (비-TS 파일 인덱싱) — 독립 스코프, 일정 유동
-```
+| ID | 항목 | 상태 |
+|----|------|------|
+| P9-H-1 | `get_related_tests` 테스트 엣지 실구현 | ✅ 완료 |
+| P9-H-2 | WorkerPool 큐 청킹 + maxQueueSize getter | ✅ 완료 |
+| P9-M-1 | arch-rules.json 외부 설정 로딩 | ✅ 완료 |
+| P9-M-3 | Embedding sidecar 상태 → get_setup_context | ✅ 완료 |
+| P9-M-4 | .gitignore integration-test.js 예외 추가 | ✅ 완료 |
+| P9-L-1 | `as any` 34→3개 제거 (타입 안전성) | ✅ 완료 |
+| P9-L-2 | backfill_history 유닛 테스트 3개 추가 | ✅ 완료 |
+| P9-L-3 | diagnostic-v7.md 작성 | ✅ 완료 |
+| P9-M-2 | 비-TS 파일 인덱싱 (YAML/JSON/Markdown) | ⏭ Phase 10 이관 |
+
+**결과**: 146 → 164 테스트, tsc 0 오류, `as any` 34→3개
 
 ---
 
-## 6. 분석 엔진 정확도 (Phase 8 완료 기준)
+## 6. 분석 엔진 정확도 (Phase 9 완료 기준)
 
 | 항목 | 초기 | 현재 |
 |------|------|------|
@@ -312,7 +318,7 @@ Week 5:  P9-M-2 (비-TS 파일 인덱싱) — 독립 스코프, 일정 유동
 | CC 정확도 | Native/JS 불일치 | `??` 추가, 양 경로 일관성 향상 |
 | purge_index 성공률 | MCP 중 실패 | 항상 성공 |
 | 엣지 타입 활용률 | 4/15 | 8/15 (`calls`, `contains`, `overrides`, `implements`, `inherits`, `defines`, `imports`, `file`) |
-| 테스트 커버리지 | 0개 | **146개** (10개 파일) + 통합 테스트 56개 어서션 |
+| 테스트 커버리지 | 0개 | **164개** (11개 파일) + 통합 테스트 56개 어서션 |
 | API 문서 | 없음 | OpenAPI 3.0.3 (`/api/docs`) |
 | 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) |
 | IPC 보안 | 인증 없음 | nonce 챌린지-응답, 1MB 메시지 크기 제한 |
