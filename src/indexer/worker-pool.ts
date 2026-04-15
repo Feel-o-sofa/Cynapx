@@ -31,14 +31,14 @@ export class WorkerPool implements Disposable {
     private queue: QueueEntry[] = [];
 
     /** Maximum number of tasks that may sit in the pending queue. */
-    private maxQueueSize: number;
+    private _maxQueueSize: number;
 
     /** Path & execArgv stored so replacement workers can be spawned identically. */
     private workerPath: string;
     private workerExecArgv: string[];
 
     constructor(private size: number = os.cpus().length, { maxQueueSize = 100 }: { maxQueueSize?: number } = {}) {
-        this.maxQueueSize = maxQueueSize;
+        this._maxQueueSize = maxQueueSize;
 
         const isTsNode = process.execArgv.includes('ts-node/register') || process.argv[1].endsWith('.ts');
         this.workerPath = path.resolve(__dirname, isTsNode ? 'index-worker.ts' : 'index-worker.js');
@@ -48,6 +48,13 @@ export class WorkerPool implements Disposable {
         for (let i = 0; i < this.size; i++) {
             this.spawnWorker();
         }
+    }
+
+    /**
+     * Expose the maximum queue size to allow callers to chunk task submission.
+     */
+    public get maxQueueSize(): number {
+        return this._maxQueueSize;
     }
 
     /**
@@ -119,9 +126,9 @@ export class WorkerPool implements Disposable {
 
     public runTask(task: any): Promise<any> {
         // Backpressure: reject immediately when the queue is full
-        if (this.queue.length >= this.maxQueueSize) {
+        if (this.queue.length >= this._maxQueueSize) {
             return Promise.reject(new Error(
-                `WorkerPool queue is full (maxQueueSize=${this.maxQueueSize}). Task rejected.`
+                `WorkerPool queue is full (maxQueueSize=${this._maxQueueSize}). Task rejected.`
             ));
         }
 

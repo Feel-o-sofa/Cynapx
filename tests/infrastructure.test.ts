@@ -7,6 +7,7 @@
  *   - WorkspaceManager  (workspace-manager.ts)
  *   - IpcCoordinator    (ipc-coordinator.ts)
  *   - HealthMonitor     (health-monitor.ts)
+ *   - WorkerPool        (worker-pool.ts)
  *
  * All filesystem / DB / network dependencies are mocked so tests run in
  * isolation and leave no side-effects on the host machine.
@@ -371,6 +372,27 @@ describe('HealthMonitor', () => {
             monitor.start(mockWm);
             // Should not throw when no context is active
             expect(() => vi.advanceTimersByTime(5 * 60 * 1000)).not.toThrow();
+        });
+    });
+});
+
+// ============================================================================
+// WorkerPool
+// ============================================================================
+import { WorkerPool } from '../src/indexer/worker-pool';
+
+describe('WorkerPool', () => {
+    describe('maxQueueSize getter', () => {
+        it('exposes maxQueueSize via getter', () => {
+            const pool = new WorkerPool(1, { maxQueueSize: 42 });
+            expect(pool.maxQueueSize).toBe(42);
+            pool.dispose();
+        });
+
+        it('returns default maxQueueSize when not specified', () => {
+            const pool = new WorkerPool(1);
+            expect(pool.maxQueueSize).toBe(100);
+            pool.dispose();
         });
     });
 });
