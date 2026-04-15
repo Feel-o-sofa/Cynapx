@@ -251,8 +251,68 @@ export class TypeScriptParser implements CodeParser {
         return null;
     }
 
+    /**
+     * Given a candidate path that may not exist (e.g. "tests/checksum.ts"),
+     * resolve the actual production file path by:
+     *   1. Using the candidate directly if it exists on disk.
+     *   2. Searching src/, lib/, source/, app/ under the project root for a
+     *      file whose basename matches the candidate's basename.
+     * Returns null if no file can be found.
+     */
+    private resolveProductionFile(candidatePath: string, testFilePath: string): string | null {
+        // Fast path: file already exists at the candidate location
+        if (fs.existsSync(candidatePath)) return candidatePath;
+
+        // Slow path: walk source directories for the same basename
+        const path = require('path') as typeof import('path');
+        const basename = path.basename(candidatePath); // e.g. "checksum.ts"
+        const projectRoot = this.findProjectRoot(testFilePath);
+        if (!projectRoot) return null;
+
+        const searchDirs = ['src', 'lib', 'source', 'app'];
+        for (const dir of searchDirs) {
+            const found = this.walkForFile(path.join(projectRoot, dir), basename);
+            if (found) return found;
+        }
+        return null;
+    }
+
+    /** Walk upward from filePath to find the nearest directory containing package.json */
+    private findProjectRoot(filePath: string): string | null {
+        const path = require('path') as typeof import('path');
+        let dir = path.dirname(filePath);
+        for (let i = 0; i < 8; i++) {
+            if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
+            const parent = path.dirname(dir);
+            if (parent === dir) break;
+            dir = parent;
+        }
+        return null;
+    }
+
+    private walkForFile(dir: string, basename: string): string | null {
+        if (!fs.existsSync(dir)) return null;
+        try {
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                const fullPath = require('path').join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    const result = this.walkForFile(fullPath, basename);
+                    if (result) return result;
+                } else if (entry.name === basename) {
+                    return fullPath;
+                }
+            }
+        } catch { /* ignore permission errors */ }
+        return null;
+    }
+
     private emitTestEdges(sourceFile: ts.SourceFile, testFilePath: string, testFileQname: string, edges: RawCodeEdge[]): void {
-        const prodFilePath = this.inferProductionFilePath(testFilePath);
+        const candidatePath = this.inferProductionFilePath(testFilePath);
+        if (candidatePath === null) return;
+
+        // Resolve to an actual file that exists on disk; skip if not found
+        const prodFilePath = this.resolveProductionFile(candidatePath, testFilePath);
         if (prodFilePath === null) return;
 
         const prodFileQname = toCanonical(prodFilePath);
