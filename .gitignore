@@ -36,6 +36,7 @@ src-native/index.d.ts
 *verify_*
 *coverage_*
 scripts/
+!scripts/integration-test.js
 switch-env.js
 
 # AI Agent Context & Internal Docs (Exempt from Repo)
