@@ -183,6 +183,14 @@ export class ApiServer {
         this.app.post('/api/analysis/tests', analyzeLimiter, this.handleTests.bind(this));
         this.app.post('/api/search/symbols', this.handleSymbolSearch.bind(this));
         this.app.post('/api/graph/export', this.handleExportGraph.bind(this));
+
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        this.app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
+            console.error('[API] Unhandled error:', err?.message ?? err);
+            if (!res.headersSent) {
+                res.status(500).json({ error_code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.' });
+            }
+        });
     }
 
     private async handleMcp(req: Request, res: Response) {

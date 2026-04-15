@@ -27,6 +27,18 @@ import { SecurityProvider } from './utils/security';
 import { WorkerPool } from './indexer/worker-pool';
 import { CertificateGenerator } from './utils/certificate-generator';
 
+process.on('unhandledRejection', (reason: unknown) => {
+    console.error('[Process] Unhandled Promise rejection:', reason);
+    // 프로세스를 종료하지 않고 로깅만 — 이미 실행 중인 서버 보호
+});
+
+process.on('uncaughtException', (err: Error) => {
+    console.error('[Process] Uncaught exception:', err?.message ?? err);
+    console.error(err?.stack);
+    // 복구 불가 예외 — 정리 후 안전하게 종료
+    process.exit(1);
+});
+
 async function bootstrap() {
     const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
     const program = new Command();
