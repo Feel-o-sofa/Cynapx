@@ -87,6 +87,20 @@ export class GitService {
     }
 
     /**
+     * Returns all files currently tracked by git (git ls-files).
+     * Used for full initial indexing when no previous indexed commit exists.
+     */
+    public async getAllTrackedFiles(): Promise<string[]> {
+        try {
+            const raw = await this.git.raw(['ls-files']);
+            return raw.split('\n').map(f => f.trim()).filter(f => f.length > 0);
+        } catch (error) {
+            console.error('Failed to list tracked files:', error);
+            return [];
+        }
+    }
+
+    /**
      * Returns the commit history for a specific file.
      */
     public async getHistoryForFile(filePath: string, limit: number = 5): Promise<any[]> {

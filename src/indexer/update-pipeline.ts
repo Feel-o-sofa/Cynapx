@@ -348,16 +348,31 @@ export class UpdatePipeline {
         if (!this.metadataRepo || !this.gitService) return;
         const lastCommit = this.metadataRepo.getLastIndexedCommit();
         const currentHead = await this.gitService.getCurrentHead();
-        if (!lastCommit || lastCommit === currentHead) return;
 
-        const diffs = await this.gitService.getDiffFiles(lastCommit, currentHead);
-        if (diffs.length === 0) return;
+        // Already up to date — nothing to do
+        if (lastCommit && lastCommit === currentHead) return;
 
-        const events = await Promise.all(diffs.map(async (d) => {
-            const fullPath = path.resolve(projectPath, d.file);
-            const commit = d.status === 'DELETE' ? 'deleted' : await this.gitService!.getLatestCommit(fullPath);
-            return { event: d.status as any, file_path: fullPath, commit };
-        }));
+        let events: { event: any; file_path: string; commit: string }[];
+
+        if (!lastCommit) {
+            // Fresh DB: no previous indexed commit — do a full scan of all tracked files
+            const allFiles = await this.gitService.getAllTrackedFiles();
+            if (allFiles.length === 0) return;
+            events = await Promise.all(allFiles.map(async (f) => {
+                const fullPath = path.resolve(projectPath, f);
+                const commit = await this.gitService!.getLatestCommit(fullPath).catch(() => currentHead);
+                return { event: 'ADD' as any, file_path: fullPath, commit };
+            }));
+        } else {
+            // Incremental: process only files changed since last indexed commit
+            const diffs = await this.gitService.getDiffFiles(lastCommit, currentHead);
+            if (diffs.length === 0) return;
+            events = await Promise.all(diffs.map(async (d) => {
+                const fullPath = path.resolve(projectPath, d.file);
+                const commit = d.status === 'DELETE' ? 'deleted' : await this.gitService!.getLatestCommit(fullPath);
+                return { event: d.status as any, file_path: fullPath, commit };
+            }));
+        }
 
         await this.processBatch(events, Date.now());
     }
