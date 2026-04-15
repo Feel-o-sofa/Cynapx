@@ -1,6 +1,6 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-15 (Phase 9 완료 — PR #19)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-15 (Phase 9 핫픽스 + Phase 10 계획 수립)
 > **대상 버전**: v1.0.6
 
 ---
@@ -310,7 +310,86 @@ Phase 8 완료 + 통합 테스트(56/56) 결과를 바탕으로 도출한 차기
 
 ---
 
-## 6. 분석 엔진 정확도 (Phase 9 완료 기준)
+## 6. Phase 10 개선 계획 (2026-04-15 수립)
+
+> **배경**: Phase 9 핫픽스(commit `2d073ad`) 완료 후 프로덕션 배포 준비도 감사 결과,  
+> 단 2가지 실제 위험(전역 에러 핸들러 누락, CI lint 게이트 미작동)과  
+> 기능·품질 부채 4가지가 남아있음을 확인. 이를 Phase 10 과제로 정식 등록한다.
+
+---
+
+### 6-1. Phase 10 과제 목록
+
+#### 🔴 HIGH — 프로덕션 배포 전 필수
+
+| ID | 항목 | 파일 | 상세 |
+|----|------|------|------|
+| **P10-H-1** | **Express 전역 에러 핸들러 + 프로세스 레벨 크래시 가드** | `src/server/api-server.ts`, `src/bootstrap.ts` | async 라우트 핸들러에서 throw된 에러가 잡히지 않으면 Node.js 프로세스가 이유 없이 종료될 수 있다. (1) Express 4-arg 에러 미들웨어(`(err, req, res, next)`) 등록, (2) `process.on('unhandledRejection')` + `process.on('uncaughtException')` 핸들러로 crash 전 정리 로직 보장. 예상 작업: 30분, 유닛 테스트 2개 추가. |
+
+---
+
+#### 🟡 MEDIUM — Phase 10 핵심
+
+| ID | 항목 | 파일 | 상세 |
+|----|------|------|------|
+| **P10-M-1** | **비-TypeScript 파일 인덱싱 (YAML/JSON/Markdown)** | `src/indexer/composite-parser.ts`, `src/indexer/languages/` | Phase 9에서 이관된 항목. `package.json`(dependencies), `*.yml`(CI/CD job 이름), `*.md`(링크/코드블록) 등 설정 파일이 `"No parser found"` 오류로 무시됨. 경량 메타데이터 파서 3종 구현 후 `CompositeParser`에 등록. |
+| **P10-M-2** | **`get_related_tests` 함수 수준 정밀 매핑** | `src/indexer/typescript-parser.ts`, `src/server/tool-dispatcher.ts` | 현재 `tests` 엣지가 파일 수준(file→file)으로만 생성됨. `describe('LockManager')`처럼 클래스명과 동일한 describe 블록에 한해 심볼 수준 엣지를 정확히 생성하도록 개선. 단, `describe('TypeScriptParser — test edge detection')`처럼 extra context가 붙은 경우 첫 번째 토큰만 추출해 매칭하는 정규식 로직 추가. |
+| **P10-M-3** | **CI lint 게이트 활성화** | `package.json`, `.github/workflows/ci.yml` | 현재 `ci.yml`의 lint job이 `continue-on-error: true` + `package.json`에 `"lint"` 스크립트 미정의로 사실상 무동작. `"lint": "tsc --noEmit"` 추가 후 `continue-on-error` 제거. 실제 타입 검사가 CI 블로킹 게이트로 작동하도록 수정. |
+| **P10-M-4** | **`get_related_tests` basename 불일치 대응** | `src/indexer/typescript-parser.ts` | `resolveProductionFile` 현재 구현은 `tests/parser.test.ts → src/indexer/typescript-parser.ts` 처럼 basename이 다른 경우(`parser.ts` ≠ `typescript-parser.ts`)를 처리하지 못함. 파일명에 테스트 대상 basename이 포함(`*-parser.ts`)되는 패턴을 인식하는 fuzzy 매칭 추가, 또는 프로젝트 루트에 `test-map.json` 명시적 매핑 파일을 지원. |
+
+---
+
+#### 🟢 LOW — 기술 부채 및 품질 개선
+
+| ID | 항목 | 파일 | 상세 |
+|----|------|------|------|
+| **P10-L-1** | **`backfill_history` 멀티 커밋 정확도 E2E 검증** | `scripts/integration-test.js` | 통합 테스트에서 `backfill_history` 오류 없음을 확인했지만, 3개 이상 커밋 히스토리가 있는 파일의 `history` 배열(hash·author·date·message)을 실제로 검증하는 어서션 없음. 통합 테스트에 검증 블록 추가. |
+| **P10-L-2** | **`as any` 잔여 2개 제거** | `src/indexer/embedding-manager.ts` | SQLite schema 동적 쿼리 반환 타입에 `as any` 2개 잔존. `{ sql?: string } \| undefined` 타입 별칭으로 교체. |
+| **P10-L-3** | **구조화 로그 도입** | `src/utils/logger.ts` (신규), 전체 | 현재 `console.error()` 단순 텍스트 로깅. `pino` 또는 `winston` 기반 구조화 로거(`logger.info()`, `logger.error()`)로 교체 시 레벨 필터링·JSON 출력·운영 관측성이 크게 향상됨. Phase 2+3에서 `logger.ts` 틀이 만들어졌으나 전파 미완. |
+| **P10-L-4** | **헬스체크 엔드포인트 + Docker 이미지** | `src/server/api-server.ts`, `Dockerfile` (신규) | REST API 서버에 `/healthz` (DB 연결, 인덱싱 상태 반환) 엔드포인트 추가. `Dockerfile` 작성으로 컨테이너 배포 경로 확보. |
+| **P10-L-5** | **`diagnostic-v8.md` 작성** | `agent_docs/` | Phase 10 완료 후 20개 MCP 도구 재평가 + 정적 분석 결과를 기록하는 차기 진단 문서. |
+
+---
+
+### 6-2. 실행 우선순위 및 예상 일정
+
+```
+Week 1 (즉시)
+  └── P10-H-1  전역 에러 핸들러        ← 30분, 프로덕션 blocking 해제
+  └── P10-M-3  CI lint 게이트         ← 10분, CI 품질 게이트 복구
+
+Week 1-2
+  └── P10-M-2  tests 함수 수준 매핑   ← 반나절, P9-H-1 정밀도 향상
+  └── P10-M-4  basename fuzzy 매칭   ← 1시간, resolveProductionFile 확장
+
+Week 2-3
+  └── P10-M-1  비-TS 파일 인덱싱     ← 1-2일, 독립 파서 3종 구현
+  └── P10-L-1  backfill E2E 검증     ← 1시간, 통합 테스트 어서션 추가
+  └── P10-L-2  as any 2개 제거       ← 30분
+
+Week 3-4
+  └── P10-L-3  구조화 로그            ← 반나절
+  └── P10-L-4  /healthz + Docker     ← 반나절
+  └── P10-L-5  diagnostic-v8.md      ← 문서 작업
+```
+
+---
+
+### 6-3. Phase 10 완료 시 예상 수치
+
+| 항목 | Phase 9 완료 | Phase 10 목표 |
+|------|-------------|--------------|
+| 단위 테스트 | 164개 | **~180개** (+16 예상) |
+| 통합 테스트 어서션 | 56개 | **~62개** (+backfill E2E) |
+| `as any` (실 코드) | 2개 | **0개** |
+| 크래시 가드 | 없음 | **process-level 핸들러 2개** |
+| CI 타입 체크 게이트 | 미작동 | **활성화** |
+| 인덱싱 지원 언어 | TS/JS/Go/Py/Ruby | **+YAML/JSON/Markdown** |
+| 컨테이너 배포 | 불가 | **Dockerfile 제공** |
+
+---
+
+## 7. 분석 엔진 정확도 (Phase 9 완료 기준)
 
 | 항목 | 초기 | 현재 |
 |------|------|------|
@@ -323,3 +402,4 @@ Phase 8 완료 + 통합 테스트(56/56) 결과를 바탕으로 도출한 차기
 | 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) |
 | IPC 보안 | 인증 없음 | nonce 챌린지-응답, 1MB 메시지 크기 제한 |
 | 경로 보안 | 검증 없음 | initialize_project 홈/cwd 범위 검증, null securityProvider 차단 |
+| `tests` 엣지 로컬 해소 | 항상 `[]` | resolveProductionFile() 도입 — 파일시스템 검색으로 로컬 노드 연결 (P9-H-1 핫픽스) |
