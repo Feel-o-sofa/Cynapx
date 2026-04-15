@@ -4,7 +4,8 @@
   "description": "Cynapx: High-Performance Isolated Code Knowledge Engine for AI Agents",
   "main": "dist/bootstrap.js",
   "bin": {
-    "cynapx": "dist/bootstrap.js"
+    "cynapx": "dist/bootstrap.js",
+    "cynapx-admin": "dist/cli/admin.js"
   },
   "license": "MIT",
   "scripts": {
@@ -18,7 +19,8 @@
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "bench": "vitest bench"
+    "bench": "vitest bench",
+    "admin": "ts-node src/cli/admin.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.26.0",

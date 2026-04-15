@@ -43,6 +43,7 @@ export class DatabaseManager implements Disposable {
         this.db.pragma('page_size = 4096');
 
         this.initializeSchema();
+        this.runMigrations();
     }
 
     /**
@@ -57,6 +58,34 @@ export class DatabaseManager implements Disposable {
 
         const schema = fs.readFileSync(schemaPath, 'utf8');
         this.db.exec(schema);
+    }
+
+    /**
+     * Current schema version. Increment this when adding new migrations.
+     */
+    public static readonly SCHEMA_VERSION = 1;
+
+    /**
+     * Runs pending schema migrations using PRAGMA user_version as the version counter.
+     * Each migration is idempotent (INSERT OR IGNORE / safe DDL).
+     */
+    public runMigrations(): void {
+        const current = (this.db.pragma('user_version', { simple: true }) as number) ?? 0;
+        if (current >= DatabaseManager.SCHEMA_VERSION) return;
+
+        const migrate = this.db.transaction(() => {
+            if (current < 1) {
+                // Migration 0 → 1: seed cynapx_version and indexed_at keys in index_metadata
+                this.db.prepare(
+                    "INSERT OR IGNORE INTO index_metadata (key, value) VALUES ('cynapx_version', '')"
+                ).run();
+                this.db.prepare(
+                    "INSERT OR IGNORE INTO index_metadata (key, value) VALUES ('indexed_at', '')"
+                ).run();
+                this.db.pragma(`user_version = 1`);
+            }
+        });
+        migrate();
     }
 
     /**
