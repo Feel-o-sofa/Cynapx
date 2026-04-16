@@ -12,7 +12,7 @@ import * as fs from 'fs';
 import { McpServer } from './server/mcp-server';
 import { IpcCoordinator } from './server/ipc-coordinator';
 import { LockManager } from './utils/lock-manager';
-import { findProjectAnchor, addToRegistry, getDatabasePath } from './utils/paths';
+import { findProjectAnchor, addToRegistry, getDatabasePath, getCentralStorageDir } from './utils/paths';
 import { getAuditLogger } from './utils/audit-logger';
 import { InteractiveShell } from './server/interactive-shell';
 import { WorkspaceManager, EngineContext } from './server/workspace-manager';
@@ -93,80 +93,95 @@ async function bootstrap() {
         }
     }
 
-    if (workspaceManager.getAllContexts().length === 0) {
-        console.error("[Fatal] No valid projects found. Exiting.");
-        process.exit(1);
+    const hasInitialProjects = workspaceManager.getAllContexts().length > 0;
+    if (!hasInitialProjects) {
+        console.error("[*] No project anchor found in working directory — starting in PENDING mode.");
+        console.error("[*] Call initialize_project from your AI client to register a project.");
     }
 
-    const primaryContext = workspaceManager.getActiveContext()!;
-    // Use the auto-cleaning LockManager
-    const lockManager = new LockManager(primaryContext.projectPath);
+    // Use a stable global lock path when no initial project is available.
+    // Once a project is registered the lock identity stays the same for this process.
+    const primaryContext = workspaceManager.getActiveContext();
+    const lockBasePath = primaryContext?.projectPath ?? getCentralStorageDir();
+    const lockManager = new LockManager(lockBasePath);
     const mcpServer = new McpServer(workspaceManager);
     const ipcCoordinator = new IpcCoordinator(mcpServer);
 
-    // Helper: Starts heavy services only for Host
-    const startHostServices = async () => {
-        for (const ctx of workspaceManager.getAllContexts()) {
-            console.error(`[*] Initializing Host Engine for: ${ctx.projectPath}`);
-            // This now opens the DB
-            await workspaceManager.initializeEngine(ctx.projectHash);
-            
-            const treeSitterParser = new TreeSitterParser();
-            const typescriptParser = new TypeScriptParser();
-            const compositeParser = new CompositeParser([typescriptParser, treeSitterParser]);
-            const gitService = new GitService(ctx.projectPath);
-            const workerPool = lifecycle.track(new WorkerPool(Math.min(os.cpus().length, 4)));
-            
-            const updatePipeline = new UpdatePipeline(
-                ctx.dbManager!.getDb(),
-                ctx.graphEngine!.nodeRepo,
-                ctx.graphEngine!.edgeRepo,
-                compositeParser,
-                ctx.metadataRepo!,
-                gitService,
-                workerPool,
-                ctx.projectPath,
-                ctx.graphEngine!
-            );
+    // Helper: initialise a single project context (DB open, pipeline start, optional sync).
+    const startHostServicesForContext = async (ctx: EngineContext) => {
+        if (ctx.dbManager) return; // already initialised (e.g. re-entrant call)
+        console.error(`[*] Initializing Host Engine for: ${ctx.projectPath}`);
+        await workspaceManager.initializeEngine(ctx.projectHash);
 
-            ctx.gitService = gitService;
-            ctx.updatePipeline = updatePipeline;
-            ctx.securityProvider = new SecurityProvider(ctx.projectPath);
+        const treeSitterParser = new TreeSitterParser();
+        const typescriptParser = new TypeScriptParser();
+        const compositeParser = new CompositeParser([typescriptParser, treeSitterParser]);
+        const gitService = new GitService(ctx.projectPath);
+        const workerPool = lifecycle.track(new WorkerPool(Math.min(os.cpus().length, 4)));
 
-            if (!options.noIndex) {
-                const head = await gitService.getCurrentHead();
-                const last = ctx.metadataRepo!.getLastIndexedCommit();
-                if (head !== last || options.force || ctx.reindexTriggeredByVersion) {
-                    console.error(`[*] Synchronizing index...`);
-                    const audit = getAuditLogger();
-                    audit.log('index_start', { project: ctx.projectPath });
-                    try {
-                        await updatePipeline.syncWithGit(ctx.projectPath);
-                        // Update version, timestamp, and registry stats (Req-1+3)
-                        const nodeCount = ctx.graphEngine!.nodeRepo.getAllNodes().length;
-                        const edgeCount = (ctx.dbManager!.getDb()
-                            .prepare('SELECT COUNT(*) as c FROM edges').get() as { c: number }).c;
-                        await workspaceManager.onIndexComplete(ctx.projectHash, nodeCount, edgeCount);
-                    } catch (err: unknown) {
-                        const msg = err instanceof Error ? err.message : String(err);
-                        audit.log('index_error', { project: ctx.projectPath, error: msg });
-                        throw err;
-                    }
+        const updatePipeline = new UpdatePipeline(
+            ctx.dbManager!.getDb(),
+            ctx.graphEngine!.nodeRepo,
+            ctx.graphEngine!.edgeRepo,
+            compositeParser,
+            ctx.metadataRepo!,
+            gitService,
+            workerPool,
+            ctx.projectPath,
+            ctx.graphEngine!
+        );
+
+        ctx.gitService = gitService;
+        ctx.updatePipeline = updatePipeline;
+        ctx.securityProvider = new SecurityProvider(ctx.projectPath);
+
+        if (!options.noIndex) {
+            const head = await gitService.getCurrentHead();
+            const last = ctx.metadataRepo!.getLastIndexedCommit();
+            if (head !== last || options.force || ctx.reindexTriggeredByVersion) {
+                console.error(`[*] Synchronizing index...`);
+                const audit = getAuditLogger();
+                audit.log('index_start', { project: ctx.projectPath });
+                try {
+                    await updatePipeline.syncWithGit(ctx.projectPath);
+                    // Update version, timestamp, and registry stats (Req-1+3)
+                    const nodeCount = ctx.graphEngine!.nodeRepo.getAllNodes().length;
+                    const edgeCount = (ctx.dbManager!.getDb()
+                        .prepare('SELECT COUNT(*) as c FROM edges').get() as { c: number }).c;
+                    await workspaceManager.onIndexComplete(ctx.projectHash, nodeCount, edgeCount);
+                } catch (err: unknown) {
+                    const msg = err instanceof Error ? err.message : String(err);
+                    audit.log('index_error', { project: ctx.projectPath, error: msg });
+                    throw err;
                 }
             }
+        }
 
-            if (!options.noWatch) {
-                const watcher = lifecycle.track(new FileWatcher(updatePipeline, ctx.projectPath));
-                watcher.start(ctx.projectPath);
-            }
+        if (!options.noWatch) {
+            const watcher = lifecycle.track(new FileWatcher(updatePipeline, ctx.projectPath));
+            watcher.start(ctx.projectPath);
         }
     };
+
+    // Helper: Starts heavy services for ALL currently mounted contexts.
+    const startHostServices = async () => {
+        for (const ctx of workspaceManager.getAllContexts()) {
+            await startHostServicesForContext(ctx);
+        }
+    };
+
+    // Wire up the onInitialize callback: when initialize_project registers a NEW project,
+    // mount it and start its services immediately (no server restart required).
+    mcpServer.setOnInitialize(async (newPath: string) => {
+        const ctx = await workspaceManager.mountProject(newPath);
+        await startHostServicesForContext(ctx);
+    });
 
     // [Restoration 2] Robust Failover with Double-Check
     const attemptFailover = async () => {
         const jitter = 500 + Math.random() * 3000;
         await new Promise(r => setTimeout(r, jitter));
-        
+
         const lock = await lockManager.getValidLock();
         if (!lock) {
             console.error(`[*] Host lost. Attempting promotion...`);
