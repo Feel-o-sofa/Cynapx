@@ -219,6 +219,99 @@ describe('TypeScriptParser — test edge detection', () => {
         expect((parser as any).inferProductionFilePath('/src/__tests__/foo.ts')).toBe('/src/foo.ts');
         expect((parser as any).inferProductionFilePath('/src/bar.ts')).toBeNull();
     });
+
+    // P10-M-4: fuzzy basename matching
+    it('walkForFileFuzzy finds file whose name contains the stem', () => {
+        const parser = new TypeScriptParser();
+        const path = require('path');
+        const os   = require('os');
+        const fs   = require('fs');
+
+        // Build a temp directory tree: tmpDir/src/indexer/typescript-parser.ts
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cynapx-test-'));
+        const srcDir = path.join(tmpDir, 'src', 'indexer');
+        fs.mkdirSync(srcDir, { recursive: true });
+        const target = path.join(srcDir, 'typescript-parser.ts');
+        fs.writeFileSync(target, '');
+
+        try {
+            // stem = "parser", ext = ".ts" → should find "typescript-parser.ts"
+            const result = (parser as any).walkForFileFuzzy(path.join(tmpDir, 'src'), 'parser', '.ts');
+            expect(result).toBe(target);
+
+            // stem with no match → null
+            const miss = (parser as any).walkForFileFuzzy(path.join(tmpDir, 'src'), 'banana', '.ts');
+            expect(miss).toBeNull();
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // P10-M-4: resolveProductionFile falls back to fuzzy when exact fails
+    it('resolveProductionFile fuzzy-matches when exact basename not found', () => {
+        const parser = new TypeScriptParser();
+        const path = require('path');
+        const os   = require('os');
+        const fs   = require('fs');
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cynapx-test-'));
+        const srcDir = path.join(tmpDir, 'src', 'indexer');
+        fs.mkdirSync(srcDir, { recursive: true });
+        fs.writeFileSync(path.join(tmpDir, 'package.json'), '{}');
+        const target = path.join(srcDir, 'typescript-parser.ts');
+        fs.writeFileSync(target, '');
+
+        try {
+            // candidatePath = "tests/parser.ts" (doesn't exist) — fuzzy should find typescript-parser.ts
+            const candidatePath = path.join(tmpDir, 'tests', 'parser.ts');
+            const testFilePath  = path.join(tmpDir, 'tests', 'parser.test.ts');
+            const result = (parser as any).resolveProductionFile(candidatePath, testFilePath);
+            expect(result).toBe(target);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
+
+    // P10-M-2: describe leading identifier extraction
+    it('emitTestEdges emits precise edge for leading PascalCase identifier in describe name', () => {
+        const parser = new TypeScriptParser();
+        const path = require('path');
+        const os   = require('os');
+        const fs   = require('fs');
+
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cynapx-test-'));
+        const srcDir = path.join(tmpDir, 'src');
+        fs.mkdirSync(srcDir, { recursive: true });
+        fs.writeFileSync(path.join(tmpDir, 'package.json'), '{}');
+        const prodFile = path.join(srcDir, 'lockmanager.ts');
+        fs.writeFileSync(prodFile, '');
+
+        // Test file with describe('LockManager — basic tests', ...)
+        const testContent = `
+describe('LockManager — basic tests', () => {
+    it('does something', () => {});
+});
+`;
+        const testFile = path.join(tmpDir, 'tests', 'lockmanager.test.ts');
+        fs.mkdirSync(path.dirname(testFile), { recursive: true });
+        fs.writeFileSync(testFile, testContent);
+
+        try {
+            const edges: any[] = [];
+            const ts = require('typescript');
+            const sf = ts.createSourceFile(testFile, testContent, ts.ScriptTarget.Latest, true);
+            (parser as any).emitTestEdges(sf, testFile, 'tests/lockmanager.test.ts', edges);
+
+            const testEdges = edges.filter((e: any) => e.edge_type === 'tests');
+            const toQnames  = testEdges.map((e: any) => e.to_qname as string);
+
+            // Should have both the full describe name AND the extracted identifier
+            expect(toQnames.some((q: string) => q.includes('LockManager — basic tests'))).toBe(true);
+            expect(toQnames.some((q: string) => q.endsWith('#LockManager'))).toBe(true);
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+    });
 });
 
 // ─── Go ──────────────────────────────────────────────────────────────────────

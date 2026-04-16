@@ -168,6 +168,25 @@ export class ApiServer {
     }
 
     private setupRoutes(): void {
+        // P10-L-4: Health check endpoint — no auth required, used by Docker/k8s probes
+        this.app.get('/healthz', (req: Request, res: Response) => {
+            const ctx = this.mcpServer?.workspaceManager?.getActiveContext?.();
+            const dbOk = !!(ctx?.dbManager);
+            res.json({
+                status: dbOk ? 'ok' : 'pending',
+                version: ((): string => {
+                    try {
+                        const pkgPath = path.join(__dirname, '..', '..', 'package.json');
+                        return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version ?? 'unknown';
+                    } catch { return 'unknown'; }
+                })(),
+                indexed: dbOk,
+                project: ctx?.projectPath ?? null,
+                uptime: Math.floor(process.uptime()),
+                timestamp: new Date().toISOString()
+            });
+        });
+
         // SEC-M-2: Swagger UI exposed only in non-production environments
         if (process.env['NODE_ENV'] !== 'production') {
             this.app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec));

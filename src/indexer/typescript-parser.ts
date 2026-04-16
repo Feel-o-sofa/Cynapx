@@ -263,17 +263,56 @@ export class TypeScriptParser implements CodeParser {
         // Fast path: file already exists at the candidate location
         if (fs.existsSync(candidatePath)) return candidatePath;
 
-        // Slow path: walk source directories for the same basename
         const path = require('path') as typeof import('path');
         const basename = path.basename(candidatePath); // e.g. "checksum.ts"
+        const ext = path.extname(basename);             // e.g. ".ts"
+        const stem = path.basename(basename, ext);      // e.g. "checksum"
         const projectRoot = this.findProjectRoot(testFilePath);
         if (!projectRoot) return null;
 
         const searchDirs = ['src', 'lib', 'source', 'app'];
+
+        // Slow path 1: exact basename match (e.g. checksum.ts → src/utils/checksum.ts)
         for (const dir of searchDirs) {
             const found = this.walkForFile(path.join(projectRoot, dir), basename);
             if (found) return found;
         }
+
+        // P10-M-4 — Slow path 2: fuzzy stem match
+        // Handles cases where test basename differs from production basename.
+        // e.g. "tests/parser.test.ts" → candidate "tests/parser.ts" (stem="parser")
+        // but actual file is "src/indexer/typescript-parser.ts" (contains "parser").
+        // We search for any file whose name (without extension) contains the stem.
+        for (const dir of searchDirs) {
+            const found = this.walkForFileFuzzy(path.join(projectRoot, dir), stem, ext);
+            if (found) return found;
+        }
+        return null;
+    }
+
+    /**
+     * P10-M-4: Walk a directory tree looking for a file whose name (without extension)
+     * contains `stem` and whose extension matches `ext`.
+     * Returns the first match found (depth-first), or null.
+     */
+    private walkForFileFuzzy(dir: string, stem: string, ext: string): string | null {
+        if (!fs.existsSync(dir)) return null;
+        try {
+            const path = require('path') as typeof import('path');
+            const entries = fs.readdirSync(dir, { withFileTypes: true });
+            // Files before subdirectories so shallower matches win
+            const files = entries.filter(e => !e.isDirectory());
+            const dirs  = entries.filter(e => e.isDirectory());
+            for (const entry of files) {
+                if (path.extname(entry.name) === ext && path.basename(entry.name, ext).includes(stem)) {
+                    return path.join(dir, entry.name);
+                }
+            }
+            for (const entry of dirs) {
+                const result = this.walkForFileFuzzy(path.join(dir, entry.name), stem, ext);
+                if (result) return result;
+            }
+        } catch { /* ignore permission errors */ }
         return null;
     }
 
@@ -335,6 +374,8 @@ export class TypeScriptParser implements CodeParser {
                 ts.isStringLiteral(node.arguments[0])
             ) {
                 const describeName = (node.arguments[0] as ts.StringLiteral).text;
+
+                // Always emit edge for the full describe string
                 edges.push({
                     from_qname: testFileQname,
                     to_qname: `${prodFileQname}#${describeName}`,
@@ -342,6 +383,21 @@ export class TypeScriptParser implements CodeParser {
                     dynamic: false,
                     target_file_hint: prodFilePath
                 });
+
+                // P10-M-2: If the describe name contains extra context after the
+                // leading PascalCase identifier (e.g. "TypeScriptParser — edge detection"),
+                // also emit a precise edge using only the leading identifier so that
+                // get_related_tests can match the actual class/function symbol node.
+                const leadingIdent = describeName.match(/^([A-Z][a-zA-Z0-9]+)/)?.[1];
+                if (leadingIdent && leadingIdent !== describeName) {
+                    edges.push({
+                        from_qname: testFileQname,
+                        to_qname: `${prodFileQname}#${leadingIdent}`,
+                        edge_type: 'tests',
+                        dynamic: false,
+                        target_file_hint: prodFilePath
+                    });
+                }
             }
             ts.forEachChild(node, walkForDescribe);
         };

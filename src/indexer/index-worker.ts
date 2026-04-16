@@ -8,6 +8,9 @@ import { TypeScriptParser } from './typescript-parser';
 import { TreeSitterParser } from './tree-sitter-parser';
 import { DependencyParser } from './dependency-parser';
 import { CompositeParser } from './composite-parser';
+import { YamlParser } from './yaml-parser';
+import { MarkdownParser } from './markdown-parser';
+import { JsonConfigParser } from './json-config-parser';
 
 // TypeScriptParser handles TS/JS with full type-checking capabilities
 const tsParser = new TypeScriptParser();
@@ -16,7 +19,7 @@ const treeSitterParser = new TreeSitterParser();
 // DependencyParser handles package.json/requirements.txt
 const depParser = new DependencyParser();
 
-const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser]);
+const compositeParser = new CompositeParser([tsParser, treeSitterParser, depParser, new YamlParser(), new MarkdownParser(), new JsonConfigParser()]);
 
 if (parentPort) {
     parentPort.on('message', async (message) => {

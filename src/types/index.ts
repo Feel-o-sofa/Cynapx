@@ -6,7 +6,7 @@
 /**
  * Common Symbol Types as defined in the logical scheme.
  */
-export type SymbolType = 'file' | 'module' | 'class' | 'interface' | 'method' | 'function' | 'field' | 'test' | 'package';
+export type SymbolType = 'file' | 'module' | 'class' | 'interface' | 'method' | 'function' | 'field' | 'test' | 'package' | 'config_key' | 'section';
 
 /**
  * Visibility types for symbols.

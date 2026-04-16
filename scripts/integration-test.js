@@ -348,6 +348,51 @@ async function main() {
     banner('Phase 20: re_tag_project (non-terminal, real run)');
     await runTool('RETAG_PROJECT', 're_tag_project', {}, deps);
 
+    // ══ Phase 21: backfill_history — real run + DB structure validation ════════
+    // P10-L-1: verify history entries have required fields (hash/author/date/message).
+    banner('Phase 21: backfill_history (real run + DB validation)');
+    const backfillRes = await runTool('BACKFILL_HISTORY', 'backfill_history', {}, deps);
+    if (backfillRes && !backfillRes.isError) {
+        const bfCtx = deps.getContext();
+        const bfDb  = bfCtx?.dbManager?.getDb();
+        if (bfDb) {
+            const nodesWithHistory = bfDb.prepare(
+                `SELECT qualified_name, history FROM nodes WHERE history IS NOT NULL AND history != '[]' AND history != '' LIMIT 5`
+            ).all();
+
+            const hasData = nodesWithHistory.length > 0;
+            console.log(hasData
+                ? ok(`BACKFILL_DB_ROWS — ${nodesWithHistory.length} nodes have history rows`)
+                : info('BACKFILL_DB_ROWS — 0 nodes with history (single-commit project, OK)'));
+            results.push({ label: 'BACKFILL_DB_ROWS', status: hasData ? 'PASS' : 'WARN', ms: 0 });
+
+            // Validate structure of history entries
+            let structValid = true;
+            for (const row of nodesWithHistory) {
+                try {
+                    const hist = JSON.parse(row.history);
+                    if (!Array.isArray(hist) || hist.length === 0) continue;
+                    const entry = hist[0];
+                    // Each entry should carry hash, author, date at minimum
+                    if (!entry.hash || !entry.author || !entry.date) {
+                        structValid = false;
+                        console.log(fail(`BACKFILL_STRUCT — missing field in ${row.qualified_name}: ${JSON.stringify(entry).slice(0, 100)}`));
+                        break;
+                    }
+                } catch {
+                    structValid = false;
+                    break;
+                }
+            }
+            if (hasData) {
+                console.log(structValid
+                    ? ok('BACKFILL_STRUCT — history entries contain hash/author/date ✓')
+                    : fail('BACKFILL_STRUCT — history entry missing required fields'));
+                results.push({ label: 'BACKFILL_STRUCT', status: structValid ? 'PASS' : 'FAIL', ms: 0 });
+            }
+        }
+    }
+
     printSummary();
     if (_workerPool) _workerPool.dispose();
     await wm.dispose();

@@ -1,6 +1,6 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-15 (Phase 9 핫픽스 + Phase 10 계획 수립)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-17 (Phase 10 진행 중 — executeTool 리팩토링 완료)
 > **대상 버전**: v1.0.6
 
 ---
@@ -248,6 +248,21 @@ src/
 
 ---
 
+## 3-A. Phase 10 추가 완료 항목 (2026-04-17)
+
+| 항목 | 커밋 | 내용 |
+|------|------|------|
+| **Req1-4 + A1-A3** (PR #20) | `1a50ba2` | 스키마 마이그레이션, 버전 추적, 감사 로그, 프로젝트 프로파일, Admin CLI 8개 명령 |
+| **P10-H-1** | `cd02ec6` | Express 전역 에러 핸들러 + `unhandledRejection`/`uncaughtException` 크래시 가드 |
+| **P10-M-3** | `cd02ec6` | CI lint 게이트 (`"lint": "tsc --noEmit"`, `continue-on-error` 제거) |
+| **executeTool 리팩토링** | `53977ce` | CC 159→1, fan_out 48→2, 487LOC→9LOC. 20개 핸들러를 `src/server/tools/`로 분리 |
+| **P10-L-2** | — | `as any` 실 코드 사용 0개 달성 (worker-pool.ts는 주석) |
+| **부트스트랩 + npm link 수정** | `eafc0b4` | 제로 프로젝트 PENDING 모드, Windows shebang 픽스, Claude Desktop BOM 수정 |
+
+**누적 테스트**: 183개 (12개 파일)
+
+---
+
 ## 4. 알려진 미해결 이슈
 
 | 이슈 | 원인 | 권장 대응 |
@@ -377,15 +392,29 @@ Week 3-4
 
 ### 6-3. Phase 10 완료 시 예상 수치
 
-| 항목 | Phase 9 완료 | Phase 10 목표 |
-|------|-------------|--------------|
-| 단위 테스트 | 164개 | **~180개** (+16 예상) |
-| 통합 테스트 어서션 | 56개 | **~62개** (+backfill E2E) |
-| `as any` (실 코드) | 2개 | **0개** |
-| 크래시 가드 | 없음 | **process-level 핸들러 2개** |
-| CI 타입 체크 게이트 | 미작동 | **활성화** |
-| 인덱싱 지원 언어 | TS/JS/Go/Py/Ruby | **+YAML/JSON/Markdown** |
-| 컨테이너 배포 | 불가 | **Dockerfile 제공** |
+| 항목 | Phase 9 완료 | 현재 (2026-04-17) | Phase 10 목표 |
+|------|-------------|------------------|--------------|
+| 단위 테스트 | 164개 | **183개** | **~195개** |
+| 통합 테스트 어서션 | 56개 | 56개 | **~62개** (+backfill E2E) |
+| `as any` (실 코드) | 2개 | **0개** ✅ | 0개 |
+| 크래시 가드 | 없음 | **2개** ✅ | 2개 |
+| CI 타입 체크 게이트 | 미작동 | **활성화** ✅ | 활성화 |
+| executeTool CC | 159 | **1** ✅ | 1 |
+| Admin CLI | 없음 | **8개 명령** ✅ | 8개 명령 |
+| 인덱싱 지원 언어 | TS/JS/Go/Py/Ruby | TS/JS/Go/Py/Ruby | **+YAML/JSON/Markdown** |
+| 컨테이너 배포 | 불가 | 불가 | **Dockerfile 제공** |
+
+### 6-4. Phase 10 잔여 과제 (2026-04-17 기준)
+
+| ID | 항목 | 우선순위 | 상태 |
+|----|------|---------|------|
+| P10-M-1 | 비-TS 파일 인덱싱 (YAML/JSON/Markdown) | MEDIUM | ⏳ 진행 예정 |
+| P10-M-2 | `get_related_tests` 함수 수준 정밀 매핑 | MEDIUM | ⏳ 진행 예정 |
+| P10-M-4 | `get_related_tests` basename fuzzy 매칭 | MEDIUM | ⏳ 진행 예정 |
+| P10-L-1 | `backfill_history` E2E 검증 어서션 | LOW | ⏳ 진행 예정 |
+| P10-L-3 | 구조화 로그 도입 (pino/winston) | LOW | ⏳ 진행 예정 |
+| P10-L-4 | `/healthz` 엔드포인트 + Dockerfile | LOW | ⏳ 진행 예정 |
+| P10-L-5 | `diagnostic-v8.md` 작성 | LOW | ⏳ 진행 예정 |
 
 ---
 

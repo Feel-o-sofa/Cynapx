@@ -20,6 +20,9 @@ import { LanguageRegistry } from './indexer/language-registry';
 import { TreeSitterParser } from './indexer/tree-sitter-parser';
 import { TypeScriptParser } from './indexer/typescript-parser';
 import { CompositeParser } from './indexer/composite-parser';
+import { YamlParser } from './indexer/yaml-parser';
+import { MarkdownParser } from './indexer/markdown-parser';
+import { JsonConfigParser } from './indexer/json-config-parser';
 import { GitService } from './indexer/git-service';
 import { UpdatePipeline } from './indexer/update-pipeline';
 import { FileWatcher } from './watcher/file-watcher';
@@ -115,7 +118,7 @@ async function bootstrap() {
 
         const treeSitterParser = new TreeSitterParser();
         const typescriptParser = new TypeScriptParser();
-        const compositeParser = new CompositeParser([typescriptParser, treeSitterParser]);
+        const compositeParser = new CompositeParser([typescriptParser, treeSitterParser, new YamlParser(), new MarkdownParser(), new JsonConfigParser()]);
         const gitService = new GitService(ctx.projectPath);
         const workerPool = lifecycle.track(new WorkerPool(Math.min(os.cpus().length, 4)));
 
