@@ -43,3 +43,9 @@ switch-env.js
 .gemini/
 reports/
 GEMINI.md
+
+# Claude Code artifacts
+.claude/worktrees/
+
+# Runtime logs
+*.log
