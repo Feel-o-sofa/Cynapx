@@ -1,7 +1,8 @@
+#!/usr/bin/env node
 /**
  * Copyright (c) 2026 Cynapx Contributors
  * Licensed under the MIT License (MIT).
- * See LICENSE in the project root for license information. 
+ * See LICENSE in the project root for license information.
  */
 import { Command } from 'commander';
 import * as crypto from 'crypto';
