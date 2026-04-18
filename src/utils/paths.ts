@@ -10,6 +10,33 @@ import * as fs from 'fs';
 
 export const ANCHOR_FILE = '.cynapx-config';
 
+/**
+ * Known system directory prefixes that should never be registered as projects.
+ * Stored as lowercase for case-insensitive comparison.
+ */
+const SYSTEM_PATH_PREFIXES: string[] = [
+    // Windows system directories
+    path.normalize('C:\\Windows').toLowerCase(),
+    path.normalize('C:\\Program Files').toLowerCase(),
+    path.normalize('C:\\Program Files (x86)').toLowerCase(),
+    // Unix / macOS system directories
+    '/usr', '/bin', '/sbin', '/etc', '/lib', '/lib64',
+    '/proc', '/sys', '/dev', '/tmp', '/var',
+    '/system', '/library',
+];
+
+/**
+ * Returns true if the given path is a known system/OS directory that should
+ * never be treated as a user project root.
+ */
+export function isSystemPath(p: string): boolean {
+    const normalized = path.resolve(p).toLowerCase().replace(/\\/g, '/');
+    return SYSTEM_PATH_PREFIXES.some(sp => {
+        const spNorm = sp.replace(/\\/g, '/');
+        return normalized === spNorm || normalized.startsWith(spNorm + '/');
+    });
+}
+
 export function getCentralStorageDir(): string {
     const homeDir = os.homedir();
     const storageDir = path.join(homeDir, '.cynapx');
@@ -67,6 +94,9 @@ export function readRegistry(): ProjectEntry[] {
 
 export function addToRegistry(projectPath: string): void {
     const absolutePath = path.resolve(projectPath);
+    if (isSystemPath(absolutePath)) {
+        throw new Error(`Refusing to register system path as a project: ${absolutePath}`);
+    }
     const projectName = getProjectName(absolutePath);
     const dbPath = getDatabasePath(absolutePath);
     
@@ -140,11 +170,14 @@ export function updateRegistryStats(
 
 export function findProjectAnchor(startPath: string): string | null {
     let current = path.resolve(startPath);
+    if (isSystemPath(current)) return null;
+
     const registry = readRegistry();
     const registeredProject = registry.find(p => current.toLowerCase().startsWith(p.path.toLowerCase()));
     if (registeredProject) return registeredProject.path;
 
     while (true) {
+        if (isSystemPath(current)) break;
         const anchorPath = path.join(current, ANCHOR_FILE);
         if (fs.existsSync(anchorPath)) return current;
         const parent = path.dirname(current);

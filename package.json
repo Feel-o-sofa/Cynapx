@@ -1,6 +1,6 @@
 {
   "name": "cynapx",
-  "version": "1.0.6",
+  "version": "2.0.0",
   "description": "Cynapx: High-Performance Isolated Code Knowledge Engine for AI Agents",
   "main": "dist/bootstrap.js",
   "bin": {

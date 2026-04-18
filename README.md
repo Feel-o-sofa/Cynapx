@@ -1,4 +1,4 @@
-# 🧠 Cynapx v1.0.6
+# 🧠 Cynapx v2.0.0
 ### High-Performance AI-Native Code Knowledge Engine
 
 **Cynapx** is a high-performance, isolated code analysis engine for AI agents and developers. It transforms a codebase into a multi-dimensional knowledge graph, enabling LLMs to understand complex architectures, relationships, and quality signals instantly.
@@ -25,15 +25,22 @@
 
 ### 1. Prerequisites
 
-```bash
-# Node.js >= 20 required
-node --version
+- **Node.js ≥ 20** — `node --version` to verify
+- **Git** — required for project history analysis
 
-# Install dependencies from the project root
+### 2. Install Cynapx
+
+```bash
+# Clone the repository (GitHub-only distribution — not on npm)
+git clone https://github.com/Feel-o-sofa/cynapx.git
+cd cynapx
+
+# Install dependencies and build
 npm install
+npm run build
 ```
 
-### 2. Register with Claude Code
+### 3. Register with Claude Code
 
 Create or edit `.mcp.json` in your project directory:
 
@@ -41,17 +48,18 @@ Create or edit `.mcp.json` in your project directory:
 {
   "mcpServers": {
     "cynapx": {
-      "command": "npx",
-      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
-      "cwd": "/path/to/cynapx"
+      "command": "node",
+      "args": ["/path/to/cynapx/dist/bootstrap.js", "--path", "."]
     }
   }
 }
 ```
 
-> **Dev workflow**: Add a `cynapx-dev` entry pointing to your working branch so you can test changes after a session restart without committing. See [GUIDE_EN.md §2](./GUIDE_EN.md#2-setup) for details.
+> Replace `/path/to/cynapx` with the directory where you cloned the repository.
 
-### 3. Initialize a project
+> **Dev workflow**: Add a `cynapx-dev` entry pointing to your working branch so you can test changes without rebuilding. See [GUIDE_EN.md §2](./GUIDE_EN.md#2-setup) for details.
+
+### 4. Initialize a project
 
 Once connected, call `initialize_project` to index your target codebase:
 
@@ -151,6 +159,7 @@ npx ts-node src/bootstrap.ts [options]
 ## 🛡️ Security
 
 - **Path Traversal Guard**: All file access is validated against the registered project path
+- **System Path Guard**: OS-level directories (`C:\Windows`, `/usr`, `/etc`, etc.) are blocked from being registered or traversed — prevents accidental indexing of system files
 - **Isolated Storage**: `~/.cynapx/` — never writes to your project directory
 - **Input Validation**: All REST endpoints protected by Zod schemas
 

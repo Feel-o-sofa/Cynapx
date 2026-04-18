@@ -5,20 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-04-18
 
 ### Added
+- **Strategy Pattern for sync pipeline** — `SyncStrategy` interface with `FullScanStrategy` and `IncrementalSyncStrategy` extracted from `UpdatePipeline.syncWithGit`, reducing cyclomatic complexity from 18 to 3 and enabling independent unit testing
+- **Disk usage monitoring** — `get_setup_context` now returns `disk_usage_mb` and a `disk_warning` when central storage exceeds 1 GB threshold (`DISK_THRESHOLD_MB`)
+- **Backup / Restore CLI** — `cynapx-admin backup` and `cynapx-admin restore` commands for point-in-time snapshots of the project DB to `~/.cynapx/backups/`
+- **System path guard** — `isSystemPath()` helper in `src/utils/paths.ts` blocks registration and traversal of OS-level directories (Windows: `C:\Windows`, `C:\Program Files`; Unix/macOS: `/usr`, `/bin`, `/etc`, `/System`, etc.)
+- **Sub-agent orchestration workflow** — `agent_docs/workflow.md` specifying Wave/Gate patterns, mandatory integration tests for every new feature, and 3-tier Gate policy
+- **Integration test suite** — `scripts/integration-test.js` covering 65 assertions across Phases 0–23, including real DB/git/filesystem validation
+- **Unit tests for sync strategies** — `tests/sync-strategies.test.ts` with 5 vitest tests covering FullScanStrategy and IncrementalSyncStrategy edge cases
 - `cynapx-dev` MCP entry for worktree rapid iteration
-- Sub-agent orchestration workflow specification in `agent_docs/workflow.md`
 
 ### Changed
-- `find_dead_code` tool now returns results split into HIGH/MEDIUM/LOW confidence tiers (E-1-B)
+- **Version bump to 2.0.0** — major version reflecting the accumulated architectural improvements since v1.0.x
+- **`find_dead_code`** — results now split into HIGH / MEDIUM / LOW confidence tiers (E-1-B)
+- **`mapHistoryToProject`** — raw `BEGIN/COMMIT` SQL replaced with `db.transaction()()` (better-sqlite3 native transactions)
+- **`processBatch` and `applyDelta`** — deduplicated `fan_in`/`fan_out` recomputation into private `recomputeFanMetrics()` method
 - Improvement plan consolidated with current completion status
 
 ### Fixed
-- Dead code detection accuracy root cause fix (E-1)
+- `findProjectAnchor` now short-circuits on system paths, preventing accidental indexing of OS directories
+- `addToRegistry` throws `Error` instead of silently registering system paths
+- Dead code detection accuracy root cause (E-1 through E-6)
 - Cross-platform `build:copy` script; CI Node.js version matrix updated
-- Analysis engine accuracy and runtime bugs (E-1 through E-6)
 - Critical security vulnerabilities resolved; test infrastructure established
 
 ## [1.0.6] - 2026-03-29
@@ -102,7 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Core indexing logic enhancements and `.gitignore` updates
 - Initial commit: Code Knowledge Tool core implementation
 
-[Unreleased]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.6...HEAD
+[2.0.0]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.6...v2.0.0
 [1.0.6]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.2...v1.0.5
 [1.0.2]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.1...v1.0.2
