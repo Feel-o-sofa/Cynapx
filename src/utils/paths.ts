@@ -12,6 +12,9 @@ export const ANCHOR_FILE = '.cynapx-config';
 
 /**
  * Known system directory prefixes that should never be registered as projects.
+ * These are OS-managed directories (binaries, config, kernel interfaces) that
+ * no user project should live inside. User-writable dirs like /tmp and /var
+ * are intentionally excluded so that test fixtures and temp workspaces work.
  * Stored as lowercase for case-insensitive comparison.
  */
 const SYSTEM_PATH_PREFIXES: string[] = [
@@ -19,9 +22,9 @@ const SYSTEM_PATH_PREFIXES: string[] = [
     path.normalize('C:\\Windows').toLowerCase(),
     path.normalize('C:\\Program Files').toLowerCase(),
     path.normalize('C:\\Program Files (x86)').toLowerCase(),
-    // Unix / macOS system directories
+    // Unix / macOS OS-managed directories (not user-writable temp dirs)
     '/usr', '/bin', '/sbin', '/etc', '/lib', '/lib64',
-    '/proc', '/sys', '/dev', '/tmp', '/var',
+    '/proc', '/sys', '/dev',
     '/system', '/library',
 ];
 
