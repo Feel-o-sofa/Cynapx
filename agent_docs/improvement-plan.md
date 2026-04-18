@@ -1,6 +1,6 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-17 (Phase 10 진행 중 — executeTool 리팩토링 완료)
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-18 (Phase 11 완료 — syncWithGit 전략 패턴, A-4/A-5 구현)
 > **대상 버전**: v1.0.6
 
 ---
@@ -404,17 +404,42 @@ Week 3-4
 | 인덱싱 지원 언어 | TS/JS/Go/Py/Ruby | TS/JS/Go/Py/Ruby | **+YAML/JSON/Markdown** |
 | 컨테이너 배포 | 불가 | 불가 | **Dockerfile 제공** |
 
-### 6-4. Phase 10 잔여 과제 (2026-04-17 기준)
+### 6-4. Phase 10 완료 현황 (2026-04-18 기준)
 
 | ID | 항목 | 우선순위 | 상태 |
 |----|------|---------|------|
-| P10-M-1 | 비-TS 파일 인덱싱 (YAML/JSON/Markdown) | MEDIUM | ⏳ 진행 예정 |
-| P10-M-2 | `get_related_tests` 함수 수준 정밀 매핑 | MEDIUM | ⏳ 진행 예정 |
-| P10-M-4 | `get_related_tests` basename fuzzy 매칭 | MEDIUM | ⏳ 진행 예정 |
-| P10-L-1 | `backfill_history` E2E 검증 어서션 | LOW | ⏳ 진행 예정 |
-| P10-L-3 | 구조화 로그 도입 (pino/winston) | LOW | ⏳ 진행 예정 |
-| P10-L-4 | `/healthz` 엔드포인트 + Dockerfile | LOW | ⏳ 진행 예정 |
-| P10-L-5 | `diagnostic-v8.md` 작성 | LOW | ⏳ 진행 예정 |
+| P10-M-1 | 비-TS 파일 인덱싱 (YAML/JSON/Markdown) | MEDIUM | ✅ 완료 (`e5fefd6`) |
+| P10-M-2 | `get_related_tests` 함수 수준 정밀 매핑 | MEDIUM | ✅ 완료 (`e5fefd6`) |
+| P10-M-4 | `get_related_tests` basename fuzzy 매칭 | MEDIUM | ✅ 완료 (`e5fefd6`) |
+| P10-L-1 | `backfill_history` E2E 검증 어서션 | LOW | ✅ 완료 (`e5fefd6`) |
+| P10-L-3 | 구조화 로그 도입 (pino/winston) | LOW | ⏭ Phase 11 이관 |
+| P10-L-4 | `/healthz` 엔드포인트 + Dockerfile | LOW | ✅ 완료 (`e5fefd6`) |
+| P10-L-5 | `diagnostic-v8.md` 작성 | LOW | ✅ 완료 (`e5fefd6`) |
+
+**Phase 10 완료**: 7/7 (P10-L-3는 Phase 11 이관)
+
+---
+
+## 8. Phase 11 개선 계획 (2026-04-18 수립)
+
+### 8-1. 완료 항목
+
+| ID | 항목 | 커밋 | 내용 |
+|----|------|------|------|
+| **P11-MEDIUM-1** | `syncWithGit` 전략 패턴 리팩토링 | — | `FullScanStrategy` / `IncrementalSyncStrategy` 분리. `mapHistoryToProject` `db.transaction()` 통일. `recomputeFanMetrics()` 추출로 중복 제거. 신규 테스트 5개 (`tests/sync-strategies.test.ts`) |
+| **A-4** | 디스크 임계값 알림 | — | `getDirSizeMB()` + `DISK_THRESHOLD_MB=1024`. `get_setup_context` 응답에 `disk_usage_mb` + `disk_warning` 추가 |
+| **A-5** | 백업/복원 지원 | — | `cynapx-admin backup <name>` (타임스탬프 백업 디렉토리 + meta JSON). `cynapx-admin restore <path> --yes` (meta 기반 복원). 감사 로그 연동 |
+
+**누적 테스트**: 206개 → **211개** (+5 sync-strategies)
+
+### 8-2. 잔여 과제 (우선순위 순)
+
+| ID | 항목 | 우선순위 | 상태 |
+|----|------|---------|------|
+| P10-L-3 | 구조화 로그 도입 (pino/winston) | LOW | ⏳ 다음 세션 |
+| A-6 | 웹훅 이벤트 발행 | LOW | ⏳ 미착수 |
+| A-7 | 멀티 머신 공유 인덱스 | LOW | ⏳ 미착수 (대형 스코프) |
+| — | YamlParser → js-yaml 라이브러리화 | LOW | ⏳ 미착수 |
 
 ---
 

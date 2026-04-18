@@ -17,6 +17,7 @@ import { StructuralTagger } from './structural-tagger';
 import { EmbeddingManager } from './embedding-manager';
 import { CodeNode } from '../types';
 import { GraphEngine } from '../graph/graph-engine';
+import { FullScanStrategy, IncrementalSyncStrategy } from './sync-strategies';
 
 /**
  * UpdatePipeline manages the incremental update process for the knowledge graph.
@@ -138,17 +139,14 @@ export class UpdatePipeline {
         await previousLock;
 
         try {
-            this.db.prepare('BEGIN').run();
-            for (const { filePath, history } of allHistory) {
-                if (history && history.length > 0) {
-                    const historyJson = JSON.stringify(history);
-                    this.db.prepare('UPDATE nodes SET history = ? WHERE file_path = ?').run(historyJson, filePath);
+            this.db.transaction(() => {
+                for (const { filePath, history } of allHistory) {
+                    if (history && history.length > 0) {
+                        const historyJson = JSON.stringify(history);
+                        this.db.prepare('UPDATE nodes SET history = ? WHERE file_path = ?').run(historyJson, filePath);
+                    }
                 }
-            }
-            this.db.prepare('COMMIT').run();
-        } catch (e) {
-            if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
-            throw e;
+            })();
         } finally {
             resolveLock!();
         }
@@ -260,11 +258,7 @@ export class UpdatePipeline {
             }
 
             // Recompute fan_in / fan_out for all nodes based on actual edge counts
-            this.db.prepare(
-                'UPDATE nodes SET ' +
-                'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = ?), ' +
-                'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = ?)'
-            ).run('calls', 'calls');
+            this.recomputeFanMetrics();
 
             this.db.prepare('COMMIT').run();
             this.graphEngine?.invalidateCache();
@@ -316,11 +310,7 @@ export class UpdatePipeline {
             }
 
             // Recompute fan_in / fan_out for all nodes based on actual edge counts
-            this.db.prepare(
-                'UPDATE nodes SET ' +
-                'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = ?), ' +
-                'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = ?)'
-            ).run('calls', 'calls');
+            this.recomputeFanMetrics();
 
             this.db.prepare('COMMIT').run();
             this.graphEngine?.invalidateCache();
@@ -361,35 +351,29 @@ export class UpdatePipeline {
 
     public async syncWithGit(projectPath: string): Promise<void> {
         if (!this.metadataRepo || !this.gitService) return;
+
         const lastCommit = this.metadataRepo.getLastIndexedCommit();
         const currentHead = await this.gitService.getCurrentHead();
 
         // Already up to date — nothing to do
         if (lastCommit && lastCommit === currentHead) return;
 
-        let events: { event: any; file_path: string; commit: string }[];
+        const strategy = lastCommit
+            ? new IncrementalSyncStrategy(this.gitService, lastCommit, currentHead)
+            : new FullScanStrategy(this.gitService);
 
-        if (!lastCommit) {
-            // Fresh DB: no previous indexed commit — do a full scan of all tracked files
-            const allFiles = await this.gitService.getAllTrackedFiles();
-            if (allFiles.length === 0) return;
-            events = await Promise.all(allFiles.map(async (f) => {
-                const fullPath = path.resolve(projectPath, f);
-                const commit = await this.gitService!.getLatestCommit(fullPath).catch(() => currentHead);
-                return { event: 'ADD' as ChangeType, file_path: fullPath, commit };
-            }));
-        } else {
-            // Incremental: process only files changed since last indexed commit
-            const diffs = await this.gitService.getDiffFiles(lastCommit, currentHead);
-            if (diffs.length === 0) return;
-            events = await Promise.all(diffs.map(async (d) => {
-                const fullPath = path.resolve(projectPath, d.file);
-                const commit = d.status === 'DELETE' ? 'deleted' : await this.gitService!.getLatestCommit(fullPath);
-                return { event: d.status as ChangeType, file_path: fullPath, commit };
-            }));
-        }
+        const result = await strategy.buildEvents(projectPath);
+        if (!result) return;
 
-        await this.processBatch(events, Date.now());
+        await this.processBatch(result.events, Date.now());
+    }
+
+    private recomputeFanMetrics(): void {
+        this.db.prepare(
+            'UPDATE nodes SET ' +
+            'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = ?), ' +
+            'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = ?)'
+        ).run('calls', 'calls');
     }
 
     private resolveNodeId(edge: any, side: 'from' | 'to', internalMap: Map<string, number>): number | undefined {

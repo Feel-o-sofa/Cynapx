@@ -176,3 +176,29 @@ export function toCanonical(s: string): string {
     }
     return res.toLowerCase().replace(/\/+/g, '/').replace(/\/$/, '');
 }
+
+/** Default disk usage threshold in megabytes (1 GB). */
+export const DISK_THRESHOLD_MB = 1024;
+
+/**
+ * Recursively compute total size of a directory tree in megabytes.
+ * Returns 0 if the directory does not exist.
+ */
+export function getDirSizeMB(dir: string): number {
+    if (!fs.existsSync(dir)) return 0;
+    let totalBytes = 0;
+    function walk(d: string): void {
+        for (const entry of fs.readdirSync(d, { withFileTypes: true })) {
+            const full = path.join(d, entry.name);
+            if (entry.isDirectory()) {
+                walk(full);
+            } else {
+                try {
+                    totalBytes += fs.statSync(full).size;
+                } catch { /* ignore */ }
+            }
+        }
+    }
+    walk(dir);
+    return totalBytes / (1024 * 1024);
+}

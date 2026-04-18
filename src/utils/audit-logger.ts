@@ -14,7 +14,9 @@ export type AuditEventType =
     | 'version_mismatch'
     | 'reindex_triggered'
     | 'purge'
-    | 'unregister';
+    | 'unregister'
+    | 'backup'
+    | 'restore';
 
 export interface AuditEvent {
     timestamp: string;

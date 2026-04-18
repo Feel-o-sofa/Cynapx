@@ -20,6 +20,8 @@
  *   purge <name>     Delete index DB files for a project
  *   unregister <name> Remove a project from the registry
  *   compact          Run VACUUM on all project DBs to reclaim disk space
+ *   backup <name>    Create a timestamped backup of a project database
+ *   restore <path>   Restore a project database from a backup
  */
 import * as fs from 'fs';
 import * as path from 'path';
@@ -109,6 +111,16 @@ function padEnd(s: string, len: number): string {
 
 function hr(width = 72): string {
     return dim('─'.repeat(width));
+}
+
+function getBackupsDir(): string {
+    const dir = path.join(os.homedir(), '.cynapx', 'backups');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+
+function copyFileSafe(src: string, dest: string): void {
+    if (fs.existsSync(src)) fs.copyFileSync(src, dest);
 }
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
@@ -360,6 +372,89 @@ function cmdCompact(opts: { yes?: boolean }): void {
     console.log(bold(`  Total reclaimed: ${(total / (1024 * 1024)).toFixed(1)} MB`));
 }
 
+function cmdBackup(name: string): void {
+    const registry = readRegistry();
+    const entry = registry.find(e => e.name.toLowerCase() === name.toLowerCase() || e.path === name);
+    if (!entry) {
+        console.error(red(`Project '${name}' not found in registry.`));
+        process.exit(1);
+    }
+
+    if (!fs.existsSync(entry.db_path)) {
+        console.error(red(`DB file not found for '${entry.name}'. Has the project been indexed?`));
+        process.exit(1);
+    }
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const backupName = `${entry.name}-${timestamp}`;
+    const backupDir = path.join(getBackupsDir(), backupName);
+    fs.mkdirSync(backupDir, { recursive: true });
+
+    const dbBase = path.basename(entry.db_path);
+    copyFileSafe(entry.db_path,              path.join(backupDir, dbBase));
+    copyFileSafe(`${entry.db_path}-wal`,     path.join(backupDir, `${dbBase}-wal`));
+    copyFileSafe(`${entry.db_path}-shm`,     path.join(backupDir, `${dbBase}-shm`));
+
+    // Save metadata
+    fs.writeFileSync(
+        path.join(backupDir, 'backup-meta.json'),
+        JSON.stringify({ project: entry.name, path: entry.path, db_path: entry.db_path, created_at: new Date().toISOString() }, null, 2),
+        'utf-8'
+    );
+
+    new AuditLogger().log('backup', { project: entry.path, backupDir });
+    console.log(green(`✓ Backup created: ${backupDir}`));
+}
+
+function cmdRestore(backupPath: string, opts: { yes?: boolean }): void {
+    // Resolve backup dir
+    const resolvedBackup = path.isAbsolute(backupPath)
+        ? backupPath
+        : path.join(getBackupsDir(), backupPath);
+
+    if (!fs.existsSync(resolvedBackup)) {
+        console.error(red(`Backup directory not found: ${resolvedBackup}`));
+        process.exit(1);
+    }
+
+    const metaPath = path.join(resolvedBackup, 'backup-meta.json');
+    if (!fs.existsSync(metaPath)) {
+        console.error(red(`No backup-meta.json found in ${resolvedBackup}. Is this a valid Cynapx backup?`));
+        process.exit(1);
+    }
+
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')) as {
+        project: string; path: string; db_path: string; created_at: string;
+    };
+
+    if (!opts.yes) {
+        console.log(yellow(`This will restore backup for '${meta.project}' (created ${meta.created_at})`));
+        console.log(yellow(`Target DB: ${meta.db_path}`));
+        console.log(yellow(`Re-run with --yes to confirm.`));
+        return;
+    }
+
+    const dbBase = path.basename(meta.db_path);
+    const srcDb  = path.join(resolvedBackup, dbBase);
+
+    if (!fs.existsSync(srcDb)) {
+        console.error(red(`Backup DB file not found in ${resolvedBackup}`));
+        process.exit(1);
+    }
+
+    // Ensure target directory exists
+    const targetDir = path.dirname(meta.db_path);
+    if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
+
+    copyFileSafe(srcDb,                             meta.db_path);
+    copyFileSafe(path.join(resolvedBackup, `${dbBase}-wal`), `${meta.db_path}-wal`);
+    copyFileSafe(path.join(resolvedBackup, `${dbBase}-shm`), `${meta.db_path}-shm`);
+
+    new AuditLogger().log('restore', { project: meta.path, backupDir: resolvedBackup });
+    console.log(green(`✓ Restored '${meta.project}' from backup.`));
+    console.log(dim(`  DB: ${meta.db_path}`));
+}
+
 // ─── CLI setup ────────────────────────────────────────────────────────────────
 
 const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf-8')) as { version: string };
@@ -409,5 +504,16 @@ program
     .description('Run VACUUM on all project databases to reclaim disk space')
     .option('-y, --yes', 'Skip confirmation prompt')
     .action((opts: { yes?: boolean }) => cmdCompact(opts));
+
+program
+    .command('backup <name>')
+    .description('Create a timestamped backup of a project database')
+    .action((name: string) => cmdBackup(name));
+
+program
+    .command('restore <backup-path>')
+    .description('Restore a project database from a backup directory')
+    .option('-y, --yes', 'Skip confirmation prompt')
+    .action((backupPath: string, opts: { yes?: boolean }) => cmdRestore(backupPath, opts));
 
 program.parse(process.argv);
