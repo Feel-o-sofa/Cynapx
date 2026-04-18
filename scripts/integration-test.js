@@ -393,6 +393,107 @@ async function main() {
         }
     }
 
+    // ══ Phase 22: get_setup_context — disk_usage_mb field (A-4) ══════════════
+    banner('Phase 22: get_setup_context disk_usage_mb (A-4)');
+    const setupRes2 = await runTool('SETUP_DISK_FIELD', 'get_setup_context', {}, deps);
+    if (setupRes2 && !setupRes2.isError) {
+        try {
+            const setupPayload = JSON.parse(setupRes2.content[0].text);
+            const hasDisk = typeof setupPayload.disk_usage_mb === 'number' && setupPayload.disk_usage_mb >= 0;
+            console.log(hasDisk
+                ? ok(`SETUP_DISK_VALUE — disk_usage_mb = ${setupPayload.disk_usage_mb.toFixed(1)} MB`)
+                : fail('SETUP_DISK_VALUE — disk_usage_mb missing or not a number'));
+            results.push({ label: 'SETUP_DISK_VALUE', status: hasDisk ? 'PASS' : 'FAIL', ms: 0 });
+
+            // disk_warning should be absent when below threshold (1024 MB)
+            const noSpuriousWarning = setupPayload.disk_usage_mb < 1024
+                ? setupPayload.disk_warning === undefined
+                : true; // above threshold — warning is expected, don't fail
+            console.log(noSpuriousWarning
+                ? ok('SETUP_DISK_WARN — disk_warning absent (usage within threshold)')
+                : fail('SETUP_DISK_WARN — unexpected disk_warning below threshold'));
+            results.push({ label: 'SETUP_DISK_WARN', status: noSpuriousWarning ? 'PASS' : 'FAIL', ms: 0 });
+        } catch (e) {
+            results.push({ label: 'SETUP_DISK_VALUE', status: 'FAIL', error: e.message, ms: 0 });
+            console.log(fail(`SETUP_DISK_VALUE — parse error: ${e.message}`));
+        }
+    }
+
+    // ══ Phase 23: backup / restore CLI (A-5) ══════════════════════════════════
+    banner('Phase 23: cynapx-admin backup / restore (A-5)');
+    const { execSync } = require('child_process');
+    const fs = require('fs');
+    const backupsBase = path.join(os.homedir(), '.cynapx', 'backups');
+
+    // Identify a registered project to back up
+    const { readRegistry } = require(path.join(ROOT, 'dist/utils/paths'));
+    const reg = readRegistry();
+    const targetProject = reg[0];
+
+    if (!targetProject) {
+        console.log(info('BACKUP_SKIP — no registered project found, skipping backup test'));
+        results.push({ label: 'BACKUP_RUN', status: 'WARN', ms: 0 });
+    } else {
+        // Run backup via CLI (compiled dist)
+        let backupDir = null;
+        try {
+            const t0 = Date.now();
+            execSync(
+                `node ${path.join(ROOT, 'dist/cli/admin.js')} backup "${targetProject.name}"`,
+                { stdio: 'pipe' }
+            );
+            const ms = Date.now() - t0;
+
+            // Find the newest backup directory for this project
+            const entries = fs.existsSync(backupsBase)
+                ? fs.readdirSync(backupsBase).filter(e => e.startsWith(targetProject.name + '-')).sort()
+                : [];
+            backupDir = entries.length > 0 ? path.join(backupsBase, entries[entries.length - 1]) : null;
+
+            const metaExists = backupDir && fs.existsSync(path.join(backupDir, 'backup-meta.json'));
+            console.log(metaExists
+                ? ok(`BACKUP_RUN — backup created at ${backupDir} [${ms}ms]`)
+                : fail('BACKUP_RUN — backup dir or meta file not found'));
+            results.push({ label: 'BACKUP_RUN', status: metaExists ? 'PASS' : 'FAIL', ms });
+        } catch (e) {
+            results.push({ label: 'BACKUP_RUN', status: 'FAIL', error: e.message, ms: 0 });
+            console.log(fail(`BACKUP_RUN — ${e.message.slice(0, 120)}`));
+        }
+
+        // Validate backup-meta.json structure
+        if (backupDir) {
+            try {
+                const meta = JSON.parse(fs.readFileSync(path.join(backupDir, 'backup-meta.json'), 'utf-8'));
+                const valid = meta.project && meta.path && meta.db_path && meta.created_at;
+                console.log(valid
+                    ? ok('BACKUP_META — meta fields: project / path / db_path / created_at ✓')
+                    : fail('BACKUP_META — missing required fields in backup-meta.json'));
+                results.push({ label: 'BACKUP_META', status: valid ? 'PASS' : 'FAIL', ms: 0 });
+            } catch (e) {
+                results.push({ label: 'BACKUP_META', status: 'FAIL', error: e.message, ms: 0 });
+                console.log(fail(`BACKUP_META — ${e.message}`));
+            }
+        }
+
+        // Restore dry-run (without --yes, should print warning and exit 0)
+        try {
+            const relName = backupDir ? path.basename(backupDir) : (targetProject.name + '-DRY');
+            execSync(
+                `node ${path.join(ROOT, 'dist/cli/admin.js')} restore "${relName}"`,
+                { stdio: 'pipe' }
+            );
+            console.log(ok('RESTORE_DRYRUN — restore without --yes exited 0 (dry-run mode)'));
+            results.push({ label: 'RESTORE_DRYRUN', status: 'PASS', ms: 0 });
+        } catch (e) {
+            // exit code != 0 is also acceptable for dry-run if backup dir missing
+            const acceptable = e.status === 1 && backupDir === null;
+            console.log(acceptable
+                ? info('RESTORE_DRYRUN — non-zero exit (no backup dir, acceptable)')
+                : fail(`RESTORE_DRYRUN — unexpected error: ${e.message?.slice(0, 120)}`));
+            results.push({ label: 'RESTORE_DRYRUN', status: acceptable ? 'WARN' : 'FAIL', ms: 0 });
+        }
+    }
+
     printSummary();
     if (_workerPool) _workerPool.dispose();
     await wm.dispose();

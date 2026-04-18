@@ -172,13 +172,20 @@ node scripts/integration-test.js
 
 ### 6.4 Gate 정책 (Phase 8~)
 
-Phase 8부터 Gate는 2단계:
+모든 Phase의 마지막은 반드시 3단계 Gate를 모두 통과해야 한다.
 
-| 단계 | 명령 | 통과 기준 |
-|------|------|-----------|
-| Gate 1 | `npx tsc --noEmit` | 0 errors |
-| Gate 2 | `npx vitest run` | 전체 통과 |
-| Gate 3 (선택) | `node scripts/integration-test.js` | 56/56 어서션 |
+| 단계 | 명령 | 통과 기준 | 필수 여부 |
+|------|------|-----------|-----------|
+| Gate 1 | `npx tsc --noEmit` | 0 errors | **필수** |
+| Gate 2 | `npx vitest run` | 전체 통과 | **필수** |
+| Gate 3 | `node scripts/integration-test.js` | 0 FAIL | **필수** |
+
+#### Gate 3 운영 규칙
+
+- **새 기능을 추가하면 반드시 통합 테스트 Phase를 추가**한다. 단위 테스트만으로는 실제 동작을 보장할 수 없다.
+- 통합 테스트는 `scripts/integration-test.js` 파일에 순번 Phase로 추가하며, 커밋 전에 실행해 전체 통과를 확인한다.
+- `WARN` 상태는 통과로 간주하되, `FAIL` / `CRASH`가 1개라도 있으면 커밋하지 않는다.
+- 통합 테스트는 실제 DB·git·파일시스템을 사용하므로 `npm run build` 후 실행한다.
 
 ---
 
