@@ -5,6 +5,7 @@
  */
 import { WorkspaceManager } from './workspace-manager';
 import { ConsistencyChecker } from '../indexer/consistency-checker';
+import { requireEngine } from './tools/_utils';
 
 /**
  * HealthMonitor runs a periodic consistency check on the active project's
@@ -24,7 +25,7 @@ export class HealthMonitor {
                 const ctx = workspaceManager.getActiveContext();
                 if (!ctx) return;
 
-                const stats = ctx.metadataRepo!.getLedgerStats();
+                const stats = requireEngine(ctx, 'metadataRepo').getLedgerStats();
                 const isConsistent =
                     stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
                     stats.metadata.total_calls_count === stats.actual.sum_fan_out;
@@ -34,9 +35,9 @@ export class HealthMonitor {
                     this.isChecking = true;
                     try {
                         const checker = new ConsistencyChecker(
-                            ctx.graphEngine!.nodeRepo,
-                            ctx.gitService!,
-                            ctx.updatePipeline!,
+                            requireEngine(ctx, 'graphEngine').nodeRepo,
+                            requireEngine(ctx, 'gitService'),
+                            requireEngine(ctx, 'updatePipeline'),
                             ctx.projectPath
                         );
                         await checker.validate(true, false);

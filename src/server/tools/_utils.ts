@@ -3,6 +3,34 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
+import { EngineContext } from '../workspace-manager.js';
+
+/**
+ * H-1: Thrown by requireEngine() when a tool handler is invoked before the
+ * relevant engine component has been constructed (e.g. during the brief
+ * window between Host promotion and startHostServices() completing). The
+ * tool dispatcher converts this into an `isError` ToolResult instead of
+ * letting a TypeError on `undefined` crash the request.
+ */
+export class EngineNotReadyError extends Error {
+    constructor(public readonly field: string) {
+        super(`Engine component '${field}' is not ready yet — the host is still initializing. Please retry shortly.`);
+        this.name = 'EngineNotReadyError';
+    }
+}
+
+/**
+ * Returns `ctx[key]`, throwing EngineNotReadyError if it hasn't been
+ * initialized yet. Replaces unsafe `ctx.xxx!` non-null assertions in tool
+ * handlers.
+ */
+export function requireEngine<K extends keyof EngineContext>(ctx: EngineContext, key: K): NonNullable<EngineContext[K]> {
+    const value = ctx[key];
+    if (value === undefined || value === null) {
+        throw new EngineNotReadyError(String(key));
+    }
+    return value as NonNullable<EngineContext[K]>;
+}
 
 export function mergeResultsRRF(keywordNodes: any[], vectorNodes: any[], limit: number): any[] {
     const k = 60;

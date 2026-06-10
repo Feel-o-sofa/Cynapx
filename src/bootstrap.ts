@@ -203,11 +203,21 @@ async function bootstrap() {
                 throw err;
             }
 
+            // H-1: readyPromise is already resolved from this session's prior
+            // Terminal-mode markReady(true), so executeTool would pass
+            // waitUntilReady() immediately. Reset it BEFORE promoting so any
+            // tool calls that arrive while engine contexts are being rebuilt
+            // block until startHostServices() completes, instead of hitting
+            // an EngineNotReadyError (or worse, an undefined `ctx.xxx!`).
+            mcpServer.markReady(false);
             mcpServer.promoteToHost();
 
-            // Re-start services for all contexts
-            await startHostServices();
-            mcpServer.markReady(true);
+            try {
+                // Re-start services for all contexts
+                await startHostServices();
+            } finally {
+                mcpServer.markReady(true);
+            }
         } else {
             await ipcCoordinator.connectToHost(lock.ipcPort, lock.nonce);
         }

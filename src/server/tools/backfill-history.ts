@@ -5,6 +5,7 @@
  */
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
+import { requireEngine } from './_utils.js';
 
 export const backfillHistoryHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -16,7 +17,7 @@ export const backfillHistoryHandler: ToolHandler = {
         if (deps.isTerminal()) {
             return { content: [{ type: 'text', text: 'This operation is not available in Terminal mode.' }], isError: true };
         }
-        const pipeline = ctx.updatePipeline!;
+        const pipeline = requireEngine(ctx, 'updatePipeline');
         await pipeline.mapHistoryToProject();
         return { content: [{ type: "text", text: "Successfully backfilled Git history." }] };
     }

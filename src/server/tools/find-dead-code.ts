@@ -5,6 +5,7 @@
  */
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
+import { requireEngine } from './_utils.js';
 
 export const findDeadCodeHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -12,7 +13,7 @@ export const findDeadCodeHandler: ToolHandler = {
         if (!ctx) {
             return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
         }
-        const report = await ctx.optEngine!.findDeadCode();
+        const report = await requireEngine(ctx, 'optEngine').findDeadCode();
         const totalDead = report.summary.deadSymbols;
         let text = `Found ${totalDead} potential dead code symbols:\n`;
         text += `- HIGH confidence (private, fan_in=0): ${report.summary.highConfidenceDead} symbols\n`;

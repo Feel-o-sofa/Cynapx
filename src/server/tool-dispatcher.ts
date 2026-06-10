@@ -15,6 +15,7 @@ import { EmbeddingProvider } from '../indexer/embedding-manager.js';
 import { RemediationEngine } from '../graph/remediation-engine.js';
 import { IpcCoordinator } from './ipc-coordinator.js';
 import { toolRegistry } from './tools/_registry.js';
+import { EngineNotReadyError } from './tools/_utils.js';
 
 export interface ToolDeps {
     waitUntilReady: () => Promise<void>;
@@ -216,5 +217,15 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
 
     const handler = toolRegistry.get(name);
     if (!handler) throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
-    return handler.execute(args, deps);
+    try {
+        return await handler.execute(args, deps);
+    } catch (err) {
+        // H-1: the active project's engine context can briefly be incomplete
+        // right after Host promotion, before startHostServices() finishes.
+        // Surface this as a retryable tool error instead of crashing.
+        if (err instanceof EngineNotReadyError) {
+            return { isError: true, content: [{ type: 'text', text: err.message }] };
+        }
+        throw err;
+    }
 }

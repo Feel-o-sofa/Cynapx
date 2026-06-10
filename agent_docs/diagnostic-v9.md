@@ -63,8 +63,8 @@ const possiblePaths = [
 
 ## 2. HIGH — 안정성/정합성 결함
 
-### H-1. Host 승격 윈도우 레이스 → 도구 핸들러 크래시 — partially [DONE — Phase 12-2 Step 2]
-> `src/server/mcp-server.ts` `waitUntilReady()`의 `this.isInitialized = true` 부작용은 제거됨(`tests/mcp-server.test.ts`). `promoteToHost()` 순서 변경 + `requireEngine()` 가드 + 11곳 `ctx.xxx!` 교체는 아직 미착수.
+### H-1. Host 승격 윈도우 레이스 → 도구 핸들러 크래시 — [DONE — Phase 12-2 Step 2]
+> `waitUntilReady()`의 `isInitialized=true` 부작용 제거, `attemptFailover`에서 `markReady(false)` → `promoteToHost()` → `startHostServices()` → `markReady(true)` 순서로 재정렬, `requireEngine()`/`EngineNotReadyError` 가드를 12개 핸들러의 `ctx.xxx!`에 적용 완료. 회귀 테스트: `tests/mcp-server.test.ts`, `tests/tool-dispatcher.test.ts` "H-1 requireEngine guard".
 
 **`src/bootstrap.ts:202-206`, `src/server/mcp-server.ts:111-122`, `src/server/tools/*.ts` (11곳)**
 

@@ -5,6 +5,7 @@
  */
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
+import { requireEngine } from './_utils.js';
 
 export const getRiskProfileHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -15,7 +16,7 @@ export const getRiskProfileHandler: ToolHandler = {
         if (!ctx) {
             return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
         }
-        const profile = await ctx.refactorEngine!.getRiskProfile(args.qualified_name);
+        const profile = await requireEngine(ctx, 'refactorEngine').getRiskProfile(args.qualified_name);
         return { content: [{ type: "text", text: JSON.stringify(profile, null, 2) }] };
     }
 };

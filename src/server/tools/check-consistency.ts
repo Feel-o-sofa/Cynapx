@@ -6,6 +6,7 @@
 import { ConsistencyChecker } from '../../indexer/consistency-checker.js';
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
+import { requireEngine } from './_utils.js';
 
 export const checkConsistencyHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -13,7 +14,12 @@ export const checkConsistencyHandler: ToolHandler = {
         if (!ctx) {
             return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
         }
-        const checker = new ConsistencyChecker(ctx.graphEngine!.nodeRepo, ctx.gitService!, ctx.updatePipeline!, ctx.projectPath);
+        const checker = new ConsistencyChecker(
+            requireEngine(ctx, 'graphEngine').nodeRepo,
+            requireEngine(ctx, 'gitService'),
+            requireEngine(ctx, 'updatePipeline'),
+            ctx.projectPath
+        );
         const results = await checker.validate(args.repair, args.force);
         return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
     }

@@ -5,6 +5,7 @@
  */
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
+import { requireEngine } from './_utils.js';
 
 export const discoverLatentPoliciesHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -18,7 +19,7 @@ export const discoverLatentPoliciesHandler: ToolHandler = {
         if (args.max_policies !== undefined && (typeof args.max_policies !== 'number' || Number.isNaN(args.max_policies) || args.max_policies < 1 || !Number.isInteger(args.max_policies))) {
             return { content: [{ type: 'text', text: 'Invalid argument: max_policies must be a positive integer.' }], isError: true };
         }
-        const policies = await ctx.policyDiscoverer!.discoverPolicies(args.threshold, args.min_count);
+        const policies = await requireEngine(ctx, 'policyDiscoverer').discoverPolicies(args.threshold, args.min_count);
         return { content: [{ type: "text", text: JSON.stringify(policies, null, 2) }] };
     }
 };

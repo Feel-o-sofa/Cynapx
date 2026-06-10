@@ -5,18 +5,19 @@
  */
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
-import { mergeResultsRRF } from './_utils.js';
+import { mergeResultsRRF, requireEngine } from './_utils.js';
 
 export const searchSymbolsHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
         const limit = args.limit || 10;
         const settled = await Promise.allSettled(deps.workspaceManager.getAllContexts().map(async (ctx) => {
-            const keywordNodes = ctx.graphEngine!.nodeRepo.searchSymbols(args.query, limit, { symbol_type: args.symbol_type });
+            const graphEngine = requireEngine(ctx, 'graphEngine');
+            const keywordNodes = graphEngine.nodeRepo.searchSymbols(args.query, limit, { symbol_type: args.symbol_type });
             if (!args.semantic) return keywordNodes;
             try {
                 const queryVector = await deps.embeddingProvider.generate(args.query);
-                const vectorResults = ctx.vectorRepo!.search(queryVector, limit);
-                const vectorNodes = vectorResults.map(r => ctx.graphEngine!.getNodeById(r.id)).filter(n => n !== null);
+                const vectorResults = requireEngine(ctx, 'vectorRepo').search(queryVector, limit);
+                const vectorNodes = vectorResults.map(r => graphEngine.getNodeById(r.id)).filter(n => n !== null);
                 return mergeResultsRRF(keywordNodes, vectorNodes, limit);
             } catch { return keywordNodes; }
         }));

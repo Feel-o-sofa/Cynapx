@@ -208,6 +208,77 @@ describe('executeTool: backfill_history', () => {
 });
 
 // ---------------------------------------------------------------------------
+// H-1: requireEngine() guard — uninitialized engine components must produce
+// an isError ToolResult (EngineNotReadyError) instead of crashing on
+// `ctx.xxx!` against undefined/null.
+// ---------------------------------------------------------------------------
+
+describe('executeTool: H-1 requireEngine guard (EngineNotReadyError)', () => {
+    it('check_architecture_violations returns isError when archEngine is not ready', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('check_architecture_violations', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/archEngine.*not ready/i);
+    });
+
+    it('find_dead_code returns isError when optEngine is not ready', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('find_dead_code', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/optEngine.*not ready/i);
+    });
+
+    it('get_risk_profile returns isError when refactorEngine is not ready', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_risk_profile', { qualified_name: '/src/foo.ts#Bar' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/refactorEngine.*not ready/i);
+    });
+
+    it('propose_refactor returns isError when refactorEngine is not ready', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('propose_refactor', { qualified_name: '/src/foo.ts#Bar' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/refactorEngine.*not ready/i);
+    });
+
+    it('discover_latent_policies returns isError when policyDiscoverer is not ready', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('discover_latent_policies', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/policyDiscoverer.*not ready/i);
+    });
+
+    it('backfill_history returns isError when updatePipeline is not ready', async () => {
+        const deps = makeDeps({
+            getContext: vi.fn().mockReturnValue({
+                graphEngine: {
+                    getNodeByQualifiedName: vi.fn().mockReturnValue(null),
+                    nodeRepo: { searchSymbols: vi.fn().mockReturnValue([]) },
+                },
+                projectPath: '/mock/project',
+                // updatePipeline intentionally absent — engine still initializing
+            }),
+        });
+        const result = await executeTool('backfill_history', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/updatePipeline.*not ready/i);
+    });
+
+    it('check_consistency returns isError when graphEngine is not ready', async () => {
+        const deps = makeDeps({
+            getContext: vi.fn().mockReturnValue({
+                projectPath: '/mock/project',
+                // graphEngine, gitService, updatePipeline all absent
+            }),
+        });
+        const result = await executeTool('check_consistency', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/graphEngine.*not ready/i);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // get_setup_context — embeddings field
 // ---------------------------------------------------------------------------
 
