@@ -115,8 +115,18 @@ export class ApiServer {
             AUTH_TOKEN = envToken;
         } else {
             const generatedToken = crypto.randomBytes(32).toString('hex');
-            console.error('[cynapx] WARNING: No KNOWLEDGE_TOOL_TOKEN set. Generated temporary token:', generatedToken);
             AUTH_TOKEN = generatedToken;
+
+            // Persist the generated token to a file (not stderr) so it isn't
+            // captured by log aggregators. Permissions restrict it to the owner.
+            const tokenFile = path.join(getCentralStorageDir(), 'api-token');
+            try {
+                fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+                fs.writeFileSync(tokenFile, generatedToken, { encoding: 'utf8', mode: 0o600 });
+                console.error(`[cynapx] WARNING: No KNOWLEDGE_TOOL_TOKEN set. Generated temporary token written to: ${tokenFile}`);
+            } catch (err) {
+                console.error(`[cynapx] WARNING: No KNOWLEDGE_TOOL_TOKEN set. Failed to persist generated token: ${err}`);
+            }
         }
         
         // Advanced Request Logger Restoration

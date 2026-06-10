@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import Database from 'better-sqlite3';
 
 /**
  * Tests for LockManager.
@@ -14,6 +15,7 @@ import * as os from 'os';
 // We need to intercept the `paths` module before importing LockManager.
 // Use vi.mock to redirect getLocksDir and getProjectHash to a temp dir.
 const TEST_LOCKS_DIR = path.join(os.tmpdir(), `cynapx-lock-test-${process.pid}`);
+const TEST_STORAGE_DIR = path.join(os.tmpdir(), `cynapx-lock-storage-${process.pid}`);
 const TEST_PROJECT_PATH = path.join(os.tmpdir(), `cynapx-lock-project-${process.pid}`);
 
 vi.mock('../src/utils/paths', async (importOriginal) => {
@@ -25,6 +27,12 @@ vi.mock('../src/utils/paths', async (importOriginal) => {
                 fs.mkdirSync(TEST_LOCKS_DIR, { recursive: true });
             }
             return TEST_LOCKS_DIR;
+        },
+        getCentralStorageDir: () => {
+            if (!fs.existsSync(TEST_STORAGE_DIR)) {
+                fs.mkdirSync(TEST_STORAGE_DIR, { recursive: true });
+            }
+            return TEST_STORAGE_DIR;
         },
     };
 });
@@ -43,6 +51,12 @@ describe('LockManager', () => {
         if (fs.existsSync(TEST_LOCKS_DIR)) {
             for (const f of fs.readdirSync(TEST_LOCKS_DIR)) {
                 try { fs.unlinkSync(path.join(TEST_LOCKS_DIR, f)); } catch {}
+            }
+        }
+        // Remove all DB/journal files in the test storage dir
+        if (fs.existsSync(TEST_STORAGE_DIR)) {
+            for (const f of fs.readdirSync(TEST_STORAGE_DIR)) {
+                try { fs.unlinkSync(path.join(TEST_STORAGE_DIR, f)); } catch {}
             }
         }
     });
@@ -151,6 +165,42 @@ describe('LockManager', () => {
             const result = await manager.getValidLock();
             expect(result).toBeNull();
             expect(fs.existsSync(lockPath)).toBe(false);
+        });
+
+        it('should preserve the main DB file (and checkpoint WAL) when cleaning up a stale lock (C-1 regression)', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+            const lockHash = path.basename(lockPath, '.lock');
+
+            // Set up a real SQLite DB in WAL mode with a pending WAL file,
+            // mirroring the on-disk state left by a crashed host process.
+            const dbFile = path.join(TEST_STORAGE_DIR, `${lockHash}_v2.db`);
+            const db = new Database(dbFile);
+            db.pragma('journal_mode = WAL');
+            db.exec('CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT)');
+            db.prepare('INSERT INTO marker (value) VALUES (?)').run('committed-before-crash');
+            db.close();
+            expect(fs.existsSync(dbFile)).toBe(true);
+
+            // Write a stale lock referencing a dead PID.
+            const staleLock = {
+                pid: 2147483647,
+                ipcPort: 1234,
+                lastHeartbeat: new Date().toISOString(),
+                status: 'active',
+                nonce: 'stale-nonce',
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(staleLock, null, 2), 'utf8');
+
+            const result = await manager.getValidLock();
+            expect(result).toBeNull();
+
+            // The DB file itself must survive cleanup, with its data intact.
+            expect(fs.existsSync(dbFile)).toBe(true);
+            const verifyDb = new Database(dbFile, { readonly: true });
+            const row = verifyDb.prepare('SELECT value FROM marker').get() as { value: string };
+            expect(row.value).toBe('committed-before-crash');
+            verifyDb.close();
         });
     });
 

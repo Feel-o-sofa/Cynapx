@@ -9,23 +9,30 @@ import * as fs from 'fs';
 
 let nativeModule: any = null;
 try {
-    // Look for the native binary in the same directory or up one level (dist/ or dist/indexer/)
-    const possiblePaths = [
-        path.resolve(__dirname, '../cynapx-native.win32-x64-msvc.node'),
-        path.resolve(__dirname, '../../cynapx-native.win32-x64-msvc.node'),
-        path.resolve(__dirname, './cynapx-native.win32-x64-msvc.node'),
-        path.resolve(__dirname, '../../src-native/cynapx-native.win32-x64-msvc.node')
+    // napi-rs binary names follow `cynapx-native.<platform>-<arch>[-<abi>].node`,
+    // e.g. win32-x64-msvc, linux-x64-gnu, darwin-arm64. Match by prefix so we
+    // don't have to enumerate every ABI variant.
+    const prefix = `cynapx-native.${process.platform}-${process.arch}`;
+    const searchDirs = [
+        path.resolve(__dirname, '..'),
+        path.resolve(__dirname, '../..'),
+        __dirname,
+        path.resolve(__dirname, '../../src-native')
     ];
 
-    for (const p of possiblePaths) {
-        if (fs.existsSync(p)) {
-            nativeModule = require(p);
+    for (const dir of searchDirs) {
+        if (!fs.existsSync(dir)) continue;
+        const match = fs.readdirSync(dir).find(f => f.startsWith(prefix) && f.endsWith('.node'));
+        if (match) {
+            nativeModule = require(path.join(dir, match));
             break;
         }
     }
 
     if (nativeModule) {
         console.error('[Metrics] Native acceleration enabled.');
+    } else {
+        console.error(`[Metrics] Native acceleration unavailable: no binary matching ${prefix}*.node found. Falling back to JS.`);
     }
 } catch (err) {
     console.error(`[Metrics] Native acceleration unavailable: ${err}`);

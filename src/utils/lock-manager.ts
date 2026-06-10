@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import Database from 'better-sqlite3';
 import { getLocksDir, getProjectHash, getCentralStorageDir } from './paths';
 
 export interface LockInfo {
@@ -63,13 +64,30 @@ export class LockManager {
                 // 1. Remove the lock file itself
                 if (fs.existsSync(this.lockPath)) fs.unlinkSync(this.lockPath);
 
-                // 2. Clear residual DB journal files that might keep the DB locked
+                // 2. Flush and clear residual WAL/SHM journal files that might keep the
+                // DB locked. The main DB file is NEVER deleted here — it holds the
+                // index data; deleting it would discard the entire project index.
                 // SEC-H-4: use getCentralStorageDir() for correct DB path (~/.cynapx/<hash>_v2.db)
                 // lockPath = ~/.cynapx/locks/<hash>.lock → hash = basename without extension
                 const lockHash = path.basename(this.lockPath, '.lock');
                 const dbFile = path.join(getCentralStorageDir(), `${lockHash}_v2.db`);
 
-                ['', '-wal', '-shm'].forEach(suffix => {
+                if (fs.existsSync(dbFile)) {
+                    // Checkpoint the WAL into the main DB before removing journal files,
+                    // so any commits from the crashed process are not lost.
+                    try {
+                        const db = new Database(dbFile);
+                        try {
+                            db.pragma('wal_checkpoint(TRUNCATE)');
+                        } finally {
+                            db.close();
+                        }
+                    } catch (err) {
+                        console.error(`[!] Failed to checkpoint WAL for ${dbFile}: ${err}`);
+                    }
+                }
+
+                ['-wal', '-shm'].forEach(suffix => {
                     const file = `${dbFile}${suffix}`;
                     if (fs.existsSync(file)) {
                         try { fs.unlinkSync(file); } catch(err) { console.error(`[!] Failed to delete ${file}: ${err}`); }

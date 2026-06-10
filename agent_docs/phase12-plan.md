@@ -28,22 +28,22 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 ---
 
-## 2. Phase 12-1: CRITICAL 즉시 패치 (데이터 손실/보안)
+## 2. Phase 12-1: CRITICAL 즉시 패치 (데이터 손실/보안) — [DONE]
 
 **목표**: 가장 파급력이 큰 3건. 코드 변경량은 작지만 영향 범위가 크므로 최우선.
 
 | 항목 | 파일 | 작업 |
 |------|------|------|
-| C-1 | `src/utils/lock-manager.ts:69-77` | suffix 배열에서 `''`(DB 본체) 제거. `-wal`/`-shm` 삭제 전 가능하면 `wal_checkpoint(TRUNCATE)` 시도(실패 시 무시하고 진행 — better-sqlite3가 다음 open 시 자동 복구). |
-| C-2 | `src/server/api-server.ts:117-119` | 토큰을 stderr에 출력하지 않음. `~/.cynapx/<hash>/token` (mode 0600)에 기록 + 안내 메시지에는 파일 경로만 출력. |
-| C-3 | `src/indexer/metrics-calculator.ts:13-18` + `package.json` build:copy | 탐색 경로를 `cynapx-native.${process.platform}-${process.arch}*.node` 패턴으로 동적 생성. `build:copy`도 동일 네이밍 규칙 반영. |
+| C-1 [DONE] | `src/utils/lock-manager.ts` | suffix 배열에서 `''`(DB 본체) 제거. `-wal`/`-shm` 삭제 전 `wal_checkpoint(TRUNCATE)` 수행 후 저널 파일 삭제. |
+| C-2 [DONE] | `src/server/api-server.ts` | 생성된 토큰을 stderr에 출력하지 않음. `~/.cynapx/api-token` (mode 0600)에 기록 + 안내 메시지에는 파일 경로만 출력. |
+| C-3 [DONE] | `src/indexer/metrics-calculator.ts` | 탐색 경로를 `cynapx-native.${process.platform}-${process.arch}*.node` 패턴(prefix 매칭)으로 동적 생성. `build:copy`는 이미 플랫폼 무관 `.endsWith('.node')` 필터 사용 중 — 변경 불필요. |
 
 **테스트**:
-- `tests/lock-manager.test.ts`: stale lock 정리 후 **DB 본체 파일이 보존됨**을 단언하는 회귀 테스트 추가 (C-1 핵심).
-- `tests/security.test.ts` 또는 신규 `tests/api-server-token.test.ts`: 토큰 미설정 시 stderr 출력에 토큰 문자열이 포함되지 않음을 확인.
-- `metrics-calculator`는 플랫폼 의존적이라 단위 테스트는 "경로 패턴 생성 함수"만 분리해 테스트.
+- `tests/lock-manager.test.ts`: stale lock 정리 시 실제 better-sqlite3 WAL DB를 만들어 **DB 본체 파일과 데이터가 보존됨**을 검증하는 회귀 테스트 추가 (C-1 핵심).
+- `tests/infrastructure.test.ts`: 토큰 미설정 시 `console.error` 호출에 토큰 문자열이 포함되지 않고, `~/.cynapx/api-token`에 64자 hex 토큰이 기록됨을 검증 (C-2).
+- C-3은 플랫폼 의존적이라 별도 테스트 없이 `npx tsc --noEmit` + 기존 parser/metrics 테스트로 회귀만 확인.
 
-**산출물**: 1개 커밋, diagnostic-v9.md의 C-1/C-2/C-3에 [DONE] 표기.
+**산출물**: 1개 커밋, diagnostic-v9.md의 C-1/C-2/C-3에 [DONE] 표기. `npm test` 213/213 통과, `tsc --noEmit` 통과.
 
 ---
 

@@ -10,6 +10,8 @@
 
 ## 1. CRITICAL — 즉시 수정 필요
 
+> **[DONE — Phase 12-1]** C-1/C-2/C-3 모두 수정 완료. 회귀 테스트 추가, `npm test` 213/213 통과.
+
 ### C-1. Stale lock 정리 시 메인 DB 파일 삭제 (데이터 전손)
 **`src/utils/lock-manager.ts:69-77`**
 
