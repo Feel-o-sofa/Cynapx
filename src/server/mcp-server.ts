@@ -116,7 +116,13 @@ export class McpServer {
             if (!isRegistered) {
                 throw new McpError(ErrorCode.InvalidRequest, "Project not initialized. Please use 'initialize_project' first.");
             }
-            this.isInitialized = true;
+            // H-1: Do NOT set isInitialized = true here. The registry check is
+            // only used to produce a helpful error for unregistered projects;
+            // actual readiness is signaled exclusively via markReady(true),
+            // which resolves readyPromise and starts the health monitor.
+            // Setting it here let waitUntilReady() report "ready" while the
+            // engine context (graphEngine, dbManager, etc.) was still being
+            // constructed, exposing a window for `ctx.xxx!` to be undefined.
         }
         await this.readyPromise;
     }

@@ -37,7 +37,7 @@ vi.mock('../src/utils/paths', async (importOriginal) => {
     };
 });
 
-import { LockManager } from '../src/utils/lock-manager';
+import { LockManager, LockHeldError } from '../src/utils/lock-manager';
 
 describe('LockManager', () => {
     let manager: LockManager;
@@ -117,6 +117,79 @@ describe('LockManager', () => {
             await manager.release();
 
             expect((manager as any).currentLock).toBeNull();
+        });
+    });
+
+    describe('atomic acquire (H-4)', () => {
+        it('should throw LockHeldError when another live process holds the lock', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+
+            // Simulate a lock held by another live process (use our own PID,
+            // which is guaranteed to be alive, but a different "process").
+            const liveLock = {
+                pid: process.pid,
+                ipcPort: 4242,
+                lastHeartbeat: new Date().toISOString(),
+                status: 'active',
+                nonce: 'other-process-nonce',
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(liveLock, null, 2), 'utf8');
+
+            await expect(manager.acquire(9999, 'my-nonce')).rejects.toThrow(LockHeldError);
+
+            try {
+                await manager.acquire(9999, 'my-nonce');
+            } catch (err) {
+                expect(err).toBeInstanceOf(LockHeldError);
+                expect((err as LockHeldError).lock.ipcPort).toBe(4242);
+            }
+
+            // currentLock must remain unset since acquisition failed.
+            expect((manager as any).currentLock).toBeNull();
+
+            // The other process's lock file must be left untouched.
+            const onDisk = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(onDisk.ipcPort).toBe(4242);
+
+            // Manually clear the lock file so afterEach's release() (which is a
+            // no-op since currentLock is null) doesn't leave it behind.
+            fs.unlinkSync(lockPath);
+        });
+
+        it('should clean up a stale lock (dead PID) and acquire successfully', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+
+            const staleLock = {
+                pid: 2147483647,
+                ipcPort: 1234,
+                lastHeartbeat: new Date().toISOString(),
+                status: 'active',
+                nonce: 'stale-nonce',
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(staleLock, null, 2), 'utf8');
+
+            await manager.acquire(8888, 'fresh-nonce');
+
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.pid).toBe(process.pid);
+            expect(data.ipcPort).toBe(8888);
+            expect(data.nonce).toBe('fresh-nonce');
+        });
+
+        it('should not allow a second acquire to overwrite an existing live lock (no TOCTOU)', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            await manager.acquire(1111, 'first-nonce');
+
+            const other = new LockManager(TEST_PROJECT_PATH);
+            await expect(other.acquire(2222, 'second-nonce')).rejects.toThrow(LockHeldError);
+
+            // Original lock must remain intact.
+            const lockPath: string = (manager as any).lockPath;
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.ipcPort).toBe(1111);
+            expect(data.nonce).toBe('first-nonce');
         });
     });
 

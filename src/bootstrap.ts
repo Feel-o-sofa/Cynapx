@@ -11,7 +11,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { McpServer } from './server/mcp-server';
 import { IpcCoordinator } from './server/ipc-coordinator';
-import { LockManager } from './utils/lock-manager';
+import { LockManager, LockHeldError } from './utils/lock-manager';
 import { findProjectAnchor, addToRegistry, getDatabasePath, getCentralStorageDir } from './utils/paths';
 import { getAuditLogger } from './utils/audit-logger';
 import { InteractiveShell } from './server/interactive-shell';
@@ -191,14 +191,18 @@ async function bootstrap() {
             const sessionNonce = crypto.randomBytes(32).toString('hex');
             const ipcPort = await ipcCoordinator.startHost(sessionNonce);
 
-            // Atomic re-check
-            const finalCheck = await lockManager.getValidLock();
-            if (finalCheck) {
-                await ipcCoordinator.connectToHost(finalCheck.ipcPort, finalCheck.nonce);
-                return;
+            try {
+                await lockManager.acquire(ipcPort, sessionNonce);
+            } catch (err) {
+                if (err instanceof LockHeldError) {
+                    // Another process won the promotion race — connect to it instead.
+                    ipcCoordinator.close();
+                    await ipcCoordinator.connectToHost(err.lock.ipcPort, err.lock.nonce);
+                    return;
+                }
+                throw err;
             }
 
-            await lockManager.acquire(ipcPort, sessionNonce);
             mcpServer.promoteToHost();
 
             // Re-start services for all contexts
@@ -229,9 +233,21 @@ async function bootstrap() {
         } else {
             const sessionNonce = crypto.randomBytes(32).toString('hex');
             const port = await ipcCoordinator.startHost(sessionNonce);
-            await lockManager.acquire(port, sessionNonce);
+            try {
+                await lockManager.acquire(port, sessionNonce);
+            } catch (err) {
+                if (err instanceof LockHeldError) {
+                    // Lost the race to become Host — fall back to Terminal mode.
+                    console.error(`[*] Lost host race to PID ${err.lock.pid}. Retrying as Terminal...`);
+                    ipcCoordinator.close();
+                    const retryTimer = setTimeout(acquireAndRun, 200);
+                    lifecycle.track({ dispose: () => clearTimeout(retryTimer) });
+                    return;
+                }
+                throw err;
+            }
             console.error(`[*] Host mode active (Singleton Lock Acquired)`);
-            
+
             await startHostServices();
 
             const heartbeatTimer = setInterval(() => lockManager.heartbeat(), 30000);

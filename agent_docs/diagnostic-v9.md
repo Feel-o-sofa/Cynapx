@@ -63,7 +63,9 @@ const possiblePaths = [
 
 ## 2. HIGH — 안정성/정합성 결함
 
-### H-1. Host 승격 윈도우 레이스 → 도구 핸들러 크래시
+### H-1. Host 승격 윈도우 레이스 → 도구 핸들러 크래시 — partially [DONE — Phase 12-2 Step 2]
+> `src/server/mcp-server.ts` `waitUntilReady()`의 `this.isInitialized = true` 부작용은 제거됨(`tests/mcp-server.test.ts`). `promoteToHost()` 순서 변경 + `requireEngine()` 가드 + 11곳 `ctx.xxx!` 교체는 아직 미착수.
+
 **`src/bootstrap.ts:202-206`, `src/server/mcp-server.ts:111-122`, `src/server/tools/*.ts` (11곳)**
 
 Terminal 모드에서는 `setTerminal()`이 `markReady(true)`를 호출해 `readyPromise`가 이미 resolve된 상태다. Host 사망으로 failover가 일어나면:
@@ -113,7 +115,7 @@ if (!filePath.endsWith('.ts') && !filePath.endsWith('.js') && !filePath.endsWith
 
 **수정**: `flushing` 플래그 + 후속 이벤트는 다음 사이클로 이연하는 체이닝(`flushPromise = flushPromise.then(...)`) 적용. threshold 경로에서도 `clearTimeout` 수행.
 
-### H-4. Lock 획득이 비원자적 (check-then-write TOCTOU)
+### H-4. Lock 획득이 비원자적 (check-then-write TOCTOU) — [DONE — Phase 12-2 Step 1]
 **`src/bootstrap.ts:212-241`, `src/utils/lock-manager.ts:93-103`**
 
 `getValidLock()`으로 확인 후 `acquire()`가 `fs.writeFileSync()`로 덮어쓴다. 두 프로세스가 동시에 기동하면 둘 다 "lock 없음"을 보고 둘 다 Host가 될 수 있다(split-brain). failover 경로의 double-check는 이 창을 줄일 뿐 제거하지 못한다. PID 재사용(죽은 Host의 PID를 새 무관 프로세스가 받는 경우)도 `process.kill(pid, 0)`만으로는 오판한다.

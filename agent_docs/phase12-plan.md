@@ -51,21 +51,20 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 **목표**: 동시성 결함 중 가장 구조적인 두 항목을 순서대로.
 
-### Step 1 — H-4: Lock 원자적 획득
-- `src/utils/lock-manager.ts`: `acquire()`를 `fs.openSync(lockPath, 'wx')` 기반으로 재작성. `EEXIST` 시 기존 `getValidLock()` 경로로 폴백.
-- heartbeat에 사용되는 `nonce` 비교를 stale 판정에 추가 (PID 재사용 방어).
+### Step 1 — H-4: Lock 원자적 획득 — [DONE]
+- `src/utils/lock-manager.ts`: `acquire()`를 `fs.openSync(lockPath, 'wx')` 기반(`tryCreateLockFile`)으로 재작성. `EEXIST` 시 `getValidLock()`으로 stale 여부 확인 후 정리·재시도, 살아있는 락이면 `LockHeldError`를 throw.
+- `src/bootstrap.ts`의 `acquireAndRun`/`attemptFailover` 양쪽에서 `LockHeldError`를 캐치하여 승격 레이스에서 진 경우 Terminal 모드로 폴백(`ipcCoordinator.close()` 후 재연결/재시도).
+- nonce 비교 기반 stale 판정은 기존에 이미 구현되어 있었음(재확인만).
+- 테스트: `tests/lock-manager.test.ts`에 "atomic acquire (H-4)" describe 블록 추가 — LockHeldError 발생, stale lock 정리 후 acquire 성공, TOCTOU 없이 두 번째 acquire가 거부됨을 검증. `npm test` 213 → 218 통과.
 
-### Step 2 — H-1: Host 승격 순서 + 가드 유틸
-- `src/bootstrap.ts:202-206`: `mcpServer.promoteToHost()` 호출을 `startHostServices()` **완료 후**로 이동. 그 사이 들어오는 도구 호출은 `executeTool`에서 "엔진 초기화 중" 에러로 단기 거부(또는 짧은 재시도 큐).
-- `src/server/tool-dispatcher.ts` 또는 `src/server/tools/_utils.ts`에 `requireEngine<K extends keyof EngineContext>(ctx, key): EngineContext[K]` 헬퍼 추가 — undefined면 `{ isError: true, content: [...] }` 반환.
-- 11개 핸들러(`backfill-history`, `check-architecture-violations`, `check-consistency`, `discover-latent-policies`, `find-dead-code`, `get-risk-profile`, `propose-refactor`, `re-tag-project`, `health-monitor`)의 `ctx.xxx!`를 `requireEngine()` 호출로 교체.
-- `src/server/mcp-server.ts:111-122` `waitUntilReady()`에서 `this.isInitialized = true` 부작용 제거 (레지스트리 체크는 에러 throw 용도로만 사용).
+### Step 2 — H-1: Host 승격 순서 + 가드 유틸 — partially [DONE]
+- [DONE] `src/server/mcp-server.ts` `waitUntilReady()`에서 `this.isInitialized = true` 부작용 제거 (레지스트리 체크는 에러 throw 용도로만 사용). 회귀 테스트: `tests/mcp-server.test.ts` (신규).
+- [TODO] `src/bootstrap.ts`의 `mcpServer.promoteToHost()` 호출을 `startHostServices()` **완료 후**로 이동. 그 사이 들어오는 도구 호출은 `executeTool`에서 "엔진 초기화 중" 에러로 단기 거부(또는 짧은 재시도 큐).
+- [TODO] `src/server/tool-dispatcher.ts` 또는 `src/server/tools/_utils.ts`에 `requireEngine<K extends keyof EngineContext>(ctx, key): EngineContext[K]` 헬퍼 추가 — undefined면 `{ isError: true, content: [...] }` 반환.
+- [TODO] 핸들러(`backfill-history`, `check-architecture-violations`, `check-consistency`, `discover-latent-policies`, `find-dead-code`, `get-risk-profile`, `propose-refactor`, `re-tag-project`, `health-monitor`, 그리고 동일 패턴을 쓰는 `analyze-impact`/`export-graph`/`get-related-tests`/`search-symbols`)의 `ctx.xxx!`를 `requireEngine()` 호출로 교체.
+- [TODO] `tests/tool-dispatcher.test.ts`: 엔진 미초기화 컨텍스트로 핸들러 호출 → 크래시 대신 `isError` ToolResult 반환 검증.
 
-**테스트**:
-- `tests/lock-manager.test.ts`: 동시 `acquire()` 호출 시 한쪽만 성공(EEXIST) 검증, PID 재사용 시나리오(`process.kill` mock).
-- `tests/tool-dispatcher.test.ts`: 엔진 미초기화 컨텍스트로 11개 핸들러 호출 → 크래시 대신 `isError` ToolResult 반환 검증.
-
-**산출물**: 2개 커밋 (Step별 분리).
+**산출물**: Step 1 + waitUntilReady 수정 1개 커밋. Step 2의 나머지 항목은 다음 사이클(Phase 12-2 계속)에서 처리.
 
 ---
 

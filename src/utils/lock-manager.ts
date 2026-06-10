@@ -18,6 +18,17 @@ export interface LockInfo {
 }
 
 /**
+ * Thrown by LockManager.acquire() when another live process already holds
+ * the lock. Callers should fall back to connecting to that host instead.
+ */
+export class LockHeldError extends Error {
+    constructor(public readonly lock: LockInfo) {
+        super(`Lock already held by PID ${lock.pid} (ipcPort=${lock.ipcPort})`);
+        this.name = 'LockHeldError';
+    }
+}
+
+/**
  * Manages project-specific session locks to ensure a single host per project.
  */
 export class LockManager {
@@ -103,20 +114,71 @@ export class LockManager {
     }
 
     /**
-     * Attempts to acquire the lock.
+     * Attempts to acquire the lock atomically.
+     *
+     * Uses `fs.openSync(path, 'wx')` so the lock file is only created if it
+     * does not already exist (O_EXCL), eliminating the TOCTOU window between
+     * a prior `getValidLock()` check and the write. If the file already
+     * exists, `getValidLock()` is consulted: a stale lock is cleaned up and
+     * the create is retried once; a live lock causes a `LockHeldError` to be
+     * thrown so the caller can fall back to Terminal mode.
+     *
      * @param ipcPort - The IPC port the Host is listening on.
      * @param nonce - Session nonce generated before starting the IPC server; stored so
      *                Terminal sessions can read it and respond to the challenge.
      */
     public async acquire(ipcPort: number, nonce: string): Promise<void> {
-        this.currentLock = {
+        const lock: LockInfo = {
             pid: process.pid,
             ipcPort,
             lastHeartbeat: new Date().toISOString(),
             status: 'active',
             nonce,
         };
-        fs.writeFileSync(this.lockPath, JSON.stringify(this.currentLock, null, 2), { encoding: 'utf8', mode: 0o600 });
+        const data = JSON.stringify(lock, null, 2);
+
+        if (this.tryCreateLockFile(data)) {
+            this.currentLock = lock;
+            return;
+        }
+
+        // Lock file already exists — determine whether it's stale.
+        const existing = await this.getValidLock();
+        if (existing) {
+            throw new LockHeldError(existing);
+        }
+
+        // getValidLock() removed the stale lock file; retry once.
+        if (this.tryCreateLockFile(data)) {
+            this.currentLock = lock;
+            return;
+        }
+
+        // Another process won the race in between; report it.
+        const winner = await this.getValidLock();
+        if (winner) {
+            throw new LockHeldError(winner);
+        }
+        throw new Error(`Failed to acquire lock at ${this.lockPath}`);
+    }
+
+    /**
+     * Attempts to create the lock file with O_EXCL semantics.
+     * Returns true on success, false if the file already exists.
+     */
+    private tryCreateLockFile(data: string): boolean {
+        try {
+            const fd = fs.openSync(this.lockPath, 'wx', 0o600);
+            try {
+                fs.writeFileSync(fd, data, 'utf8');
+            } finally {
+                fs.closeSync(fd);
+            }
+            return true;
+        } catch (err: any) {
+            if (err.code === 'EEXIST') return false;
+            throw err;
+        }
     }
 
     /**
