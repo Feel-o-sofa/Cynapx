@@ -181,12 +181,14 @@ public async generate(_text: string): Promise<number[]> {
 
 **수정**: `NodeRepository.findDeadCodeCandidates(tier)`로 이동.
 
-### A-4. `reTagAllNodes()` O(n·m·k) 패스 반복
+### A-4. `reTagAllNodes()` O(n·m·k) 패스 반복 — [DONE — Phase 12-7]
 **`src/indexer/update-pipeline.ts:76-97`**
 
 최대 5패스 × 전체 노드 × 노드별 에지 조회. 대형 코드베이스에서 수십 초 정지 가능.
 
 **수정**: dirty-set 기반 worklist 알고리즘 — 태그가 실제로 변한 노드의 이웃만 재처리, O(n+e).
+
+**완료 (Phase 12-7)**: `EdgeRepository.getEdgesByTypes()` 단일 에지 스캔으로 인접 리스트 1회 구축 + 태그가 변한 노드의 직계 자식만 재큐잉하는 worklist로 재작성, persist도 변경된 노드만 `replaceTags()` (M2 미러 불변식 유지).
 
 ### A-5. 13개 언어 프로바이더 보일러플레이트 중복
 **`src/indexer/languages/*.ts`**

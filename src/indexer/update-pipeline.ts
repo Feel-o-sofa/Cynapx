@@ -58,13 +58,15 @@ export class UpdatePipeline {
         await previousLock;
 
         try {
-            // Wrap the entire 5-pass propagation + persist in a single atomic
-            // transaction.  better-sqlite3 is fully synchronous, so no await /
-            // setImmediate is needed (or permitted) inside the transaction body.
+            // A-4: dirty-set worklist propagation. Wrap baseline tagging +
+            // propagation + persist in a single atomic transaction.
+            // better-sqlite3 is fully synchronous, so no await / setImmediate
+            // is needed (or permitted) inside the transaction body.
             const txn = this.db.transaction(() => {
                 const nodes = this.nodeRepo.getAllNodes();
 
-                // Pass 0: build node map with baseline tags
+                // Pass 0: build node map with baseline tags (full run seeds
+                // every node with its recomputed structural tags).
                 const nodeMap = new Map<number, { node: CodeNode, tags: string[] }>();
                 for (const node of nodes) {
                     if (node.id) {
@@ -73,42 +75,86 @@ export class UpdatePipeline {
                     }
                 }
 
-                // Passes 1-5: propagate tags through inheritance / implements edges
-                const MAX_PASSES = 5;
-                for (let i = 0; i < MAX_PASSES; i++) {
-                    let changed = false;
-                    for (const [id, data] of nodeMap.entries()) {
-                        const outgoing = this.edgeRepo.getOutgoingEdges(id).filter(
-                            e => e.edge_type === 'inherits' || e.edge_type === 'implements'
-                        );
+                // Build the propagation adjacency once with a single edge scan
+                // (previously: one getOutgoingEdges() query per node per pass).
+                //   parentsOf[child]   → nodes the child inherits / implements from
+                //   childrenOf[parent] → dependents to re-enqueue when parent tags change
+                const parentsOf = new Map<number, number[]>();
+                const childrenOf = new Map<number, number[]>();
+                for (const edge of this.edgeRepo.getEdgesByTypes(['inherits', 'implements'])) {
+                    if (!nodeMap.has(edge.from_id) || !nodeMap.has(edge.to_id)) continue;
+                    let parents = parentsOf.get(edge.from_id);
+                    if (!parents) { parents = []; parentsOf.set(edge.from_id, parents); }
+                    parents.push(edge.to_id);
+                    let children = childrenOf.get(edge.to_id);
+                    if (!children) { children = []; childrenOf.set(edge.to_id, children); }
+                    children.push(edge.from_id);
+                }
 
-                        for (const edge of outgoing) {
-                            const parentData = nodeMap.get(edge.to_id);
-                            if (parentData && parentData.tags.length > 0) {
-                                const newTags = StructuralTagger.mergeRoles(data.tags, parentData.tags);
-                                if (newTags.length !== data.tags.length || !newTags.every(t => data.tags.includes(t))) {
-                                    data.tags = newTags;
-                                    changed = true;
-                                }
+                // Dirty-set worklist: seed with every node that has at least one
+                // parent — only those can gain tags via propagation. When a node's
+                // tags change, re-enqueue only its direct children (the nodes whose
+                // merged tags depend on it) instead of rescanning the whole graph.
+                const queue: number[] = Array.from(parentsOf.keys());
+                const inQueue = new Set<number>(queue);
+                let head = 0; // index-based FIFO — avoids O(n) Array.shift()
+                // Safety bound against pathological merge oscillation; mirrors the
+                // old MAX_PASSES=5 cap at worklist granularity.
+                const maxIterations = Math.max(nodeMap.size, 1) * 5;
+                let iterations = 0;
+                while (head < queue.length) {
+                    if (++iterations > maxIterations) {
+                        console.error(`[UpdatePipeline] reTagAllNodes: worklist exceeded safety bound (${maxIterations}); stopping propagation early.`);
+                        break;
+                    }
+                    const id = queue[head++];
+                    inQueue.delete(id);
+                    const data = nodeMap.get(id)!;
+
+                    let merged = data.tags;
+                    for (const parentId of parentsOf.get(id)!) {
+                        const parentData = nodeMap.get(parentId);
+                        if (parentData && parentData.tags.length > 0) {
+                            merged = StructuralTagger.mergeRoles(merged, parentData.tags);
+                        }
+                    }
+
+                    if (!UpdatePipeline.sameTagSet(merged, data.tags)) {
+                        data.tags = merged;
+                        for (const childId of childrenOf.get(id) ?? []) {
+                            if (!inQueue.has(childId)) {
+                                inQueue.add(childId);
+                                queue.push(childId);
                             }
                         }
                     }
-                    if (!changed) break;
                 }
 
-                // Final: persist all updated tags. M2: replaceTags() keeps the
-                // node_tags mirror table in sync with nodes.tags (we're already
-                // inside one transaction here).
+                // Final: persist only nodes whose computed tags actually differ
+                // from what is stored. M2: replaceTags() keeps the node_tags
+                // mirror table in sync with nodes.tags (we're already inside
+                // one transaction here).
                 for (const [id, data] of nodeMap.entries()) {
-                    this.nodeRepo.replaceTags(id, data.tags);
+                    if (!UpdatePipeline.sameTagSet(data.tags, data.node.tags ?? [])) {
+                        this.nodeRepo.replaceTags(id, data.tags);
+                    }
                 }
             });
             txn();
-        } catch (e) {
-            throw e;
         } finally {
             resolveLock!();
         }
+    }
+
+    /** Order-insensitive tag-set equality (A-4 dirty check). */
+    private static sameTagSet(a: string[], b: string[]): boolean {
+        const setA = new Set(a);
+        const setB = new Set(b);
+        if (setA.size !== setB.size) return false;
+        for (const t of setA) {
+            if (!setB.has(t)) return false;
+        }
+        return true;
     }
 
     public async mapHistoryToProject(): Promise<void> {

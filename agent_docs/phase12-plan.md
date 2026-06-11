@@ -181,14 +181,22 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 | 항목 | 작업 |
 |------|------|
 | A-5 | 13개 `src/indexer/languages/*.ts`를 `{ extensions, grammarModule, queryFile, captureMap }` 디스크립터로 변환하고 `language-registry.ts`가 디스크립터 배열을 순회하며 공용 팩토리로 인스턴스 생성. 클래스명 문자열 추론(`PythonProvider` 등) 제거. |
-| A-4 | `update-pipeline.ts:76-97` `reTagAllNodes()`를 dirty-set worklist 알고리즘으로 재작성 (변경된 태그를 가진 노드의 부모/이웃만 재처리 큐에 추가). |
+| A-4 | [DONE] `update-pipeline.ts` `reTagAllNodes()`를 dirty-set worklist 알고리즘으로 재작성 (변경된 태그를 가진 노드의 부모/이웃만 재처리 큐에 추가). |
+
+### A-4 리태깅 최적화 — [DONE]
+
+- [DONE] `EdgeRepository.getEdgesByTypes(types)` 추가 — `edge_type IN (...)` 단일 스캔으로 전파 인접 리스트(`parentsOf`/`childrenOf`)를 1회 구축. 기존의 "패스마다 노드별 `getOutgoingEdges()` 호출" 패턴 제거.
+- [DONE] `reTagAllNodes()`를 dirty-set worklist로 재작성: 부모(`inherits`/`implements`)가 있는 노드만 큐에 시드 → 노드의 태그가 실제로 변한 경우에만 직계 자식들을 재큐잉. `inQueue` Set으로 중복 큐잉 방지, 인덱스 기반 FIFO(O(1) pop), `nodeMap.size * 5` 안전 상한(기존 MAX_PASSES=5와 동일한 의미). 고정 5패스 상한이 사라져 깊이 5 초과 상속 체인도 완전 전파됨.
+- [DONE] persist 단계도 dirty 기반: 계산된 태그가 저장된 `nodes.tags`와 집합 단위로 다른 노드만 `nodeRepo.replaceTags()` 호출 (M2 node_tags 미러 불변식 유지, 불필요한 전체 노드 rewrite 제거 — fixed point에서 재실행 시 쓰기 0회).
+
+**테스트 (A-4)**: `tests/phase12-7-a4.test.ts` (신규, 7개) — 다단계 상속 전파 정확성, fixed point 멱등성(replaceTags 0회), dirty 노드만 rewrite, mergeRoles 호출 수가 전파 서브그래프에 비례(전체 노드 수 무관), node_tags 미러 동기화(M2), 상속 사이클 종료, `getEdgesByTypes` 필터링. `tests/benchmarks/retag.bench.ts` (신규) — 200/2000 노드 fixture 풀 리태그 벤치마크. `npm test` 289 → 296 통과, `tsc --noEmit` 통과.
 
 **테스트**:
 - 기존 `tests/parser.test.ts` 13개 언어 전부 그린 유지가 1차 회귀 기준.
 - `tests/metadata-parsers.test.ts`에 언어 디스크립터 등록 누락 검증(전체 확장자 → provider 매핑 존재) 추가.
-- A-4는 대형 fixture로 패스 횟수/실행 시간 비교 벤치마크(`tests/benchmarks/`) 추가.
+- [DONE] A-4는 대형 fixture로 패스 횟수/실행 시간 비교 벤치마크(`tests/benchmarks/`) 추가.
 
-**산출물**: 2개 커밋 (언어 리팩터, 리태깅 분리).
+**산출물**: 2개 커밋 (언어 리팩터, 리태깅 분리 — A-4 커밋 완료, A-5 잔여).
 
 ---
 

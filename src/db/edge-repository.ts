@@ -66,6 +66,19 @@ export class EdgeRepository {
         return (this._allStmt.all() as EdgeRow[]).map(row => this.mapRowToEdge(row));
     }
 
+    /**
+     * A-4: returns all edges whose edge_type is in the given list, in a single
+     * scan. Used by reTagAllNodes() to build the tag-propagation adjacency
+     * once instead of issuing one getOutgoingEdges() query per node per pass.
+     * Not cached: the placeholder arity varies with the input.
+     */
+    public getEdgesByTypes(types: EdgeType[]): CodeEdge[] {
+        if (types.length === 0) return [];
+        const placeholders = types.map(() => '?').join(', ');
+        const stmt = this.db.prepare(`SELECT * FROM edges WHERE edge_type IN (${placeholders})`);
+        return (stmt.all(...types) as EdgeRow[]).map(row => this.mapRowToEdge(row));
+    }
+
     public getOutgoingEdges(nodeId: number, edgeType?: EdgeType): CodeEdge[] {
         if (edgeType) {
             if (!this._outTypedStmt) {
