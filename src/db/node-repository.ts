@@ -112,8 +112,28 @@ export class NodeRepository {
     }
 
     public deleteNodesByFilePath(filePath: string): void {
+        // O-9: node_embeddings is a vec0 virtual table without FK support, so
+        // orphaned embedding rows aren't cleaned up by ON DELETE CASCADE.
+        const ids = this.getNodeIdsByFilePath(filePath);
+        this.purgeEmbeddings(ids);
         const stmt = this.db.prepare('DELETE FROM nodes WHERE file_path = ?');
         stmt.run(filePath);
+    }
+
+    /**
+     * Removes node_embeddings rows for the given node ids. node_embeddings
+     * is a vec0 virtual table that may not exist in environments where the
+     * sqlite-vec extension isn't loaded (e.g. in-memory test databases) —
+     * "no such table" is silently ignored in that case.
+     */
+    public purgeEmbeddings(nodeIds: number[]): void {
+        if (nodeIds.length === 0) return;
+        try {
+            const placeholders = nodeIds.map(() => '?').join(',');
+            this.db.prepare(`DELETE FROM node_embeddings WHERE rowid IN (${placeholders})`).run(...nodeIds);
+        } catch (err) {
+            if (!(err instanceof Error) || !err.message.includes('no such table')) throw err;
+        }
     }
 
     public getNodesByFilePath(filePath: string): CodeNode[] {

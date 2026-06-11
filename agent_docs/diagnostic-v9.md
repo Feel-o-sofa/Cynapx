@@ -253,10 +253,10 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 | O-3 | `src/indexer/cross-project-resolver.ts:47-95` | [DONE — Phase 12-6] 외부 심볼 해석마다 원격 DB open/close — `beginBatch()`/`endBatch()`로 배치 내 연결 캐싱 |
 | O-4 | `src/indexer/typescript-parser.ts:30-42` | 파일마다 `ts.createProgram` 신규 생성 — incremental program 또는 LanguageService 재사용 |
 | O-5 | `src/graph/graph-engine.ts:168-245` | 클러스터링이 전체 노드/에지 메모리 적재 — 현재 규모는 허용, 100k+ 노드 시 파티셔닝 필요 |
-| O-6 | `src/utils/audit-logger.ts:42-53` | 로그 무한 증가 + 쓰기 실패 무시 — 크기 기반 회전(100MB) |
-| O-7 | `src/graph/graph-engine.ts:561` | DFS `entry.depth > maxDepth` — maxDepth+1 깊이 노드가 반환됨 (`>=`로 수정) |
-| O-8 | `src/graph/graph-engine.ts:256` | 1-노드 클러스터가 영속화됨 — `length < 2` 일괄 스킵 |
-| O-9 | `schema/schema.sql` | `node_embeddings`(vec0)에 노드 삭제 연동 없음 — AFTER DELETE 트리거로 고아 임베딩 정리 |
+| O-6 | `src/utils/audit-logger.ts:42-53` | [DONE — Phase 12-6] 로그 무한 증가 — `rotateIfNeeded()`로 100MB 초과 시 `audit.log` → `audit.log.1`로 회전 |
+| O-7 | `src/graph/graph-engine.ts:561` | [DONE — verified Phase 12-6] DFS `entry.depth > maxDepth` — 자식은 `entry.depth < maxDepth`일 때만 push되므로 depth가 maxDepth를 초과할 수 없음을 회귀 테스트로 확인. 코드 변경 없음 |
+| O-8 | `src/graph/graph-engine.ts:256` | [DONE — verified Phase 12-6] 1-노드 클러스터 — `clusterNodes.length < 2 && symbol_type !== 'file'`이면 스킵하는 로직이 이미 구현되어 있음을 회귀 테스트로 확인. 코드 변경 없음 |
+| O-9 | `schema/schema.sql` | [DONE — Phase 12-6] `node_embeddings`(vec0)에 노드 삭제 연동 없음 — vec0 가상 테이블은 트리거 본문에서 참조 시 미존재 환경(테스트 등)에서 에러가 나므로, 트리거 대신 `NodeRepository.deleteNodesByFilePath()`/`purgeEmbeddings()`와 `workspace-manager.ts`의 전체 재인덱싱 경로에서 애플리케이션 레벨로 정리 (테이블 부재 시 무시) |
 | O-10 | `src/indexer/worker-pool.ts:150-156` | [DONE — verified Phase 12-6] 타임아웃 vs 메시지 settle 경합 — 기존 `settled` 플래그 + `clearTimeout` 가드가 이미 안전함을 fake-timer 테스트로 검증 |
 | O-11 | `src/indexer/index-worker.ts:24-35` | [DONE — Phase 12-6] 워커 톱레벨 `uncaughtException`/`unhandledRejection` 핸들러 추가 |
 | O-12 | `src/server/api-server.ts:132-136` | [DONE — Phase 12-6] `CYNAPX_LOG_PAYLOADS=1` 시 민감 필드 미마스킹 — `redactSensitiveFields()`로 token/secret/password/apikey/authorization 키 redact |

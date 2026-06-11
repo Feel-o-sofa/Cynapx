@@ -32,11 +32,30 @@ export interface AuditEvent {
  * Each line is a JSON object terminated by a newline.
  * Write failures are silently ignored to never disrupt the main pipeline.
  */
+// O-6: rotate the audit log once it exceeds this size, keeping one backup.
+const MAX_LOG_SIZE_BYTES = 100 * 1024 * 1024; // 100MB
+
 export class AuditLogger {
     private readonly logPath: string;
 
     constructor(logPath?: string) {
         this.logPath = logPath ?? path.join(getCentralStorageDir(), 'audit.log');
+    }
+
+    /**
+     * Renames the current log to `<path>.1` (overwriting any previous
+     * backup) when it exceeds MAX_LOG_SIZE_BYTES, so the audit log doesn't
+     * grow without bound.
+     */
+    private rotateIfNeeded(): void {
+        try {
+            const stat = fs.statSync(this.logPath);
+            if (stat.size < MAX_LOG_SIZE_BYTES) return;
+            fs.renameSync(this.logPath, `${this.logPath}.1`);
+        } catch {
+            // Missing file or rotation failure — fall through and let
+            // appendFileSync create/append as usual.
+        }
     }
 
     public log(eventType: AuditEventType, fields: Omit<AuditEvent, 'timestamp' | 'event'> = {}): void {
@@ -46,6 +65,7 @@ export class AuditLogger {
             ...fields
         };
         try {
+            this.rotateIfNeeded();
             fs.appendFileSync(this.logPath, JSON.stringify(entry) + '\n', { encoding: 'utf8', mode: 0o600 });
         } catch {
             // Audit logging must never crash the server

@@ -132,6 +132,10 @@ export class WorkspaceManager {
                         db.prepare('DELETE FROM edges').run();
                         db.prepare('DELETE FROM nodes').run();
                         db.prepare("DELETE FROM index_metadata WHERE key = 'last_indexed_commit'").run();
+                        // O-9: node_embeddings (vec0) has no FK cascade — clear it explicitly.
+                        try { db.prepare('DELETE FROM node_embeddings').run(); } catch (err) {
+                            if (!(err instanceof Error) || !err.message.includes('no such table')) throw err;
+                        }
                     })();
                     ctx.reindexTriggeredByVersion = true;
                 }

@@ -142,11 +142,15 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 **테스트**: `tests/phase12-6-commit-b.test.ts` (신규, 8개) — `toCanonical` 멱등성, CrossProjectResolver 배치 캐싱(연결 재사용 + endBatch 시 close, 비배치 모드 호환), WorkerPool 타임아웃/메시지 settle 가드(fake worker_threads), index-worker 핸들러 등록 확인. `npm test` 261 → 269 통과, `tsc --noEmit` 통과.
 
-### 커밋 C — 그래프/스키마 정리
-- O-7: `graph-engine.ts:561` DFS `>` → `>=`
-- O-8: `graph-engine.ts:256` 1-노드 클러스터 스킵
-- O-9: `schema/schema.sql` 노드 삭제 시 `node_embeddings` 정리 트리거
-- O-6: `audit-logger.ts` 100MB 기준 회전 로직
+### 커밋 C — 그래프/스키마 정리 — [DONE]
+- [DONE — verified] O-7: `graph-engine.ts`의 DFS `entry.depth > maxDepth` 가드 — 자식 노드는 `entry.depth < maxDepth`일 때만 push되므로 depth가 maxDepth를 초과하는 일이 없음을 회귀 테스트로 확인. 코드 변경 없음.
+- [DONE — verified] O-8: `graph-engine.ts`의 `persistClusters()`에 이미 `clusterNodes.length < 2 && symbol_type !== 'file'`이면 스킵하는 로직이 구현되어 있음을 회귀 테스트로 확인. 코드 변경 없음.
+- [DONE] O-9: `node_embeddings`(vec0)는 트리거 본문에서 참조 시 미존재 환경(vec0 미탑재 테스트 DB 등)에서 "no such table" 에러가 나므로, AFTER DELETE 트리거 대신 `NodeRepository.purgeEmbeddings()` + `deleteNodesByFilePath()`, `workspace-manager.ts`의 전체 재인덱싱 purge 경로에서 애플리케이션 레벨로 정리 (테이블 부재 시 무시).
+- [DONE] O-6: `audit-logger.ts`에 `rotateIfNeeded()` 추가 — `audit.log`가 100MB(`MAX_LOG_SIZE_BYTES`)를 초과하면 `audit.log.1`로 회전 후 새 로그 시작.
+
+**테스트**: `tests/phase12-6-commit-c.test.ts` (신규, 8개) — DFS maxDepth 경계, 단일 노드 클러스터 미영속화(파일 노드는 영속화), node_embeddings 정리(테이블 부재 시 무시 + 존재 시 정리), AuditLogger 회전(100MB 초과 시 `.1`로 rename, 미만이면 회전 안 함). `npm test` 269 → 277 통과, `tsc --noEmit` 통과.
+
+**Phase 12-6 산출물**: 3개 커밋 (A: server/IPC, B: 인덱서, C: 그래프/스키마). `npm test` 250 → 277 통과.
 
 **O-4(TS Program 재사용), O-5(클러스터링 파티셔닝)**: 변경 범위가 크고 현재 규모에선 영향 적음 → Phase 12 범위에서 제외, 별도 Phase 13 후보로 diagnostic-v9에 기록만 유지.
 
@@ -193,7 +197,7 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 | 12-3 | H-2, H-3 | 1 | 낮음 |
 | 12-4 | H-5, H-6, H-7 | 1~2 | 중간 |
 | 12-5 | A-1, A-2, A-3, A-12 | 2 | 중간 (스키마 마이그레이션 포함) |
-| 12-6 | O-* (A-5 제외 LOW 일괄) | 3 | 낮음 |
+| 12-6 | O-* (A-5 제외 LOW 일괄) — [DONE] | 3 | 낮음 |
 | 12-7 | A-5, A-4 | 2 | 높음 (대규모 리팩터) |
 | 12-8 | 테스트 공백 | 1 | 낮음 |
 
