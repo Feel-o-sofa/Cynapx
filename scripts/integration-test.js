@@ -175,8 +175,12 @@ async function main() {
     await runTool('SQL_INJECT_METRIC', 'get_hotspots', { metric: "loc; DROP TABLE--", threshold: 5 }, deps, { expectError: true });
     // Invalid mode
     await runTool('INVALID_MODE', 'initialize_project', { path: ROOT, mode: 'hacker' }, deps, { expectError: true });
-    // Path outside boundary (using 'path' field — correct schema key)
-    await runTool('PATH_OUTSIDE_BOUNDARY', 'initialize_project', { path: 'C:\\Windows\\System32', mode: 'current' }, deps, { expectError: true });
+    // Path outside boundary (using 'path' field — correct schema key).
+    // Phase 12-8 fix: 'C:\Windows\System32' is a *relative* path on POSIX and
+    // resolved under cwd (passing the boundary check + creating a junk dir in
+    // the repo). Use a filesystem-root path that is absolute on every platform.
+    const outsideBoundaryPath = path.join(path.parse(ROOT).root, 'cynapx-outside-boundary-test');
+    await runTool('PATH_OUTSIDE_BOUNDARY', 'initialize_project', { path: outsideBoundaryPath, mode: 'current' }, deps, { expectError: true });
     // NaN min_confidence (pre-init → null guard fires first, that's fine)
     await runTool('NaN_CONFIDENCE', 'discover_latent_policies', { min_confidence: NaN }, deps, { expectError: true });
     // Negative max_policies
@@ -491,6 +495,75 @@ async function main() {
                 ? info('RESTORE_DRYRUN — non-zero exit (no backup dir, acceptable)')
                 : fail(`RESTORE_DRYRUN — unexpected error: ${e.message?.slice(0, 120)}`));
             results.push({ label: 'RESTORE_DRYRUN', status: acceptable ? 'WARN' : 'FAIL', ms: 0 });
+        }
+    }
+
+    // ══ Phase 24: Concurrency (Phase 12-8) ════════════════════════════════════
+    // diagnostic-v9 §5 "통합 테스트 동시성": 5 parallel search_symbols calls +
+    // a tool call issued during the failover not-ready window (H-1 scenario).
+    banner('Phase 24: Concurrency — parallel search_symbols + failover window (H-1)');
+
+    // 24a. Five parallel search_symbols calls — all must settle successfully
+    // against the same engine context with no crash or isError.
+    {
+        const queries = ['WorkspaceManager', 'executeTool', 'GraphEngine', 'UpdatePipeline', 'LockManager'];
+        const t0 = Date.now();
+        const settled = await Promise.allSettled(
+            queries.map(q => executeTool('search_symbols', { query: q, limit: 5 }, deps))
+        );
+        const ms = Date.now() - t0;
+        const failures = settled.filter(s => s.status === 'rejected' || s.value?.isError);
+        const allOk = failures.length === 0;
+        console.log(allOk
+            ? ok(`PARALLEL_SEARCH_5  [search_symbols]  5/5 parallel calls succeeded [${ms}ms total]`)
+            : fail(`PARALLEL_SEARCH_5  [search_symbols]  ${failures.length}/5 parallel calls failed`));
+        results.push({ label: 'PARALLEL_SEARCH_5', toolName: 'search_symbols', status: allOk ? 'PASS' : 'FAIL', ms });
+    }
+
+    // 24b. H-1 failover window — markReady(false) analog.
+    // NOTE: this harness runs a single process without a real Host/Terminal IPC
+    // pair, so a true mid-flight Host promotion cannot be exercised here. We
+    // faithfully simulate the window attemptFailover() opens in bootstrap.ts:
+    // markReady(false) resets readyPromise to pending, so waitUntilReady()
+    // must block the tool call until markReady(true) fires after
+    // startHostServices() completes.
+    {
+        let releaseGate;
+        const gate = new Promise(res => { releaseGate = res; });
+        const failoverDeps = { ...deps, waitUntilReady: () => gate };
+        let settledEarly = false;
+        const t0 = Date.now();
+        const pending = executeTool('search_symbols', { query: 'WorkspaceManager', limit: 3 }, failoverDeps)
+            .then(r => { settledEarly = true; return r; })
+            .catch(e => { settledEarly = true; return { isError: true, content: [{ type: 'text', text: e.message }] }; });
+        await new Promise(r => setTimeout(r, 200));
+        const blockedDuringWindow = !settledEarly;
+        releaseGate(); // markReady(true) — host services finished
+        const res24 = await pending;
+        const ms = Date.now() - t0;
+        const passed = blockedDuringWindow && res24 && !res24.isError;
+        console.log(passed
+            ? ok(`FAILOVER_BLOCK  [search_symbols]  call blocked during not-ready window, succeeded after markReady(true) [${ms}ms]`)
+            : fail(`FAILOVER_BLOCK  [search_symbols]  blocked=${blockedDuringWindow} isError=${res24?.isError ?? 'n/a'}`));
+        results.push({ label: 'FAILOVER_BLOCK', toolName: 'search_symbols', status: passed ? 'PASS' : 'FAIL', ms });
+    }
+
+    // 24c. H-1 engine guard — if a handler does run against a context whose
+    // engines have not been constructed yet (the post-promotion window before
+    // startHostServices() attaches optEngine etc.), requireEngine() must
+    // surface a structured isError result via EngineNotReadyError instead of
+    // crashing on undefined.
+    {
+        const halfReadyCtx = { projectPath: ctx.projectPath }; // engines absent
+        const halfReadyDeps = { ...deps, getContext: () => halfReadyCtx };
+        const r = await runTool('FAILOVER_ENGINE_GUARD', 'find_dead_code', {}, halfReadyDeps, { expectError: true });
+        if (r && r.isError) {
+            const txt = r.content?.[0]?.text ?? '';
+            const structured = /not ready|initializing|retry/i.test(txt);
+            console.log(structured
+                ? ok('FAILOVER_GUARD_MSG — EngineNotReadyError surfaced as retryable isError ✓')
+                : fail(`FAILOVER_GUARD_MSG — unexpected error text: ${txt.slice(0, 100)}`));
+            results.push({ label: 'FAILOVER_GUARD_MSG', toolName: 'find_dead_code', status: structured ? 'PASS' : 'FAIL', ms: 0 });
         }
     }
 

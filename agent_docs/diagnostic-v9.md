@@ -287,12 +287,12 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 
 | 공백 | 검증해야 할 시나리오 |
 |------|---------------------|
-| `worker-pool.test.ts` 부재 | 타임아웃 → 워커 교체 → 후속 태스크 정상 처리 |
-| `lock-manager` PID 재사용 | `process.kill` 성공 모킹 + nonce 불일치 시 stale 판정. **C-1 회귀 테스트(DB 본체 보존) 필수** |
-| `initialize-project` 경계 검증 | current/existing/custom 모드별 경로 허용/거부 매트릭스 |
-| `file-watcher` | 확장자 커버리지(H-2), 동시 flush(H-3) |
-| 통합 테스트 동시성 | Phase 24: 병렬 도구 호출 5건 동시 실행, failover 중 도구 호출(H-1) |
-| `certificate-generator` | openssl 부재/실패 시 에러 처리와 임시 파일 정리 |
+| `worker-pool.test.ts` 부재 | [DONE — Phase 12-6] 타임아웃 → 워커 교체 → 후속 태스크 정상 처리 — `tests/phase12-6-commit-b.test.ts` (O-10, fake worker_threads + fake timers) |
+| `lock-manager` PID 재사용 | [DONE — Phase 12-1/12-2] `process.kill` 성공 모킹 + nonce 불일치 시 stale 판정, C-1 회귀(DB 본체 보존) — `tests/lock-manager.test.ts` |
+| `initialize-project` 경계 검증 | [DONE — Phase 12-8] current/existing/custom × 허용/거부 매트릭스 + custom 모드 `isSystemPath` 차단 — `tests/initialize-project.test.ts` (13개, HOME 스텁으로 레지스트리 격리) |
+| `file-watcher` | [DONE — Phase 12-3] 확장자 커버리지(H-2), 동시 flush(H-3) — `tests/file-watcher.test.ts` |
+| 통합 테스트 동시성 | [DONE — Phase 12-8] `scripts/integration-test.js` Phase 24 추가: 병렬 `search_symbols` 5건, markReady(false) 창 동안 도구 호출 블록(H-1) + EngineNotReadyError 구조화 에러 검증 — 통합 스크립트 69/69 통과 |
+| `certificate-generator` | [DONE — Phase 12-8] openssl 부재(ENOENT)/비정상 종료 시 래핑 에러 + 성공/실패 양쪽 임시 파일 정리 — `tests/certificate-generator.test.ts` (7개, execSync 모킹) |
 
 ---
 

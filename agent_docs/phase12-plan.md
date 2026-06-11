@@ -210,15 +210,22 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 ---
 
-## 9. Phase 12-8: 통합 테스트 보강 (테스트 공백 일괄)
+## 9. Phase 12-8: 통합 테스트 보강 (테스트 공백 일괄) — [DONE]
 
 마지막으로 전체 변경에 대한 통합 검증.
 
-- `scripts/integration-test.js`에 **Phase 24: 동시성** 추가 — 병렬 `search_symbols` 5건, failover 도중 도구 호출(H-1 시나리오) 시뮬레이션.
-- `tests/initialize-project.test.ts` 신규 — current/existing/custom × 경로 허용/거부 매트릭스, custom 모드에서도 시스템 경로(`isSystemPath`) 차단 확인 (diagnostic-v9 A-x 외 v8 잔여 항목인 시스템 경로 가드와 연계).
-- `tests/certificate-generator.test.ts` 신규 — openssl 부재/실패 시 에러 처리 + 임시 파일 정리.
+- [DONE] `scripts/integration-test.js`에 **Phase 24: 동시성** 추가 — (24a) 병렬 `search_symbols` 5건 `Promise.allSettled` 동시 실행 전부 성공 검증, (24b) failover 도중 도구 호출(H-1) 시뮬레이션: 단일 프로세스 하니스라 실제 Host 승격은 불가하므로 `attemptFailover`가 여는 `markReady(false)` 창을 pending `waitUntilReady` 게이트로 충실히 재현 — not-ready 창 동안 도구 호출이 블록되고 `markReady(true)` 후 정상 완료됨을 검증, (24c) 엔진 미구성 컨텍스트(`optEngine` 부재)에 대해 `requireEngine()`이 크래시 대신 구조화된 `isError`(EngineNotReadyError 메시지)를 반환함을 검증.
+- [DONE] `tests/initialize-project.test.ts` 신규 (13개) — current/existing/custom × 경로 허용/거부 매트릭스 (HOME을 임시 디렉터리로 스텁해 레지스트리 격리): current/existing은 home/cwd 밖 경로 거부 + 허용 경로에서 `onInitialize`/`markReady(true)` 호출, existing은 기인덱스 DB 재사용 시 `onInitialize` 스킵, custom은 경계 검사 생략하되 시스템 경로는 `addToRegistry`의 `isSystemPath` 가드로 차단(`/etc`, `/usr/lib`) 확인. `isSystemPath` 단위 검증(시스템 경로 true / home·tmp·prefix-유사 경로 false) 포함.
+- [DONE] `tests/certificate-generator.test.ts` 신규 (7개) — `child_process.execSync` 모킹으로 실제 openssl 불필요: 성공 경로(key/cert 버퍼 반환 + 임시 파일 즉시 삭제), openssl 부재(ENOENT) 시 래핑된 에러 + 임시 파일 미잔존, 비정상 종료(부분 출력) 시 에러 + finally 정리, 출력 파일 미생성 시 에러, 호출별 임시 파일명 유일성, 비대화형 인자(`-nodes`/`-subj`) 검증.
+- [DONE] 부수 수정 (통합 스크립트 자체 버그): Phase 1의 `PATH_OUTSIDE_BOUNDARY`가 `'C:\\Windows\\System32'`를 사용 — POSIX에서는 상대 경로로 해석되어 cwd 하위로 resolve되면서 경계 검사를 **통과**(리포 안에 `C:\Windows\System32` 정크 디렉터리 생성 + 레지스트리 오염). 플랫폼 무관 절대 경로(`path.parse(ROOT).root + 'cynapx-outside-boundary-test'`)로 교체.
 
-**산출물**: 1개 커밋, `npm test` 전체 그린 + 통합 스크립트 24 phase 통과 확인.
+**산출물**: 1개 커밋. `npm test` 315 → 336 통과, `tsc --noEmit` 통과, 통합 스크립트 **69/69 (Phase 0~24) 통과**.
+
+---
+
+## 9.5. Phase 12 전체 완료
+
+**Phase 12-1 ~ 12-8 전부 [DONE]** — diagnostic-v9의 CRITICAL 3건, HIGH 7건, MEDIUM(A) 항목(이연분 제외), LOW/최적화(O) 항목(O-4/O-5 이연), 테스트 공백 6건 해소 완료. 최종 상태: `npm test` 336/336, `tsc --noEmit` 그린, 통합 스크립트 69/69 (Phase 0~24). 잔여 이연 항목은 11장(Phase 13 후보) 참조.
 
 ---
 
@@ -233,7 +240,7 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 | 12-5 | A-1, A-2, A-3, A-12 | 2 | 중간 (스키마 마이그레이션 포함) |
 | 12-6 | O-* (A-5 제외 LOW 일괄) — [DONE] | 3 | 낮음 |
 | 12-7 | A-5, A-4 — [DONE] | 2 | 높음 (대규모 리팩터) |
-| 12-8 | 테스트 공백 | 1 | 낮음 |
+| 12-8 | 테스트 공백 — [DONE] | 1 | 낮음 |
 
 **총 13~14개 커밋**, Phase 12-1부터 순차 진행. 각 Phase 종료 시 `agent_docs/diagnostic-v9.md`에 [DONE] 마킹 후 `agent_docs/improvement-plan.md`에 Phase 12 완료 요약 추가.
 
