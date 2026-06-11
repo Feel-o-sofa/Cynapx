@@ -12,6 +12,18 @@ import { YamlParser } from './yaml-parser';
 import { MarkdownParser } from './markdown-parser';
 import { JsonConfigParser } from './json-config-parser';
 
+// O-11: surface otherwise-silent crashes so the main thread's 'error'
+// listener (WorkerPool.replaceWorker) gets a clear diagnostic before the
+// worker is terminated/replaced.
+process.on('uncaughtException', (err) => {
+    console.error('[index-worker] Uncaught exception:', err);
+    throw err;
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[index-worker] Unhandled rejection:', reason);
+    throw reason instanceof Error ? reason : new Error(String(reason));
+});
+
 // TypeScriptParser handles TS/JS with full type-checking capabilities
 const tsParser = new TypeScriptParser();
 // TreeSitterParser handles multi-language via generic Providers (includes fallback TS/JS/PY)

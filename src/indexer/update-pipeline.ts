@@ -218,6 +218,9 @@ export class UpdatePipeline {
         await previousLock;
 
         const symbolCache = new Map<string, number>();
+        // O-3: keep remote DB connections open for the duration of this batch
+        // instead of opening/closing one per cross-project symbol resolution.
+        this.crossProjectResolver?.beginBatch();
 
         try {
             this.db.prepare('BEGIN').run();
@@ -284,6 +287,7 @@ export class UpdatePipeline {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
             throw error;
         } finally {
+            this.crossProjectResolver?.endBatch();
             resolveLock!();
         }
     }
@@ -398,12 +402,10 @@ export class UpdatePipeline {
             qname = parts.slice(1).join(':');
         }
 
+        // O-2: internalMap (symbolCache) is keyed by canonical qualified names,
+        // so a direct lookup is sufficient — no need to re-scan the whole map.
         const canonicalQName = toCanonical(qname);
         if (internalMap.has(canonicalQName)) return internalMap.get(canonicalQName);
-        
-        for (const [key, value] of internalMap.entries()) {
-            if (toCanonical(key) === canonicalQName) return value;
-        }
 
         const existingNode = this.nodeRepo.getNodeByQualifiedName(qname);
         if (existingNode) return existingNode.id;

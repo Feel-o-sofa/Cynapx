@@ -249,16 +249,16 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 | # | 위치 | 내용 |
 |---|------|------|
 | O-1 | `src/server/tools/search-symbols.ts:13` | [DONE — Phase 12-6] `limit` 상한 없음 → `Math.min(args.limit \|\| 10, 200)` |
-| O-2 | `src/indexer/update-pipeline.ts:391-393` | `resolveNodeId()` canonical 미스 시 전체 맵 재순회 — 키를 canonical로 저장하면 루프 제거 |
-| O-3 | `src/indexer/cross-project-resolver.ts:47-95` | 외부 심볼 해석마다 원격 DB open/close — 배치 내 캐싱 |
+| O-2 | `src/indexer/update-pipeline.ts:391-393` | [DONE — Phase 12-6] `resolveNodeId()` canonical 미스 시 전체 맵 재순회 — symbolCache가 이미 canonical 키이므로 재스캔 루프 제거 |
+| O-3 | `src/indexer/cross-project-resolver.ts:47-95` | [DONE — Phase 12-6] 외부 심볼 해석마다 원격 DB open/close — `beginBatch()`/`endBatch()`로 배치 내 연결 캐싱 |
 | O-4 | `src/indexer/typescript-parser.ts:30-42` | 파일마다 `ts.createProgram` 신규 생성 — incremental program 또는 LanguageService 재사용 |
 | O-5 | `src/graph/graph-engine.ts:168-245` | 클러스터링이 전체 노드/에지 메모리 적재 — 현재 규모는 허용, 100k+ 노드 시 파티셔닝 필요 |
 | O-6 | `src/utils/audit-logger.ts:42-53` | 로그 무한 증가 + 쓰기 실패 무시 — 크기 기반 회전(100MB) |
 | O-7 | `src/graph/graph-engine.ts:561` | DFS `entry.depth > maxDepth` — maxDepth+1 깊이 노드가 반환됨 (`>=`로 수정) |
 | O-8 | `src/graph/graph-engine.ts:256` | 1-노드 클러스터가 영속화됨 — `length < 2` 일괄 스킵 |
 | O-9 | `schema/schema.sql` | `node_embeddings`(vec0)에 노드 삭제 연동 없음 — AFTER DELETE 트리거로 고아 임베딩 정리 |
-| O-10 | `src/indexer/worker-pool.ts:150-156` | 타임아웃 vs 메시지 settle 경합 — `replaceWorker()`에서 타임아웃 핸들 정리 보장 |
-| O-11 | `src/indexer/index-worker.ts:24-35` | 워커 톱레벨 `uncaughtException`/`unhandledRejection` 핸들러 추가 |
+| O-10 | `src/indexer/worker-pool.ts:150-156` | [DONE — verified Phase 12-6] 타임아웃 vs 메시지 settle 경합 — 기존 `settled` 플래그 + `clearTimeout` 가드가 이미 안전함을 fake-timer 테스트로 검증 |
+| O-11 | `src/indexer/index-worker.ts:24-35` | [DONE — Phase 12-6] 워커 톱레벨 `uncaughtException`/`unhandledRejection` 핸들러 추가 |
 | O-12 | `src/server/api-server.ts:132-136` | [DONE — Phase 12-6] `CYNAPX_LOG_PAYLOADS=1` 시 민감 필드 미마스킹 — `redactSensitiveFields()`로 token/secret/password/apikey/authorization 키 redact |
 
 ---

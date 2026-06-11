@@ -34,10 +34,47 @@ interface RemoteNodeRow {
  *  - Create Shadow Nodes in the local DB for matched remote symbols
  */
 export class CrossProjectResolver {
+    // O-3: when a batch is open, remote DB connections are kept alive and
+    // reused across resolve() calls instead of being opened/closed per symbol.
+    private batchDbCache: Map<string, SQLiteDatabase.Database> | null = null;
+
     constructor(
         private nodeRepo: NodeRepository,
         private localProjectPath: string
     ) {}
+
+    /**
+     * Starts a batch: subsequent resolve() calls reuse cached remote DB
+     * connections until endBatch() is called.
+     */
+    public beginBatch(): void {
+        this.batchDbCache = new Map();
+    }
+
+    /**
+     * Ends the current batch, closing any remote DB connections opened
+     * during it.
+     */
+    public endBatch(): void {
+        if (!this.batchDbCache) return;
+        for (const db of this.batchDbCache.values()) {
+            try { db.close(); } catch { /* ignore */ }
+        }
+        this.batchDbCache = null;
+    }
+
+    private openRemoteDb(dbPath: string): SQLiteDatabase.Database | undefined {
+        if (this.batchDbCache) {
+            const cached = this.batchDbCache.get(dbPath);
+            if (cached) return cached;
+            if (!fs.existsSync(dbPath)) return undefined;
+            const db = new SQLiteDatabase(dbPath, { readonly: true });
+            this.batchDbCache.set(dbPath, db);
+            return db;
+        }
+        if (!fs.existsSync(dbPath)) return undefined;
+        return new SQLiteDatabase(dbPath, { readonly: true });
+    }
 
     /**
      * Attempts to resolve a qualified name by searching all other registered projects.
@@ -54,10 +91,11 @@ export class CrossProjectResolver {
         const symbolName = qname.includes('#') ? qname.split('#').pop()! : qname;
 
         for (const project of otherProjects) {
+            const isCached = !!this.batchDbCache?.has(project.db_path);
             try {
-                if (!fs.existsSync(project.db_path)) continue;
+                const remoteDb = this.openRemoteDb(project.db_path);
+                if (!remoteDb) continue;
 
-                const remoteDb = new SQLiteDatabase(project.db_path, { readonly: true });
                 try {
                     const remoteStmt = remoteDb.prepare(
                         'SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LIKE ? COLLATE NOCASE LIMIT 1'
@@ -85,10 +123,11 @@ export class CrossProjectResolver {
                         return shadowNodeId;
                     }
                 } finally {
-                    remoteDb.close();
+                    if (!this.batchDbCache) remoteDb.close();
                 }
             } catch {
                 // Silently ignore errors for specific remote DBs
+                if (!isCached) this.batchDbCache?.delete(project.db_path);
             }
         }
         return undefined;

@@ -134,11 +134,13 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 **테스트**: `tests/phase12-6-commit-a.test.ts` (신규, 11개) — limit clamp, redact 재귀 동작, IPC 연결 종료 시 pending 요청 reject 및 비-Error 에러 처리, LifecycleManager의 dispose 타임아웃/예외 후속 처리, EdgeRepository 캐시 무효화 후 정상 동작 검증. `npm test` 250 → 261 통과, `tsc --noEmit` 통과.
 
-### 커밋 B — 인덱서 정리
-- O-2: `update-pipeline.ts:391-393` canonical 키 저장으로 중복 루프 제거
-- O-3: `cross-project-resolver.ts` 배치 내 원격 DB 결과 캐싱
-- O-10: `worker-pool.ts` 타임아웃-메시지 경합 — `replaceWorker()`에서 타임아웃 핸들 정리
-- O-11: `index-worker.ts` 톱레벨 `uncaughtException`/`unhandledRejection` 핸들러
+### 커밋 B — 인덱서 정리 — [DONE]
+- [DONE] O-2: `update-pipeline.ts`의 `resolveNodeId()`에서 `internalMap`(symbolCache)이 이미 canonical 키로 저장되므로, `toCanonical(key) === canonicalQName` 전체 재스캔 루프를 제거하고 `Map.get()` 직접 조회만 사용.
+- [DONE] O-3: `cross-project-resolver.ts`에 `beginBatch()`/`endBatch()` 추가 — 배치 동안 원격 DB 연결을 `batchDbCache`에 캐싱해 재사용하고, 배치 종료 시 일괄 close. `update-pipeline.ts`의 `processBatch()`가 트랜잭션 전후로 호출.
+- [DONE — verified] O-10: `worker-pool.ts`의 타임아웃-메시지 경합 — 기존 `settled` 플래그 + `clearTimeout(active.timeoutHandle)` 가드가 이미 안전하게 동작함을 fake `worker_threads` + `vi.useFakeTimers()`로 검증 (메시지 우선 시 타임아웃 무효화, 타임아웃 시 워커 교체+reject, dispose 시 큐잉된 작업 reject). 코드 변경 없음.
+- [DONE] O-11: `index-worker.ts`에 톱레벨 `process.on('uncaughtException'/'unhandledRejection', ...)` 핸들러 추가 — 로그 출력 후 재throw하여 메인 스레드의 `worker.on('error', ...)` (`replaceWorker`)로 명확히 전파.
+
+**테스트**: `tests/phase12-6-commit-b.test.ts` (신규, 8개) — `toCanonical` 멱등성, CrossProjectResolver 배치 캐싱(연결 재사용 + endBatch 시 close, 비배치 모드 호환), WorkerPool 타임아웃/메시지 settle 가드(fake worker_threads), index-worker 핸들러 등록 확인. `npm test` 261 → 269 통과, `tsc --noEmit` 통과.
 
 ### 커밋 C — 그래프/스키마 정리
 - O-7: `graph-engine.ts:561` DFS `>` → `>=`
