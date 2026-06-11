@@ -99,20 +99,25 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 ---
 
-## 6. Phase 12-5: 그래프/DB 쿼리 최적화 (A-1, A-2, A-3, A-12)
+## 6. Phase 12-5: 그래프/DB 쿼리 최적화 (A-1, A-2, A-3, A-12) — [DONE]
 
 같은 영역(`src/graph/`, `src/db/`)을 한 번에 정리.
 
 | 항목 | 작업 |
 |------|------|
-| A-3 | `src/graph/optimization-engine.ts:29-95`의 raw SQL을 `NodeRepository.findDeadCodeCandidates(tier)`로 이동. |
-| A-2 | 스키마 마이그레이션 추가: `node_tags(node_id, tag)` 정규화 테이블 + 인덱스. 인덱싱 파이프라인에서 태그 upsert 시 함께 기록. `findDeadCodeCandidates`가 LIKE 대신 JOIN 사용. |
-| A-1 | `architecture-engine.ts`의 `checkViolations()`/`detectCycles()`를 노드+에지 1회 로드 후 인메모리 인접 리스트로 처리. `resource-provider.ts:57`의 클러스터 카운트를 `GROUP BY` 1회 쿼리로 교체. `api-server.ts:434-441`의 `mapToGraphEdge()`를 노드 ID 배치 프리페치로 변경. |
-| A-12 | `vector-repository.ts:22-49`: 차원 불일치 시 `console.warn` 추가 (즉시 throw는 호출부 영향 커서 1차로는 경고만). |
+| A-3 | [DONE] `src/graph/optimization-engine.ts`의 raw SQL을 `NodeRepository.findDeadCodeCandidates(tier)`로 이동. |
+| A-2 | [DONE] 스키마 마이그레이션 1→2 추가: `node_tags(node_id, tag)` 정규화 테이블 + 인덱스 (+ 기존 데이터 백필). `NodeRepository.createNode()`에서 태그 upsert 시 함께 기록. `findDeadCodeCandidates`가 LIKE 대신 `node_tags` EXISTS/JOIN 사용. |
+| A-1 | [PARTIAL DONE] `resource-provider.ts:57`의 클러스터별 `COUNT(*)`를 `GROUP BY cluster_id` 1회 쿼리로 교체. `architecture-engine.ts`의 `checkViolations()`/`detectCycles()`와 `api-server.ts`의 `mapToGraphEdge()`는 `GraphEngine`의 `nodeCache`/`qnameCache`(LRU 10k)로 이미 캐시되어 있어 반복 SQL 비용이 사실상 제거됨 — 인접 리스트 전면 재작성은 고위험이라 별도 Phase로 이연 (diagnostic-v9 A-1 항목에 근거 기록). |
+| A-12 | [DONE — 기 구현 확인] `vector-repository.ts`의 `search()`는 이미 차원 불일치 시 `console.error` 경고 + `[]` 반환을 구현하고 있음을 확인. 코드 변경 없음. |
 
-**테스트**: `tests/architecture-engine.test.ts`, `tests/graph-engine.test.ts` 기존 스위트가 결과 동등성 보장하므로 결과값 비교 위주로 보강. 마이그레이션은 `tests/infrastructure.test.ts`에 스키마 버전 테스트 추가.
+**테스트**:
+- `tests/optimization-engine.test.ts` (신규) — `findDeadCode()`가 `node_tags` 기반으로 trait:entrypoint/trait:abstract/trait:internal을 올바르게 필터링하고, `createNode()`가 `node_tags`를 upsert/replace함을 검증.
+- `tests/database-migration.test.ts` (신규) — `SCHEMA_VERSION`, `node_tags`/인덱스 생성, 마이그레이션 1→2 백필 검증.
+- `tests/resource-provider.test.ts` (신규) — `graph://clusters`가 `GROUP BY` 기반 `node_count`를 올바르게 반환함을 검증.
 
-**산출물**: 2개 커밋 (마이그레이션/A-2 분리, 나머지 통합).
+`npm test` 238 → 250 통과, `tsc --noEmit` 통과.
+
+**산출물**: 2개 커밋 (마이그레이션+A-2/A-3 / A-1+A-12).
 
 ---
 

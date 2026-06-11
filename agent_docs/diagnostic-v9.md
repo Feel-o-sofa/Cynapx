@@ -153,7 +153,7 @@ public async generate(_text: string): Promise<number[]> {
 
 ## 3. MEDIUM — 아키텍처 개선
 
-### A-1. N+1 쿼리 패턴 (4곳)
+### A-1. N+1 쿼리 패턴 (4곳) — [PARTIAL DONE — Phase 12-5]
 | 위치 | 내용 |
 |------|------|
 | `src/graph/architecture-engine.ts:85-128` | `checkViolations()`: 전체 에지 순회하며 에지당 `getNodeById()` 2회 |
@@ -163,14 +163,18 @@ public async generate(_text: string): Promise<number[]> {
 
 **수정**: 에지+노드 JOIN 단일 쿼리 또는 인접 리스트 1회 로드 후 인메모리 순회.
 
-### A-2. `tags` LIKE 풀스캔
+**진행 상황 (Phase 12-5)**:
+- [DONE] `resource-provider.ts:57` 클러스터별 `COUNT(*)` → `GROUP BY cluster_id` 1회 쿼리로 교체 (이 경로는 캐시가 없어 가장 직접적인 N+1이었음).
+- [DEFERRED] `architecture-engine.ts`의 `checkViolations()`/`detectCycles()`, `api-server.ts`의 `mapToGraphEdge()`는 이미 `GraphEngine`의 `nodeCache`/`qnameCache`(LRU 10k)를 통해 `getNodeById()` 호출이 캐시되므로 반복 SQL 비용은 사실상 제거된 상태. 다만 매우 큰 그래프(>10k 노드)에서는 캐시 미스가 누적될 수 있어, 인접 리스트 1회 로드 방식으로의 재작성은 고위험 리팩터로 별도 Phase에서 처리 예정 (성능 프로파일링 후 우선순위 재평가).
+
+### A-2. `tags` LIKE 풀스캔 — [DONE — Phase 12-5]
 **`src/graph/optimization-engine.ts:36-68`**
 
 `tags NOT LIKE '%trait:entrypoint%'` 류의 substring 매치는 인덱스를 탈 수 없어 `findDeadCode()` 1회당 풀스캔 3회.
 
 **수정**: `node_tags(node_id, tag)` 정규화 테이블 + 인덱스로 마이그레이션, `WHERE tag = ?` JOIN으로 전환.
 
-### A-3. 엔진에 raw SQL 누수
+### A-3. 엔진에 raw SQL 누수 — [DONE — Phase 12-5]
 **`src/graph/optimization-engine.ts:29-95`**
 
 `findDeadCode()`가 `db.prepare()`를 직접 호출. 스키마 변경 시 수정 지점이 분산된다.
@@ -225,10 +229,12 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 
 스키마 마이그레이션 후 캐시된 statement가 stale해질 수 있다. `DatabaseManager.runMigrations()`에서 리포지토리 캐시 무효화 훅 호출.
 
-### A-12. Vector 검색 차원 불일치 시 무음 실패
+### A-12. Vector 검색 차원 불일치 시 무음 실패 — [DONE — already implemented, verified Phase 12-5]
 **`src/db/vector-repository.ts:22-49`**
 
 차원 불일치 시 빈 배열 반환 → 시맨틱 검색이 망가져도 인지 불가. 최소 경고 로그, 가급적 명시적 에러.
+
+**확인 (Phase 12-5)**: `src/db/vector-repository.ts`의 `search()`는 이미 차원 불일치 시 `console.error`로 경고를 출력하고 `[]`를 반환한다. 추가 코드 변경 불필요.
 
 ---
 
