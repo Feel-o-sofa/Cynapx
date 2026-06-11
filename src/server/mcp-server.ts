@@ -76,6 +76,8 @@ export class McpServer {
         return ctx;
     }
 
+    public getEmbeddingProvider(): EmbeddingProvider { return this.embeddingProvider; }
+
     public get isInTerminalMode(): boolean { return this.isTerminal; }
     public get isReady(): boolean { return this.isInitialized; }
 

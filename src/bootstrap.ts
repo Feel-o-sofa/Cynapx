@@ -109,6 +109,8 @@ async function bootstrap() {
     const lockManager = new LockManager(lockBasePath);
     const mcpServer = new McpServer(workspaceManager);
     const ipcCoordinator = new IpcCoordinator(mcpServer);
+    // H-5: ensure the embedding sidecar's child process is terminated on shutdown.
+    lifecycle.track({ dispose: () => mcpServer.getEmbeddingProvider().dispose?.() });
 
     // Helper: initialise a single project context (DB open, pipeline start, optional sync).
     const startHostServicesForContext = async (ctx: EngineContext) => {

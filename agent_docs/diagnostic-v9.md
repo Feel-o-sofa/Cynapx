@@ -122,14 +122,14 @@ if (!filePath.endsWith('.ts') && !filePath.endsWith('.js') && !filePath.endsWith
 
 **수정**: `fs.openSync(lockPath, 'wx')`(배타적 생성)로 생성과 획득을 원자화하고, `EEXIST`면 기존 lock 검증으로 진입. lock에 이미 있는 `nonce`를 heartbeat 검증에도 활용해 PID 재사용을 무력화.
 
-### H-5. Python 임베딩 사이드카 종료 처리 부재
+### H-5. Python 임베딩 사이드카 종료 처리 부재 — [DONE — Phase 12-4]
 **`src/indexer/embedding-manager.ts:45-96`**
 
 `spawn('python', ...)` 후 dispose 메커니즘이 없어 본 프로세스 종료 시 사이드카가 고아로 남고, 자동 재시작 루프가 죽은 프로세스를 무한히 부활시키려 시도한다.
 
 **수정**: `dispose()` 추가(`child.kill('SIGTERM')` → 5초 후 SIGKILL, 재시작 루프 중지 플래그), `LifecycleManager`에 등록.
 
-### H-6. NullEmbeddingProvider가 null을 number[]로 캐스팅
+### H-6. NullEmbeddingProvider가 null을 number[]로 캐스팅 — [DONE — Phase 12-4]
 **`src/indexer/embedding-manager.ts:174-179`**
 
 ```typescript
@@ -142,7 +142,7 @@ public async generate(_text: string): Promise<number[]> {
 
 **수정**: `[]` 반환 또는 반환 타입을 `number[] | null`로 바꾸고 호출부에서 명시 처리.
 
-### H-7. 배치 부분 실패 시 lastIndexedCommit 드리프트
+### H-7. 배치 부분 실패 시 lastIndexedCommit 드리프트 — [DONE — Phase 12-4]
 **`src/indexer/update-pipeline.ts:157-182, 184-276`**
 
 배치 내 일부 파일 파싱이 실패해도 커밋 메타데이터 갱신 경로가 파일 단위로 분리되어 있어, 실패 파일이 누락된 채 `setLastIndexedCommit`이 진행될 수 있다. 이후 증분 동기화는 그 커밋 이전 변경을 다시 보지 않으므로 **실패 파일이 영구 누락**된다.

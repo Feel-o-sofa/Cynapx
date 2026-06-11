@@ -6,8 +6,14 @@
  * Unit tests for EmbeddingManager and NullEmbeddingProvider.
  * Uses vi.fn() mocks for the database and node repository.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { EmbeddingManager, NullEmbeddingProvider, EmbeddingProvider } from '../src/indexer/embedding-manager';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'events';
+import { Readable } from 'stream';
+import { EmbeddingManager, NullEmbeddingProvider, EmbeddingProvider, PythonEmbeddingProvider } from '../src/indexer/embedding-manager';
+
+vi.mock('child_process', () => ({
+    spawn: vi.fn(),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -48,15 +54,14 @@ describe('NullEmbeddingProvider', () => {
         provider = new NullEmbeddingProvider();
     });
 
-    it('generate() returns null without throwing', async () => {
+    it('generate() returns an empty array without throwing (H-6)', async () => {
         const result = await provider.generate('hello');
-        // Per source: returns null as unknown as number[]
-        expect(result).toBeNull();
+        expect(result).toEqual([]);
     });
 
-    it('generateBatch() returns null without throwing', async () => {
+    it('generateBatch() returns an empty array without throwing (H-6)', async () => {
         const result = await provider.generateBatch(['hello', 'world']);
-        expect(result).toBeNull();
+        expect(result).toEqual([]);
     });
 
     it('getDimensions() returns 0', () => {
@@ -155,5 +160,90 @@ describe('EmbeddingManager — enqueuedBatch queue serialization', () => {
         expect((serialCheckProvider.generateBatch as ReturnType<typeof vi.fn>).mock.calls.length).toBeGreaterThanOrEqual(1);
         // Concurrency must never exceed 1 within a single refreshAll
         expect(maxConcurrent).toBe(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// PythonEmbeddingProvider.dispose() — H-5 (SIGTERM -> SIGKILL escalation,
+// stops the auto-restart loop)
+// ---------------------------------------------------------------------------
+
+function makeMockChild() {
+    const child: any = new EventEmitter();
+    child.stdout = new Readable({ read() {} });
+    child.stderr = new Readable({ read() {} });
+    child.stdin = { write: vi.fn() };
+    child.kill = vi.fn();
+    child.exitCode = null;
+    child.signalCode = null;
+    return child;
+}
+
+describe('PythonEmbeddingProvider.dispose()', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.clearAllMocks();
+    });
+
+    it('sends SIGTERM, then escalates to SIGKILL after the timeout if still alive', async () => {
+        const { spawn } = await import('child_process');
+        const mockChild = makeMockChild();
+        (spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(mockChild);
+
+        vi.useFakeTimers();
+
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+
+        provider.dispose();
+
+        expect(mockChild.kill).toHaveBeenCalledWith('SIGTERM');
+        expect(mockChild.kill).not.toHaveBeenCalledWith('SIGKILL');
+
+        // Process did not exit in time -> escalate to SIGKILL.
+        vi.advanceTimersByTime(5000);
+
+        expect(mockChild.kill).toHaveBeenCalledWith('SIGKILL');
+    });
+
+    it('does not send SIGKILL if the process already exited before the timeout', async () => {
+        const { spawn } = await import('child_process');
+        const mockChild = makeMockChild();
+        (spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(mockChild);
+
+        vi.useFakeTimers();
+
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+
+        provider.dispose();
+        mockChild.exitCode = 0;
+
+        vi.advanceTimersByTime(5000);
+
+        expect(mockChild.kill).toHaveBeenCalledTimes(1);
+        expect(mockChild.kill).toHaveBeenCalledWith('SIGTERM');
+    });
+
+    it('stops the auto-restart loop after dispose() even if the child process exits', async () => {
+        const { spawn } = await import('child_process');
+        const mockChild = makeMockChild();
+        (spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(mockChild);
+
+        vi.useFakeTimers();
+
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+
+        provider.dispose();
+
+        // Simulate the child process exiting unexpectedly after dispose.
+        mockChild.emit('exit', 1);
+
+        // Advance past all restart backoff delays (1s, 2s, 4s).
+        vi.advanceTimersByTime(10_000);
+
+        // spawn should only have been called once (the initial start), not again for restart.
+        expect(spawn).toHaveBeenCalledTimes(1);
     });
 });

@@ -81,19 +81,21 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 ---
 
-## 5. Phase 12-4: 인덱싱 파이프라인 견고성 (H-5, H-6, H-7)
+## 5. Phase 12-4: 인덱싱 파이프라인 견고성 (H-5, H-6, H-7) — [DONE]
 
 | 항목 | 작업 |
 |------|------|
-| H-5 | `src/indexer/embedding-manager.ts`: `PythonEmbeddingProvider`에 `dispose()` 추가(`SIGTERM` → 5초 후 `SIGKILL`, 재시작 루프 중단 플래그). `bootstrap.ts`에서 `lifecycle.track()`에 등록. |
-| H-6 | 같은 파일의 `NullEmbeddingProvider.generate()`가 `null as unknown as number[]` 반환하는 부분을 `[]` 반환으로 변경, 호출부(`update-pipeline.ts` 임베딩 처리)에서 빈 배열 시 스킵 처리 확인. |
-| H-7 | `src/indexer/update-pipeline.ts`: `processBatch()`에서 실패 파일을 별도 목록으로 추적, 트랜잭션 커밋 성공 후에만 `setLastIndexedCommit` 호출. 실패 파일은 다음 동기화 사이클에 재시도되도록 메타데이터에 보존(예: `pending_files` 또는 기존 메타데이터 테이블 재사용). |
+| H-5 | [DONE] `src/indexer/embedding-manager.ts`: `PythonEmbeddingProvider`에 `dispose()` 보강 (`SIGTERM` → 5초 후 미종료 시 `SIGKILL`, `disposed` 플래그로 자동 재시작 루프 중단). `EmbeddingProvider` 인터페이스에 옵셔널 `dispose?()` 추가, `McpServer.getEmbeddingProvider()` 노출, `bootstrap.ts`에서 `lifecycle.track({ dispose: () => mcpServer.getEmbeddingProvider().dispose?.() })`로 등록. |
+| H-6 | [DONE] 같은 파일의 `NullEmbeddingProvider.generate()`/`generateBatch()`가 `null as unknown as ...` 반환하던 것을 각각 `[]` 반환으로 변경. `vectorRepo.search([], limit)`은 차원 불일치로 `[]`를 반환하는 기존 가드와 자연스럽게 합류해 호출부(`search-symbols.ts`) 변경 불필요. |
+| H-7 | [DONE] `src/indexer/update-pipeline.ts`: `processBatch(events, version, targetCommit?)`에 `targetCommit` 파라미터 추가. 트랜잭션 COMMIT 성공 후 실패 파일이 0건이면 `metadataRepo.setLastIndexedCommit(targetCommit)` 호출, 1건 이상이면 워터마크를 갱신하지 않고 로그로 보고 — 다음 `syncWithGit()`이 동일 diff 범위(실패 파일 포함)를 재시도. `syncWithGit()`은 `strategy.buildEvents()`가 반환한 `result.head`를 `targetCommit`으로 전달하도록 수정. |
 
 **테스트**:
-- `tests/embedding-queue.test.ts` 확장: dispose 호출 시 자식 프로세스 kill 검증(mock spawn).
-- `tests/sync-strategies.test.ts` 확장: 배치 내 1개 파일 강제 실패 시 `lastIndexedCommit`이 실패 이전 커밋으로 유지되는지 검증.
+- `tests/embedding-queue.test.ts` 확장 — `PythonEmbeddingProvider.dispose()` describe 블록 3건(mock spawn): SIGTERM→SIGKILL 에스컬레이션, 정상 종료 시 SIGKILL 미발송, dispose 후 자동 재시작 루프 중단. `NullEmbeddingProvider` 테스트를 `[]` 반환 기준으로 갱신.
+- `tests/update-pipeline-batch.test.ts` (신규) — `processBatch()`가 전체 성공 시 `targetCommit`으로 워터마크를 전진시키고, 1개 파일 실패 시 워터마크를 전진시키지 않으며, `targetCommit` 미전달 시 호출하지 않음을 검증.
 
-**산출물**: 1~2개 커밋.
+`npm test` 232 → 238 통과, `tsc --noEmit` 통과.
+
+**산출물**: 1개 커밋.
 
 ---
 

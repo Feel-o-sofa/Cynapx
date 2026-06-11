@@ -15,6 +15,9 @@ export interface EmbeddingProvider {
     generateBatch(texts: string[]): Promise<number[][]>;
     getDimensions(): number;
     getModelName(): string;
+    // H-5: providers backed by external processes (e.g. PythonEmbeddingProvider)
+    // implement this to terminate child processes on shutdown.
+    dispose?(): void;
 }
 
 /**
@@ -41,6 +44,9 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
     // H-2(2): 자동 재시작 재시도 카운터
     private restartAttempts: number = 0;
     private static readonly MAX_RESTART_ATTEMPTS = 3;
+    // H-5: set by dispose() to stop the auto-restart loop and any in-flight kill escalation.
+    private disposed: boolean = false;
+    private static readonly KILL_TIMEOUT_MS = 5000;
 
     private async start() {
         if (this.child) return;
@@ -89,6 +95,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
             if (code !== 0 && code !== null) {
                 console.error(`[Embedding] Python Sidecar crashed with code ${code}`);
             }
+            if (this.disposed) return;
             if (this.restartAttempts < PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS) {
                 const delay = Math.pow(2, this.restartAttempts) * 1000; // 1s, 2s, 4s
                 this.restartAttempts++;
@@ -146,6 +153,9 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
     public getModelName(): string { return 'jinaai/jina-code-embeddings-0.5b (GPU Hybrid)'; }
 
     public dispose() {
+        // H-5: stop the auto-restart loop before tearing down the child process.
+        this.disposed = true;
+
         const pendingOnDispose = this.pendingRequest;
         this.pendingRequest = null;
         if (pendingOnDispose) {
@@ -157,8 +167,15 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
             this.rl = null;
         }
         if (this.child) {
-            this.child.kill();
+            const child = this.child;
             this.child = null;
+            child.kill('SIGTERM');
+            const killTimer = setTimeout(() => {
+                if (child.exitCode === null && child.signalCode === null) {
+                    child.kill('SIGKILL');
+                }
+            }, PythonEmbeddingProvider.KILL_TIMEOUT_MS);
+            killTimer.unref?.();
         }
     }
 }
@@ -172,11 +189,11 @@ export class NullEmbeddingProvider implements EmbeddingProvider {
     public readonly unavailable = true;
 
     public async generate(_text: string): Promise<number[]> {
-        return null as unknown as number[];
+        return [];
     }
 
     public async generateBatch(_texts: string[]): Promise<number[][]> {
-        return null as unknown as number[][];
+        return [];
     }
 
     public getDimensions(): number { return 0; }

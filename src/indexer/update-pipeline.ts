@@ -181,7 +181,7 @@ export class UpdatePipeline {
         }
     }
 
-    public async processBatch(events: FileChangeEvent[], version: number): Promise<void> {
+    public async processBatch(events: FileChangeEvent[], version: number, targetCommit?: string): Promise<void> {
         console.error(`Processing batch of ${events.length} files...`);
 
         type BatchResult =
@@ -262,6 +262,19 @@ export class UpdatePipeline {
 
             this.db.prepare('COMMIT').run();
             this.graphEngine?.invalidateCache();
+
+            // H-7: only advance the watermark once the transaction has committed
+            // successfully, and only if every file in the batch was processed.
+            // Failed files are left out of the new watermark so the next
+            // syncWithGit() retries them via the same diff range.
+            const failedFiles = results.filter((r): r is Extract<BatchResult, { status: 'error' }> => r.status === 'error');
+            if (targetCommit && this.metadataRepo) {
+                if (failedFiles.length === 0) {
+                    this.metadataRepo.setLastIndexedCommit(targetCommit);
+                } else {
+                    console.error(`[UpdatePipeline] Skipping lastIndexedCommit advance to ${targetCommit}: ${failedFiles.length} file(s) failed and will be retried — ${failedFiles.map(f => f.event.file_path).join(', ')}`);
+                }
+            }
 
             // Trigger embedding update in background
             this.embeddingManager.refreshAll().catch(err => {
@@ -365,7 +378,7 @@ export class UpdatePipeline {
         const result = await strategy.buildEvents(projectPath);
         if (!result) return;
 
-        await this.processBatch(result.events, Date.now());
+        await this.processBatch(result.events, Date.now(), result.head);
     }
 
     private recomputeFanMetrics(): void {
