@@ -3,36 +3,22 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { LanguageProvider, RawCodeEdge } from '../types';
-import { SymbolType } from '../../types';
-// @ts-ignore
-import Rust from 'tree-sitter-rust';
-import Parser from 'tree-sitter';
-import * as fs from 'fs';
-import * as path from 'path';
+import { LanguageDescriptor } from './descriptor';
 
-export class RustProvider implements LanguageProvider {
-    public extensions = ['rs'];
-    public languageName = 'rust';
-
-    public getLanguage() {
-        return Rust;
-    }
-
-    public getQuery(): string {
-        const queryPath = path.resolve(__dirname, './queries/rust.scm');
-        return fs.readFileSync(queryPath, 'utf8');
-    }
-
-    public mapCaptureToSymbolType(captureName: string): SymbolType {
-        if (captureName.startsWith('class')) return 'class';
-        if (captureName.startsWith('function')) return 'function';
-        if (captureName.startsWith('interface')) return 'interface';
-        if (captureName.startsWith('module')) return 'module';
-        return 'field';
-    }
-
-    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+export const rustDescriptor: LanguageDescriptor = {
+    name: 'rust',
+    extensions: ['rs'],
+    grammarModule: 'tree-sitter-rust',
+    queryFile: 'rust.scm',
+    captureMap: [
+        ['class', 'class'],
+        ['function', 'function'],
+        ['interface', 'interface'],
+        ['module', 'module']
+    ],
+    defaultSymbolType: 'field',
+    decisionPoints: ['if_expression', 'for_expression', 'while_expression', 'match_arm'],
+    resolveImport(node, fromQName, edges) {
         const pathNode = node.descendantsOfType('identifier').pop();
         if (pathNode) {
             edges.push({
@@ -43,8 +29,4 @@ export class RustProvider implements LanguageProvider {
             });
         }
     }
-
-    public getDecisionPoints(): string[] {
-        return ['if_expression', 'for_expression', 'while_expression', 'match_arm'];
-    }
-}
+};

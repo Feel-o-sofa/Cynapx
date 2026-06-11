@@ -3,38 +3,24 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { LanguageProvider, RawCodeEdge } from '../types';
-import { SymbolType } from '../../types';
-// @ts-ignore
-import Go from 'tree-sitter-go';
-import Parser from 'tree-sitter';
-import * as fs from 'fs';
-import * as path from 'path';
+import { LanguageDescriptor } from './descriptor';
 
-export class GoProvider implements LanguageProvider {
-    public extensions = ['go'];
-    public languageName = 'go';
-
-    public getLanguage() {
-        return Go;
-    }
-
-    public getQuery(): string {
-        const queryPath = path.resolve(__dirname, './queries/go.scm');
-        return fs.readFileSync(queryPath, 'utf8');
-    }
-
-    public mapCaptureToSymbolType(captureName: string): SymbolType {
-        if (captureName.startsWith('class')) return 'class';
-        if (captureName.startsWith('function')) return 'function';
-        if (captureName.startsWith('method')) return 'method';
-        return 'field';
-    }
-
-    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+export const goDescriptor: LanguageDescriptor = {
+    name: 'go',
+    extensions: ['go'],
+    grammarModule: 'tree-sitter-go',
+    queryFile: 'go.scm',
+    captureMap: [
+        ['class', 'class'],
+        ['function', 'function'],
+        ['method', 'method']
+    ],
+    defaultSymbolType: 'field',
+    decisionPoints: ['if_statement', 'for_statement', 'expression_case_clause'],
+    resolveImport(node, fromQName, edges) {
         const pathNode = node.descendantsOfType('interpreted_string_literal')[0];
         if (pathNode) {
-            let pkgPath = pathNode.text.replace(/"/g, '');
+            const pkgPath = pathNode.text.replace(/"/g, '');
             edges.push({
                 from_qname: fromQName,
                 to_qname: `package:${pkgPath}`,
@@ -43,8 +29,4 @@ export class GoProvider implements LanguageProvider {
             });
         }
     }
-
-    public getDecisionPoints(): string[] {
-        return ['if_statement', 'for_statement', 'expression_case_clause'];
-    }
-}
+};

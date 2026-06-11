@@ -8,7 +8,8 @@ import { bench, describe, beforeAll } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
 import Parser from 'tree-sitter';
-import { TypescriptProvider } from '../../src/indexer/languages/typescript';
+import { typescriptDescriptor } from '../../src/indexer/languages/typescript';
+import { createLanguageProvider } from '../../src/indexer/languages';
 import type { LanguageProvider } from '../../src/indexer/types';
 
 const FIXTURES = path.resolve(__dirname, '../fixtures');
@@ -19,7 +20,7 @@ let sourceCode: string;
 let parser: Parser;
 
 beforeAll(() => {
-    provider = new TypescriptProvider();
+    provider = createLanguageProvider(typescriptDescriptor);
     sourceCode = fs.readFileSync(SAMPLE_TS, 'utf8');
     parser = new Parser();
     parser.setLanguage(provider.getLanguage());

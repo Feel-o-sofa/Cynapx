@@ -3,35 +3,25 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { LanguageProvider, RawCodeEdge } from '../types';
-import { SymbolType } from '../../types';
-// @ts-ignore
-import Python from 'tree-sitter-python';
-import Parser from 'tree-sitter';
-import * as fs from 'fs';
-import * as path from 'path';
+import { LanguageDescriptor } from './descriptor';
 
-export class PythonProvider implements LanguageProvider {
-    public extensions = ['py'];
-    public languageName = 'python';
-
-    public getLanguage() {
-        return Python;
-    }
-
-    public getQuery(): string {
-        const queryPath = path.resolve(__dirname, './queries/python.scm');
-        return fs.readFileSync(queryPath, 'utf8');
-    }
-
-    public mapCaptureToSymbolType(captureName: string): SymbolType {
-        if (captureName.startsWith('class')) return 'class';
-        if (captureName.startsWith('function')) return 'function';
-        if (captureName.startsWith('method')) return 'method';
-        return 'field';
-    }
-
-    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+export const pythonDescriptor: LanguageDescriptor = {
+    name: 'python',
+    extensions: ['py'],
+    grammarModule: 'tree-sitter-python',
+    queryFile: 'python.scm',
+    captureMap: [
+        ['class', 'class'],
+        ['function', 'function'],
+        ['method', 'method']
+    ],
+    defaultSymbolType: 'field',
+    decisionPoints: [
+        'if_statement', 'for_statement', 'while_statement', 'case_clause',
+        'catch_clause', 'conditional_expression', 'binary_expression',
+        'for_in_statement', 'if_expression'
+    ],
+    resolveImport(node, fromQName, edges, captureName) {
         if (captureName === 'relation.inherits') {
             edges.push({ from_qname: fromQName, to_qname: node.text, edge_type: 'inherits', dynamic: false });
             return;
@@ -68,12 +58,4 @@ export class PythonProvider implements LanguageProvider {
             }
         }
     }
-
-    public getDecisionPoints(): string[] {
-        return [
-            'if_statement', 'for_statement', 'while_statement', 'case_clause',
-            'catch_clause', 'conditional_expression', 'binary_expression',
-            'for_in_statement', 'if_expression'
-        ];
-    }
-}
+};

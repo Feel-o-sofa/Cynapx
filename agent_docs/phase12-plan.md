@@ -174,14 +174,24 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 ---
 
-## 8. Phase 12-7: 언어 프로바이더 데이터 주도화 (A-5) + 리태깅 최적화 (A-4)
+## 8. Phase 12-7: 언어 프로바이더 데이터 주도화 (A-5) + 리태깅 최적화 (A-4) — [DONE]
 
 작업량이 가장 크고 회귀 위험이 있어 마지막 배치로 분리.
 
 | 항목 | 작업 |
 |------|------|
-| A-5 | 13개 `src/indexer/languages/*.ts`를 `{ extensions, grammarModule, queryFile, captureMap }` 디스크립터로 변환하고 `language-registry.ts`가 디스크립터 배열을 순회하며 공용 팩토리로 인스턴스 생성. 클래스명 문자열 추론(`PythonProvider` 등) 제거. |
+| A-5 | [DONE] 13개 `src/indexer/languages/*.ts`를 `{ extensions, grammarModule, queryFile, captureMap }` 디스크립터로 변환하고 `language-registry.ts`가 디스크립터 배열을 순회하며 공용 팩토리로 인스턴스 생성. 클래스명 문자열 추론(`PythonProvider` 등) 제거. |
 | A-4 | [DONE] `update-pipeline.ts` `reTagAllNodes()`를 dirty-set worklist 알고리즘으로 재작성 (변경된 태그를 가진 노드의 부모/이웃만 재처리 큐에 추가). |
+
+### A-5 언어 프로바이더 데이터 주도화 — [DONE]
+
+- [DONE] `src/indexer/languages/descriptor.ts` 신규 — `LanguageDescriptor` 타입(`{ name, extensions, grammarModule, grammarExport?, queryFile, captureMap, defaultSymbolType, decisionPoints, resolveImport? }`) + 공용 팩토리 `createLanguageProvider(descriptor)`. 팩토리가 `.scm` 로딩(`queries/` 공통 경로), `startsWith` 프리픽스 기반 `mapCaptureToSymbolType`, 그래머 lazy `require` + 캐싱을 일괄 처리.
+- [DONE] 12개 언어 파일(`python.ts` 등) 전부 클래스 → 디스크립터 상수(`pythonDescriptor` 등)로 변환. 언어별 고유 로직인 `resolveImport`만 디스크립터의 옵셔널 함수 훅으로 유지(본문 그대로 보존) — 나머지는 전부 데이터. `tree-sitter-typescript`/`tree-sitter-php`의 서브 익스포트는 `grammarExport: 'typescript' | 'php'`로 표현.
+- [DONE] `src/indexer/languages/index.ts` 신규 — `LANGUAGE_DESCRIPTORS` 배열이 단일 진실 공급원. 신규 언어 추가 = 디스크립터 1개 + 배열 1줄.
+- [DONE] `language-registry.ts`: 하드코딩 확장자→모듈경로 맵과 클래스명 문자열 조립 추론(`'python' → PythonProvider`) 제거. 생성자가 `LANGUAGE_DESCRIPTORS`를 순회해 확장자→디스크립터 맵을 구축하고, `getProvider()`는 첫 조회 시 팩토리로 인스턴스 생성(그래머 로드 실패 시 기존처럼 undefined로 우아한 강등). 그래머 lazy 로딩/플러그인 우선순위/`getAllExtensions()` 의미는 기존과 동일.
+- 부수 정합성 수정(리팩터에 본질적으로 얽힘): 기존에는 `CppProvider.extensions`에 있던 `hxx`가 레지스트리의 확장자 맵에는 누락되어 `.hxx` 조회가 로딩 순서에 따라 달라졌음 — 디스크립터 단일 소스화로 `.hxx`가 항상 cpp로 결정적으로 매핑됨.
+
+**테스트 (A-5)**: `tests/language-registry.test.ts` (신규, 19개 — `metadata-parsers.test.ts`는 Yaml/Md/Json 파서 전용이라 별도 파일로 분리) — 디스크립터 무결성(12개 언어, 확장자 중복 없음, 쿼리 파일 존재), 12개 언어 전부 팩토리로 동작하는 provider 생성(그래머 로드 + 쿼리 컴파일 + captureMap/decisionPoints 데이터 일치), 레지스트리가 전체 확장자→provider 매핑을 해석(언어 누락 없음, 클래스명 추론 무관), 대소문자 무시 조회. `tests/parser.test.ts`/`tests/benchmarks/parsing.bench.ts`는 클래스 대신 디스크립터+팩토리 사용으로 갱신(스냅샷 전부 그린 유지). `npm test` 296 → 315 통과, `tsc --noEmit` + `npm run build` 통과.
 
 ### A-4 리태깅 최적화 — [DONE]
 
@@ -192,11 +202,11 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 **테스트 (A-4)**: `tests/phase12-7-a4.test.ts` (신규, 7개) — 다단계 상속 전파 정확성, fixed point 멱등성(replaceTags 0회), dirty 노드만 rewrite, mergeRoles 호출 수가 전파 서브그래프에 비례(전체 노드 수 무관), node_tags 미러 동기화(M2), 상속 사이클 종료, `getEdgesByTypes` 필터링. `tests/benchmarks/retag.bench.ts` (신규) — 200/2000 노드 fixture 풀 리태그 벤치마크. `npm test` 289 → 296 통과, `tsc --noEmit` 통과.
 
 **테스트**:
-- 기존 `tests/parser.test.ts` 13개 언어 전부 그린 유지가 1차 회귀 기준.
-- `tests/metadata-parsers.test.ts`에 언어 디스크립터 등록 누락 검증(전체 확장자 → provider 매핑 존재) 추가.
+- [DONE] 기존 `tests/parser.test.ts` 언어 스냅샷 전부 그린 유지가 1차 회귀 기준.
+- [DONE] 언어 디스크립터 등록 누락 검증(전체 확장자 → provider 매핑 존재)은 `tests/language-registry.test.ts` 신규 파일로 추가 (`metadata-parsers.test.ts`는 메타데이터 파서 전용이라 범위 불일치).
 - [DONE] A-4는 대형 fixture로 패스 횟수/실행 시간 비교 벤치마크(`tests/benchmarks/`) 추가.
 
-**산출물**: 2개 커밋 (언어 리팩터, 리태깅 분리 — A-4 커밋 완료, A-5 잔여).
+**산출물**: 2개 커밋 (언어 리팩터, 리태깅 분리) — 완료.
 
 ---
 
@@ -222,7 +232,7 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 | 12-4 | H-5, H-6, H-7 | 1~2 | 중간 |
 | 12-5 | A-1, A-2, A-3, A-12 | 2 | 중간 (스키마 마이그레이션 포함) |
 | 12-6 | O-* (A-5 제외 LOW 일괄) — [DONE] | 3 | 낮음 |
-| 12-7 | A-5, A-4 | 2 | 높음 (대규모 리팩터) |
+| 12-7 | A-5, A-4 — [DONE] | 2 | 높음 (대규모 리팩터) |
 | 12-8 | 테스트 공백 | 1 | 낮음 |
 
 **총 13~14개 커밋**, Phase 12-1부터 순차 진행. 각 Phase 종료 시 `agent_docs/diagnostic-v9.md`에 [DONE] 마킹 후 `agent_docs/improvement-plan.md`에 Phase 12 완료 요약 추가.

@@ -190,12 +190,14 @@ public async generate(_text: string): Promise<number[]> {
 
 **완료 (Phase 12-7)**: `EdgeRepository.getEdgesByTypes()` 단일 에지 스캔으로 인접 리스트 1회 구축 + 태그가 변한 노드의 직계 자식만 재큐잉하는 worklist로 재작성, persist도 변경된 노드만 `replaceTags()` (M2 미러 불변식 유지).
 
-### A-5. 13개 언어 프로바이더 보일러플레이트 중복
+### A-5. 13개 언어 프로바이더 보일러플레이트 중복 — [DONE — Phase 12-7]
 **`src/indexer/languages/*.ts`**
 
 `getQuery()`의 `.scm` 로딩과 `mapCaptureToSymbolType()` 로직이 13회 반복.
 
 **수정**: 선언적 디스크립터(`{ extensions, grammar, queryFile, captureMap }`) 배열 + 공용 팩토리로 전환. 신규 언어 추가가 데이터 1줄이 된다. `language-registry.ts:125-137`의 클래스명 문자열 조립 추론(`'python' → PythonProvider`)도 함께 제거 가능.
+
+**완료 (Phase 12-7)**: 언어 클래스 전부 `LanguageDescriptor` 상수로 전환(언어 고유 로직은 `resolveImport` 옵셔널 훅으로만 유지), `languages/index.ts`의 `LANGUAGE_DESCRIPTORS` 배열 + `createLanguageProvider()` 공용 팩토리가 단일 진실 공급원, 레지스트리의 클래스명 문자열 추론 제거 (`tests/language-registry.test.ts` 신규로 전체 확장자→provider 매핑 검증).
 
 ### A-6. `require('../../package.json')` 패키징 취약성
 **`src/bootstrap.ts:48`, `src/server/mcp-server.ts:52-55, 154-157`, `src/server/workspace-manager.ts:110,172`, `src/cli/admin.ts:460`**

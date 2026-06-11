@@ -1,20 +1,21 @@
 /**
  * Golden / snapshot tests for tree-sitter parsing across four languages.
  *
- * Strategy: instantiate each language provider directly (bypassing the lazy
- * LanguageRegistry which relies on runtime `require()` of .ts files) and drive
- * the same parse pipeline that TreeSitterParser uses.  This means the tests
- * have no database dependency and no heavy setup.
+ * Strategy: build each language provider directly from its descriptor via the
+ * common factory (bypassing the LanguageRegistry singleton) and drive the same
+ * parse pipeline that TreeSitterParser uses.  This means the tests have no
+ * database dependency and no heavy setup.
  */
 
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
 import * as fs from 'fs';
 import Parser from 'tree-sitter';
-import { TypescriptProvider } from '../src/indexer/languages/typescript';
-import { PythonProvider } from '../src/indexer/languages/python';
-import { JavascriptProvider } from '../src/indexer/languages/javascript';
-import { GoProvider } from '../src/indexer/languages/go';
+import { typescriptDescriptor } from '../src/indexer/languages/typescript';
+import { pythonDescriptor } from '../src/indexer/languages/python';
+import { javascriptDescriptor } from '../src/indexer/languages/javascript';
+import { goDescriptor } from '../src/indexer/languages/go';
+import { createLanguageProvider } from '../src/indexer/languages';
 import type { LanguageProvider } from '../src/indexer/types';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures');
@@ -71,7 +72,7 @@ function captureTexts(captures: ParsedCapture[], keyword: string): string[] {
 // ─── TypeScript ──────────────────────────────────────────────────────────────
 
 describe('tree-sitter parser — TypeScript (sample.ts)', () => {
-    const provider = new TypescriptProvider();
+    const provider = createLanguageProvider(typescriptDescriptor);
     const captures = parseFixture(fixturePath('sample.ts'), provider);
 
     it('snapshot: all captures', () => {
@@ -118,7 +119,7 @@ describe('tree-sitter parser — TypeScript (sample.ts)', () => {
 // ─── Python ──────────────────────────────────────────────────────────────────
 
 describe('tree-sitter parser — Python (sample.py)', () => {
-    const provider = new PythonProvider();
+    const provider = createLanguageProvider(pythonDescriptor);
     const captures = parseFixture(fixturePath('sample.py'), provider);
 
     it('snapshot: all captures', () => {
@@ -162,7 +163,7 @@ describe('tree-sitter parser — Python (sample.py)', () => {
 // ─── JavaScript ──────────────────────────────────────────────────────────────
 
 describe('tree-sitter parser — JavaScript (sample.js)', () => {
-    const provider = new JavascriptProvider();
+    const provider = createLanguageProvider(javascriptDescriptor);
     const captures = parseFixture(fixturePath('sample.js'), provider);
 
     it('snapshot: all captures', () => {
@@ -317,7 +318,7 @@ describe('LockManager — basic tests', () => {
 // ─── Go ──────────────────────────────────────────────────────────────────────
 
 describe('tree-sitter parser — Go (sample.go)', () => {
-    const provider = new GoProvider();
+    const provider = createLanguageProvider(goDescriptor);
     const captures = parseFixture(fixturePath('sample.go'), provider);
 
     it('snapshot: all captures', () => {

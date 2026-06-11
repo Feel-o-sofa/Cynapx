@@ -3,35 +3,21 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { LanguageProvider, RawCodeEdge } from '../types';
-import { SymbolType } from '../../types';
-// @ts-ignore
-import CPP from 'tree-sitter-cpp';
-import Parser from 'tree-sitter';
-import * as fs from 'fs';
-import * as path from 'path';
+import { LanguageDescriptor } from './descriptor';
 
-export class CppProvider implements LanguageProvider {
-    public extensions = ['cpp', 'cc', 'hpp', 'hxx'];
-    public languageName = 'cpp';
-
-    public getLanguage() {
-        return CPP;
-    }
-
-    public getQuery(): string {
-        const queryPath = path.resolve(__dirname, './queries/cpp.scm');
-        return fs.readFileSync(queryPath, 'utf8');
-    }
-
-    public mapCaptureToSymbolType(captureName: string): SymbolType {
-        if (captureName.startsWith('class')) return 'class';
-        if (captureName.startsWith('function')) return 'function';
-        if (captureName.startsWith('module')) return 'module';
-        return 'field';
-    }
-
-    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+export const cppDescriptor: LanguageDescriptor = {
+    name: 'cpp',
+    extensions: ['cpp', 'cc', 'hpp', 'hxx'],
+    grammarModule: 'tree-sitter-cpp',
+    queryFile: 'cpp.scm',
+    captureMap: [
+        ['class', 'class'],
+        ['function', 'function'],
+        ['module', 'module']
+    ],
+    defaultSymbolType: 'field',
+    decisionPoints: ['if_statement', 'for_statement', 'while_statement', 'catch_clause'],
+    resolveImport(node, fromQName, edges, captureName) {
         if (captureName === 'relation.inherits') {
             edges.push({ from_qname: fromQName, to_qname: node.text, edge_type: 'inherits', dynamic: false });
             return;
@@ -39,7 +25,7 @@ export class CppProvider implements LanguageProvider {
 
         const pathNode = node.descendantsOfType('string_content')[0] || node;
         if (pathNode) {
-            let headerPath = pathNode.text.replace(/[<">]/g, '');
+            const headerPath = pathNode.text.replace(/[<">]/g, '');
             edges.push({
                 from_qname: fromQName,
                 to_qname: `header:${headerPath}`,
@@ -48,8 +34,4 @@ export class CppProvider implements LanguageProvider {
             });
         }
     }
-
-    public getDecisionPoints(): string[] {
-        return ['if_statement', 'for_statement', 'while_statement', 'catch_clause'];
-    }
-}
+};
