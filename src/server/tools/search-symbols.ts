@@ -9,7 +9,9 @@ import { mergeResultsRRF, requireEngine } from './_utils.js';
 
 export const searchSymbolsHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
-        const limit = Math.min(args.limit || 10, 200);
+        // O-1/M4: clamp to [1, 200] — negative or zero limits would otherwise
+        // reach SQLite as LIMIT -1 (= unlimited).
+        const limit = Math.min(Math.max(Math.floor(args.limit) || 10, 1), 200);
         const settled = await Promise.allSettled(deps.workspaceManager.getAllContexts().map(async (ctx) => {
             const graphEngine = requireEngine(ctx, 'graphEngine');
             const keywordNodes = graphEngine.nodeRepo.searchSymbols(args.query, limit, { symbol_type: args.symbol_type });

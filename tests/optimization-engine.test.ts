@@ -109,3 +109,60 @@ describe('OptimizationEngine.findDeadCode() — A-2/A-3 node_tags JOIN', () => {
         expect(rows).toEqual([{ node_id: newId, tag: 'trait:abstract' }]);
     });
 });
+
+describe('M2: node_tags stays in sync with nodes.tags', () => {
+    let engine: GraphEngine;
+    let nodeRepo: NodeRepository;
+    let edgeRepo: EdgeRepository;
+    let db: Database.Database;
+
+    beforeEach(() => {
+        ({ engine, nodeRepo, edgeRepo, db } = createInMemoryEngine());
+    });
+
+    it('replaceTags() updates nodes.tags AND the node_tags mirror rows', () => {
+        const id = makeNode(nodeRepo, { qualified_name: 'a.ts#Foo.sync', visibility: 'private', tags: ['old:tag'] });
+
+        nodeRepo.replaceTags(id, ['role:service', 'trait:internal']);
+
+        const row = db.prepare('SELECT tags FROM nodes WHERE id = ?').get(id) as { tags: string };
+        expect(JSON.parse(row.tags)).toEqual(['role:service', 'trait:internal']);
+
+        const tagRows = db.prepare('SELECT tag FROM node_tags WHERE node_id = ? ORDER BY tag').all(id) as { tag: string }[];
+        expect(tagRows.map(r => r.tag)).toEqual(['role:service', 'trait:internal']);
+    });
+
+    it('replaceTags() with an empty array clears both nodes.tags and node_tags', () => {
+        const id = makeNode(nodeRepo, { qualified_name: 'a.ts#Foo.cleared', visibility: 'private', tags: ['old:tag'] });
+
+        nodeRepo.replaceTags(id, []);
+
+        const row = db.prepare('SELECT tags FROM nodes WHERE id = ?').get(id) as { tags: string };
+        expect(JSON.parse(row.tags)).toEqual([]);
+        expect(db.prepare('SELECT COUNT(*) AS c FROM node_tags WHERE node_id = ?').get(id)).toEqual({ c: 0 });
+    });
+
+    it('reTagAllNodes() persists recomputed tags into node_tags (no drift)', async () => {
+        const { UpdatePipeline } = await import('../src/indexer/update-pipeline');
+
+        // A name/path that StructuralTagger reliably tags (role:service, layer:api).
+        const id = makeNode(nodeRepo, {
+            qualified_name: 'src/server/foo.ts#FooService',
+            file_path: 'src/server/foo.ts',
+            symbol_type: 'class',
+            visibility: 'public',
+        });
+
+        const pipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, {} as any);
+        await pipeline.reTagAllNodes();
+
+        const row = db.prepare('SELECT tags FROM nodes WHERE id = ?').get(id) as { tags: string };
+        const jsonTags = (JSON.parse(row.tags) as string[]).sort();
+        expect(jsonTags.length).toBeGreaterThan(0);
+        expect(jsonTags).toContain('role:service');
+
+        // Invariant (migration 2): node_tags mirrors nodes.tags exactly.
+        const tagRows = db.prepare('SELECT tag FROM node_tags WHERE node_id = ? ORDER BY tag').all(id) as { tag: string }[];
+        expect(tagRows.map(r => r.tag)).toEqual(jsonTags);
+    });
+});

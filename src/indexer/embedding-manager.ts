@@ -49,6 +49,8 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
     private static readonly KILL_TIMEOUT_MS = 5000;
 
     private async start() {
+        // L6: a disposed provider must never resurrect the sidecar.
+        if (this.disposed) return;
         if (this.child) return;
         const scriptPath = path.join(process.cwd(), 'scripts', 'cynapx_embedder.py');
 
@@ -120,13 +122,18 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
 
     public async generate(text: string): Promise<number[]> {
         const batch = await this.generateBatch([text]);
+        // L1: an empty batch means fallback mode / no embeddings produced —
+        // signal it explicitly instead of returning undefined.
+        if (batch.length === 0) {
+            throw new Error('Embedding provider unavailable (fallback mode): no embeddings produced');
+        }
         return batch[0];
     }
 
     public async generateBatch(texts: string[]): Promise<number[][]> {
-        // H-2(3): 폴백 모드면 null을 graceful하게 반환
+        // H-2(3)/L1: 폴백 모드면 빈 배열을 graceful하게 반환 (타입 위반 null 대신)
         if (this.fallbackMode) {
-            return null as unknown as number[][];
+            return [];
         }
 
         if (!this.child) await this.start();
@@ -309,8 +316,10 @@ export class EmbeddingManager {
 
             try {
                 const vectors = await this.enqueuedBatch(snippets);
-                if (!vectors) {
-                    console.error('[EmbeddingManager] Batch returned null — skipping (fallback mode)');
+                // L1: fallback mode now returns [] instead of null — treat
+                // both as "no embeddings produced" and skip the batch.
+                if (!vectors || vectors.length === 0) {
+                    console.error('[EmbeddingManager] Batch returned no vectors — skipping (fallback mode)');
                     continue;
                 }
 

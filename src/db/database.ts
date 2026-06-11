@@ -16,6 +16,10 @@ import { Disposable } from '../types';
 export class DatabaseManager implements Disposable {
     private db: Database.Database;
     private _closed: boolean = false;
+    // M3/A-11: callbacks fired after runMigrations() actually applied one or
+    // more migrations (e.g. to invalidate prepared-statement caches that were
+    // built against the pre-migration schema).
+    private migrationCallbacks: Array<() => void> = [];
 
     constructor(dbPath: string) {
         // Ensure the database file's directory exists
@@ -64,6 +68,16 @@ export class DatabaseManager implements Disposable {
      * Current schema version. Increment this when adding new migrations.
      */
     public static readonly SCHEMA_VERSION = 2;
+
+    /**
+     * M3/A-11: Registers a callback invoked at the end of runMigrations()
+     * whenever at least one migration was applied. Use this to invalidate
+     * caches (e.g. EdgeRepository's prepared statements) that may reference
+     * the pre-migration schema. Not invoked when already at the latest version.
+     */
+    public onMigration(cb: () => void): void {
+        this.migrationCallbacks.push(cb);
+    }
 
     /**
      * Runs pending schema migrations using PRAGMA user_version as the version counter.
@@ -116,6 +130,12 @@ export class DatabaseManager implements Disposable {
             }
         });
         migrate();
+
+        // M3/A-11: a migration ran — notify registered listeners so stale
+        // prepared-statement caches can be invalidated.
+        for (const cb of this.migrationCallbacks) {
+            try { cb(); } catch { /* listeners must not break migrations */ }
+        }
     }
 
     /**

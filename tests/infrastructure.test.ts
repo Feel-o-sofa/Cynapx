@@ -50,6 +50,7 @@ vi.mock('../src/db/database', () => {
     const DatabaseManager = vi.fn(function (this: any) {
         this.getDb = mockGetDb;
         this.dispose = mockDispose;
+        this.onMigration = vi.fn();
     });
     return { DatabaseManager };
 });

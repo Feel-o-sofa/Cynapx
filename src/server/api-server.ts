@@ -24,9 +24,12 @@ import * as path from 'path';
 import { getCentralStorageDir } from '../utils/paths';
 
 // O-12: redact sensitive fields before logging request payloads.
-const SENSITIVE_FIELD_PATTERN = /token|secret|password|apikey|api_key|authorization/i;
+// L4: standalone `auth` keys (underscore-delimited, so `author` is NOT
+// redacted) plus passwd/credential/cookie/session variants.
+const SENSITIVE_FIELD_PATTERN = /(^|_)auth($|_)|token|secret|passwd|password|apikey|api_key|authorization|credential|cookie|session/i;
 
-function redactSensitiveFields(value: unknown): unknown {
+// Exported for direct testing (M5/O-12).
+export function redactSensitiveFields(value: unknown): unknown {
     if (Array.isArray(value)) {
         return value.map(redactSensitiveFields);
     }

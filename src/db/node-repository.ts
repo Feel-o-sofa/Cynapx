@@ -92,6 +92,23 @@ export class NodeRepository {
         return nodeId;
     }
 
+    /**
+     * M2: Replaces a node's tags, keeping the node_tags mirror table in sync
+     * with the nodes.tags JSON column (invariant established by migration 2).
+     * Callers performing bulk updates should wrap calls in a transaction.
+     */
+    public replaceTags(nodeId: number, tags: string[]): void {
+        this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?')
+            .run(JSON.stringify(tags), nodeId);
+        this.db.prepare('DELETE FROM node_tags WHERE node_id = ?').run(nodeId);
+        if (tags.length > 0) {
+            const insertTag = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
+            for (const tag of tags) {
+                insertTag.run(nodeId, tag);
+            }
+        }
+    }
+
     public getNodeById(id: number): CodeNode | null {
         const stmt = this.db.prepare('SELECT * FROM nodes WHERE id = ?');
         const row = stmt.get(id) as NodeRow | undefined;

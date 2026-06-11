@@ -152,6 +152,22 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 **Phase 12-6 산출물**: 3개 커밋 (A: server/IPC, B: 인덱서, C: 그래프/스키마). `npm test` 250 → 277 통과.
 
+### Phase 12-6 사후 리뷰 수정 — [DONE]
+
+커밋 3b69c8f..7f1deea 코드 리뷰에서 발견된 후속 결함을 일괄 수정.
+
+- [DONE] H1: `file-watcher.ts` — 임계치 flush 진행 중 배치 타이머가 발화하면 `this.timer`가 발화된 stale 핸들을 계속 보유해, flush 종료 후 재스케줄링이 생략되고 큐 이벤트가 방치되는 버그. 모든 타이머 콜백에서 flush 전에 `this.timer = null` 처리 + post-flush 재스케줄러를 무조건 clearTimeout 후 재스케줄로 변경.
+- [DONE] M1: `cross-project-resolver.ts` — `resolve()` catch에서 이번 호출에 연 연결을 close 없이 캐시에서만 삭제(파일 핸들 누수)하고, 기캐시된 깨진 연결은 배치 내내 유지하던 문제 → 무조건 close 후 캐시에서 제거.
+- [DONE] M2: `reTagAllNodes()`가 `UPDATE nodes SET tags = ?`만 수행해 node_tags 미러 불변식(마이그레이션 2)을 깨던 문제 → `NodeRepository.replaceTags()` 헬퍼 추가(nodes.tags 갱신 + node_tags delete/reinsert) 후 persist 루프에서 사용.
+- [DONE] M3: `invalidateStatementCache()`(A-11)가 프로덕션에서 호출되지 않던 문제 → `DatabaseManager.onMigration(cb)` 추가(마이그레이션 실제 수행 시에만 콜백 발화), `workspace-manager.ts`에서 EdgeRepository 캐시 무효화를 등록.
+- [DONE] M4: `search-symbols.ts` limit 클램프가 음수를 통과시켜 SQLite `LIMIT -1`(무제한)이 되던 문제 → `Math.min(Math.max(Math.floor(args.limit) || 10, 1), 200)`로 [1, 200] 클램프.
+- [DONE] M5: 테스트 품질 — O-1 테스트를 실제 `searchSymbolsHandler.execute` 호출(mock ToolDeps)로 재작성(+음수/초과 limit 회귀), O-12는 `redactSensitiveFields`를 api-server에서 export해 실제 구현 검증, O-11 테스트는 import가 등록한 process 핸들러를 diff 후 제거.
+- [DONE] L1: `PythonEmbeddingProvider.generateBatch` 폴백 시 `null as unknown as number[][]` 대신 `[]` 반환, `generate()`는 빈 배치 시 명시적 에러, `refreshAll()`은 빈 배열 스킵.
+- [DONE] L6: `PythonEmbeddingProvider.start()`에 `disposed` 가드 추가 — dispose 후 사이드카 재기동 방지.
+- [DONE] L4: redact 정규식에 passwd/credential/cookie/session 및 단독 `auth` 키(`(^|_)auth($|_)` — `author`는 미마스킹) 추가.
+
+**테스트**: file-watcher H1 회귀, CrossProjectResolver 에러 경로(M1), replaceTags/reTagAllNodes node_tags 동기화(M2), onMigration 콜백(M3), 실핸들러 limit 클램프(M4/M5), redact 확장(L4), 폴백 반환 타입(L1)/post-dispose 가드(L6). `npm test` 277 → 289 통과, `tsc --noEmit` 통과.
+
 **O-4(TS Program 재사용), O-5(클러스터링 파티셔닝)**: 변경 범위가 크고 현재 규모에선 영향 적음 → Phase 12 범위에서 제외, 별도 Phase 13 후보로 diagnostic-v9에 기록만 유지.
 
 **산출물**: 3개 커밋.

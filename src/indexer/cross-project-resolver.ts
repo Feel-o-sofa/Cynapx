@@ -91,7 +91,6 @@ export class CrossProjectResolver {
         const symbolName = qname.includes('#') ? qname.split('#').pop()! : qname;
 
         for (const project of otherProjects) {
-            const isCached = !!this.batchDbCache?.has(project.db_path);
             try {
                 const remoteDb = this.openRemoteDb(project.db_path);
                 if (!remoteDb) continue;
@@ -126,8 +125,16 @@ export class CrossProjectResolver {
                     if (!this.batchDbCache) remoteDb.close();
                 }
             } catch {
-                // Silently ignore errors for specific remote DBs
-                if (!isCached) this.batchDbCache?.delete(project.db_path);
+                // Silently ignore errors for specific remote DBs.
+                // M1: unconditionally close AND evict the cached connection for
+                // this path — leaving it open leaks a file handle, and leaving
+                // a broken connection cached makes every later resolve() in
+                // the batch fail for this project.
+                const broken = this.batchDbCache?.get(project.db_path);
+                if (broken) {
+                    try { broken.close(); } catch { /* ignore */ }
+                    this.batchDbCache?.delete(project.db_path);
+                }
             }
         }
         return undefined;

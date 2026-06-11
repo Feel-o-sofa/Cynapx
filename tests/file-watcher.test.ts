@@ -7,7 +7,7 @@
  * Covers H-2 (extension allowlist via LanguageRegistry + metadata extensions)
  * and H-3 (flush concurrency guard / queue draining).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { FileWatcher } from '../src/watcher/file-watcher';
 import type { UpdatePipeline } from '../src/indexer/update-pipeline';
 
@@ -128,5 +128,59 @@ describe('FileWatcher: H-3 flush concurrency guard', () => {
             (watcher as any).handleChange('ADD', `/mock/project/src/file${i}.ts`);
         }
         expect((watcher as any).timer).toBeNull();
+    });
+});
+
+describe('FileWatcher: H1 stale timer handle during in-flight flush', () => {
+    let pipeline: UpdatePipeline;
+    let watcher: FileWatcher;
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        pipeline = makePipeline();
+        watcher = new FileWatcher(pipeline, '/mock/project');
+    });
+
+    afterEach(() => {
+        watcher.dispose();
+        vi.useRealTimers();
+    });
+
+    it('does not strand an event when its batch timer fires while a flush is in-flight', async () => {
+        let resolveFirst: () => void = () => {};
+        const firstFlushGate = new Promise<void>((resolve) => { resolveFirst = resolve; });
+        (pipeline.processBatch as any).mockImplementationOnce(async () => { await firstFlushGate; });
+
+        // Event A starts a (slow) flush.
+        (watcher as any).handleChange('ADD', '/mock/project/src/a.ts');
+        const flushPromise = (watcher as any).flush();
+        expect((watcher as any).flushing).toBe(true);
+
+        // Event B arrives mid-flush: queued + new batch timer T2 scheduled.
+        (watcher as any).handleChange('MODIFY', '/mock/project/src/b.ts');
+        expect((watcher as any).timer).not.toBeNull();
+
+        // T2 fires while the flush is still running: its flush() call hits the
+        // `flushing` guard and early-returns. Pre-fix, `this.timer` kept the
+        // stale fired handle, so the post-flush re-scheduler never rescheduled.
+        await vi.advanceTimersByTimeAsync(1000);
+        expect((watcher as any).flushing).toBe(true); // first flush still in-flight
+        expect((watcher as any).queue).toHaveLength(1); // B still queued
+
+        // Finish the in-flight flush.
+        resolveFirst();
+        await flushPromise;
+
+        // The post-flush re-scheduler must have scheduled a follow-up flush for B.
+        expect((watcher as any).timer).not.toBeNull();
+
+        await vi.advanceTimersByTimeAsync(1000);
+        await vi.runAllTimersAsync();
+
+        expect(pipeline.processBatch).toHaveBeenCalledTimes(2);
+        const secondCallEvents = (pipeline.processBatch as any).mock.calls[1][0];
+        expect(secondCallEvents).toHaveLength(1);
+        expect(secondCallEvents[0].file_path).toBe('/mock/project/src/b.ts');
+        expect((watcher as any).queue).toHaveLength(0);
     });
 });

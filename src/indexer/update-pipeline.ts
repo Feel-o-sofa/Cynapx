@@ -96,10 +96,11 @@ export class UpdatePipeline {
                     if (!changed) break;
                 }
 
-                // Final: persist all updated tags
-                const updateStmt = this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?');
+                // Final: persist all updated tags. M2: replaceTags() keeps the
+                // node_tags mirror table in sync with nodes.tags (we're already
+                // inside one transaction here).
                 for (const [id, data] of nodeMap.entries()) {
-                    updateStmt.run(JSON.stringify(data.tags), id);
+                    this.nodeRepo.replaceTags(id, data.tags);
                 }
             });
             txn();

@@ -9,7 +9,7 @@
  * - O-10: worker-pool task timeout/message settle guard
  * - O-11: index-worker top-level uncaughtException/unhandledRejection handlers
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, afterAll } from 'vitest';
 import Database from 'better-sqlite3';
 import * as fs from 'fs';
 import * as os from 'os';
@@ -115,6 +115,58 @@ describe('O-3: CrossProjectResolver batch DB connection caching', () => {
         expect((resolver as any).batchDbCache).toBeNull();
         expect(cachedDb.open).toBe(false);
 
+        localDb.close();
+    });
+
+    it('M1: closes and evicts a cached connection when resolve() fails for that DB', async () => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cynapx-cross-project-'));
+        const remoteDbPath = path.join(tmpDir, 'remote.db');
+        createRemoteDb(remoteDbPath, 'remote.ts#sharedHelper');
+
+        const pathsModule = await import('../src/utils/paths');
+        vi.spyOn(pathsModule, 'readRegistry').mockReturnValue([
+            {
+                name: 'other-project',
+                path: '/other/project',
+                db_path: remoteDbPath,
+                last_accessed_at: new Date().toISOString(),
+            },
+        ]);
+
+        const localDb = new Database(':memory:');
+        const schemaPath = path.resolve(__dirname, '../schema/schema.sql');
+        const fullSchema = fs.readFileSync(schemaPath, 'utf8');
+        localDb.exec(fullSchema.split(';').filter(stmt => !stmt.includes('vec0')).join(';'));
+        const nodeRepo = new NodeRepository(localDb);
+
+        const resolver = new CrossProjectResolver(nodeRepo, '/local/project');
+        resolver.beginBatch();
+
+        // First resolve succeeds and caches the connection.
+        expect(resolver.resolve('sharedHelper', toCanonical('sharedHelper'))).toBeDefined();
+        const cache = (resolver as any).batchDbCache as Map<string, Database.Database>;
+        const cachedDb = cache.get(remoteDbPath)!;
+        expect(cachedDb.open).toBe(true);
+
+        // Break the cached connection: subsequent prepare() throws.
+        const prepareSpy = vi.spyOn(cachedDb, 'prepare').mockImplementation(() => {
+            throw new Error('disk I/O error');
+        });
+
+        expect(resolver.resolve('sharedHelper', toCanonical('sharedHelper'))).toBeUndefined();
+
+        // The broken connection must be closed AND removed from the cache —
+        // not leaked (pre-fix: deleted without close) nor kept (pre-fix:
+        // already-cached broken connection failed for the rest of the batch).
+        expect(prepareSpy).toHaveBeenCalled();
+        expect(cache.has(remoteDbPath)).toBe(false);
+        expect(cachedDb.open).toBe(false);
+
+        // The next resolve in the same batch reopens a fresh connection and succeeds.
+        expect(resolver.resolve('sharedHelper', toCanonical('sharedHelper'))).toBeDefined();
+        expect(cache.get(remoteDbPath)?.open).toBe(true);
+
+        resolver.endBatch();
         localDb.close();
     });
 
@@ -249,16 +301,31 @@ describe('O-10: WorkerPool task timeout/message settle guard', () => {
 });
 
 describe('O-11: index-worker top-level handlers', () => {
+    // M5: importing index-worker installs re-throwing process handlers in the
+    // vitest process. Capture exactly the listeners the import added and
+    // remove them afterwards so they cannot affect other tests.
+    const addedListeners: Array<{ event: 'uncaughtException' | 'unhandledRejection'; listener: (...args: any[]) => void }> = [];
+
+    afterAll(() => {
+        for (const { event, listener } of addedListeners) {
+            process.removeListener(event, listener as any);
+        }
+    });
+
     it('registers uncaughtException and unhandledRejection handlers on import', async () => {
-        const before = {
-            uncaught: process.listenerCount('uncaughtException'),
-            unhandled: process.listenerCount('unhandledRejection'),
-        };
+        const beforeUncaught = process.listeners('uncaughtException');
+        const beforeUnhandled = process.listeners('unhandledRejection');
 
         vi.resetModules();
         await import('../src/indexer/index-worker');
 
-        expect(process.listenerCount('uncaughtException')).toBeGreaterThan(before.uncaught);
-        expect(process.listenerCount('unhandledRejection')).toBeGreaterThan(before.unhandled);
+        const newUncaught = process.listeners('uncaughtException').filter(l => !beforeUncaught.includes(l));
+        const newUnhandled = process.listeners('unhandledRejection').filter(l => !beforeUnhandled.includes(l));
+
+        expect(newUncaught.length).toBeGreaterThan(0);
+        expect(newUnhandled.length).toBeGreaterThan(0);
+
+        for (const listener of newUncaught) addedListeners.push({ event: 'uncaughtException', listener });
+        for (const listener of newUnhandled) addedListeners.push({ event: 'unhandledRejection', listener });
     });
 });

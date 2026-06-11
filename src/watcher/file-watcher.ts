@@ -73,7 +73,16 @@ export class FileWatcher implements Disposable {
         if (this.queue.length >= this.BATCH_THRESHOLD) {
             void this.flush();
         } else {
-            this.timer = setTimeout(() => void this.flush(), this.BATCH_WINDOW_MS);
+            // H1: null the handle inside the callback BEFORE flushing. If the
+            // timer fires while a flush is in-flight (flush() early-returns on
+            // the `flushing` guard), `this.timer` must not keep holding the
+            // stale fired handle — otherwise the post-flush re-scheduler sees
+            // a truthy timer and never schedules a follow-up flush, stranding
+            // queued events.
+            this.timer = setTimeout(() => {
+                this.timer = null;
+                void this.flush();
+            }, this.BATCH_WINDOW_MS);
         }
     }
 
@@ -130,8 +139,14 @@ export class FileWatcher implements Disposable {
         if (this.queue.length === 0) return;
         if (this.queue.length >= this.BATCH_THRESHOLD || this.syncFailedCount > 0) {
             void this.flush();
-        } else if (!this.timer) {
-            this.timer = setTimeout(() => void this.flush(), this.BATCH_WINDOW_MS);
+        } else {
+            // H1: unconditionally reschedule. A timer that fired during the
+            // in-flight flush would otherwise leave a stale handle behind.
+            if (this.timer) clearTimeout(this.timer);
+            this.timer = setTimeout(() => {
+                this.timer = null;
+                void this.flush();
+            }, this.BATCH_WINDOW_MS);
         }
     }
 

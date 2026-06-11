@@ -164,6 +164,43 @@ describe('EmbeddingManager — enqueuedBatch queue serialization', () => {
 });
 
 // ---------------------------------------------------------------------------
+// PythonEmbeddingProvider — L1 fallback return type / L6 post-dispose guard
+// ---------------------------------------------------------------------------
+
+describe('PythonEmbeddingProvider fallback & post-dispose behavior', () => {
+    afterEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('L1: generateBatch() returns [] (not null) in fallback mode', async () => {
+        const provider = new PythonEmbeddingProvider();
+        provider.fallbackMode = true;
+
+        const result = await provider.generateBatch(['hello']);
+        expect(result).toEqual([]);
+    });
+
+    it('L1: generate() rejects cleanly in fallback mode instead of returning undefined', async () => {
+        const provider = new PythonEmbeddingProvider();
+        provider.fallbackMode = true;
+
+        await expect(provider.generate('hello')).rejects.toThrow(/fallback mode/);
+    });
+
+    it('L6: start() after dispose() does not resurrect the sidecar', async () => {
+        const { spawn } = await import('child_process');
+
+        const provider = new PythonEmbeddingProvider();
+        provider.dispose();
+
+        await (provider as any).start();
+
+        expect(spawn).not.toHaveBeenCalled();
+        expect((provider as any).child).toBeNull();
+    });
+});
+
+// ---------------------------------------------------------------------------
 // PythonEmbeddingProvider.dispose() — H-5 (SIGTERM -> SIGKILL escalation,
 // stops the auto-restart loop)
 // ---------------------------------------------------------------------------

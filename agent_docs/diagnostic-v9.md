@@ -235,6 +235,8 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 
 **완료 (Phase 12-6)**: `EdgeRepository.invalidateStatementCache()` 추가 — 캐시된 모든 prepared statement를 초기화해 다음 호출 시 현재 스키마로 재준비. `node-repository.ts`는 statement를 캐시하지 않아 별도 변경 불필요.
 
+**보완 (사후 리뷰 M3)**: 당초 `invalidateStatementCache()`가 프로덕션에서 호출되지 않았음 → `DatabaseManager.onMigration(cb)`(마이그레이션 실제 수행 시에만 발화) 추가 후 `workspace-manager.ts`에서 등록해 배선 완료.
+
 ### A-12. Vector 검색 차원 불일치 시 무음 실패 — [DONE — already implemented, verified Phase 12-5]
 **`src/db/vector-repository.ts:22-49`**
 
@@ -248,7 +250,7 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 
 | # | 위치 | 내용 |
 |---|------|------|
-| O-1 | `src/server/tools/search-symbols.ts:13` | [DONE — Phase 12-6] `limit` 상한 없음 → `Math.min(args.limit \|\| 10, 200)` |
+| O-1 | `src/server/tools/search-symbols.ts:13` | [DONE — Phase 12-6] `limit` 상한 없음 → `Math.min(args.limit \|\| 10, 200)`. 보완(사후 리뷰 M4): 음수 limit가 SQLite `LIMIT -1`(무제한)로 통과하던 문제 → `Math.min(Math.max(Math.floor(args.limit) \|\| 10, 1), 200)`로 [1, 200] 클램프 |
 | O-2 | `src/indexer/update-pipeline.ts:391-393` | [DONE — Phase 12-6] `resolveNodeId()` canonical 미스 시 전체 맵 재순회 — symbolCache가 이미 canonical 키이므로 재스캔 루프 제거 |
 | O-3 | `src/indexer/cross-project-resolver.ts:47-95` | [DONE — Phase 12-6] 외부 심볼 해석마다 원격 DB open/close — `beginBatch()`/`endBatch()`로 배치 내 연결 캐싱 |
 | O-4 | `src/indexer/typescript-parser.ts:30-42` | 파일마다 `ts.createProgram` 신규 생성 — incremental program 또는 LanguageService 재사용 |
@@ -259,7 +261,19 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 | O-9 | `schema/schema.sql` | [DONE — Phase 12-6] `node_embeddings`(vec0)에 노드 삭제 연동 없음 — vec0 가상 테이블은 트리거 본문에서 참조 시 미존재 환경(테스트 등)에서 에러가 나므로, 트리거 대신 `NodeRepository.deleteNodesByFilePath()`/`purgeEmbeddings()`와 `workspace-manager.ts`의 전체 재인덱싱 경로에서 애플리케이션 레벨로 정리 (테이블 부재 시 무시) |
 | O-10 | `src/indexer/worker-pool.ts:150-156` | [DONE — verified Phase 12-6] 타임아웃 vs 메시지 settle 경합 — 기존 `settled` 플래그 + `clearTimeout` 가드가 이미 안전함을 fake-timer 테스트로 검증 |
 | O-11 | `src/indexer/index-worker.ts:24-35` | [DONE — Phase 12-6] 워커 톱레벨 `uncaughtException`/`unhandledRejection` 핸들러 추가 |
-| O-12 | `src/server/api-server.ts:132-136` | [DONE — Phase 12-6] `CYNAPX_LOG_PAYLOADS=1` 시 민감 필드 미마스킹 — `redactSensitiveFields()`로 token/secret/password/apikey/authorization 키 redact |
+| O-12 | `src/server/api-server.ts:132-136` | [DONE — Phase 12-6] `CYNAPX_LOG_PAYLOADS=1` 시 민감 필드 미마스킹 — `redactSensitiveFields()`로 token/secret/password/apikey/authorization 키 redact. 보완(사후 리뷰 L4): passwd/credential/cookie/session 및 단독 `auth` 키(`author` 미마스킹) 추가 |
+
+### Phase 12-6 사후 리뷰 수정 — [DONE]
+
+커밋 3b69c8f..7f1deea 리뷰에서 발견된 후속 결함 일괄 수정 (상세는 phase12-plan.md 7장 참조):
+
+- H1: `file-watcher.ts` — flush 진행 중 발화한 배치 타이머의 stale 핸들로 인해 큐 이벤트가 방치되던 버그 → 타이머 콜백에서 핸들 null 처리 + post-flush 무조건 재스케줄.
+- M1: `cross-project-resolver.ts` — resolve() 실패 시 캐시 연결을 close 없이 삭제(핸들 누수)/깨진 캐시 연결 유지 → 무조건 close 후 캐시 제거.
+- M2: `reTagAllNodes()`가 node_tags 미러를 갱신하지 않던 드리프트 → `NodeRepository.replaceTags()` 도입.
+- M3: A-11 배선 (위 A-11 보완 참조).
+- M4: O-1 음수 limit 보완 (위 O-1 행 참조).
+- M5: phase12-6 테스트의 인라인 복제 구현 제거 — 실제 핸들러/실제 export 검증으로 재작성, index-worker 테스트의 process 핸들러 누수 정리.
+- L1/L6: `PythonEmbeddingProvider` 폴백 시 `[]` 반환(타입 위반 null 제거) + post-dispose `start()` 가드.
 
 ---
 

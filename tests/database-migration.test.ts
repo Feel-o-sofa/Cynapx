@@ -7,7 +7,7 @@
  * Phase 12-5 (A-2): migration 1 -> 2 creates node_tags and backfills it
  * from the existing nodes.tags JSON column.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { DatabaseManager } from '../src/db/database';
 
 describe('DatabaseManager.runMigrations()', () => {
@@ -59,6 +59,25 @@ describe('DatabaseManager.runMigrations()', () => {
         const node = db.prepare("SELECT id FROM nodes WHERE qualified_name = 'a.ts#Foo.bar'").get() as { id: number };
         const tags = db.prepare('SELECT tag FROM node_tags WHERE node_id = ? ORDER BY tag').all(node.id) as { tag: string }[];
         expect(tags.map(t => t.tag)).toEqual(['trait:entrypoint', 'trait:static']);
+
+        manager.dispose();
+    });
+
+    it('M3: fires onMigration callbacks when a migration actually runs via the public method', () => {
+        const manager = new DatabaseManager(':memory:');
+        const db = manager.getDb();
+        const onMigrationCb = vi.fn();
+        manager.onMigration(onMigrationCb);
+
+        // Already at the latest version: no migration runs, no callback.
+        manager.runMigrations();
+        expect(onMigrationCb).not.toHaveBeenCalled();
+
+        // Roll back to version 1 and re-run: the callback must fire once.
+        db.exec('DROP TABLE node_tags');
+        db.pragma('user_version = 1');
+        manager.runMigrations();
+        expect(onMigrationCb).toHaveBeenCalledTimes(1);
 
         manager.dispose();
     });
