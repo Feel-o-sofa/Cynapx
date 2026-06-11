@@ -97,7 +97,7 @@ private async waitUntilReady() {
 2. 도구 핸들러의 `ctx.xxx!`를 공용 가드 유틸(`requireEngine(ctx, 'optEngine')`)로 교체 — 미초기화 시 `isError` ToolResult 반환.
 3. `waitUntilReady()`에서 상태 플래그 변경 제거.
 
-### H-2. FileWatcher가 3개 확장자만 감시
+### H-2. FileWatcher가 3개 확장자만 감시 — [DONE — Phase 12-3]
 **`src/watcher/file-watcher.ts:49`**
 
 ```typescript
@@ -108,7 +108,7 @@ if (!filePath.endsWith('.ts') && !filePath.endsWith('.js') && !filePath.endsWith
 
 **수정**: `LanguageRegistry`의 확장자 목록(+메타데이터 파서 확장자)을 단일 소스로 참조.
 
-### H-3. FileWatcher 동시 flush 가드 부재
+### H-3. FileWatcher 동시 flush 가드 부재 — [DONE — Phase 12-3]
 **`src/watcher/file-watcher.ts:55-60, 62-102`**
 
 `flush()`가 async인데 in-flight 가드가 없다. `BATCH_THRESHOLD` 도달로 `flush()`가 시작된 뒤(이때 `this.timer`는 정리되지 않음) 타이머가 발화하거나 추가 이벤트로 두 번째 flush가 트리거되면 **`processBatch()`/`syncWithGit()`이 동시에 실행**되어 DB 쓰기 경합과 메타데이터 커밋 역행이 발생할 수 있다.

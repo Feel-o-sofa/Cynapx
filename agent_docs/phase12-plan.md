@@ -68,14 +68,14 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 ---
 
-## 4. Phase 12-3: FileWatcher 정합성 (H-2 → H-3)
+## 4. Phase 12-3: FileWatcher 정합성 (H-2 → H-3) — [DONE]
 
 | 항목 | 작업 |
 |------|------|
-| H-2 | `src/watcher/file-watcher.ts:49`의 하드코딩 확장자 체크를 `LanguageRegistry.getInstance().getAllExtensions()` (+ yaml/md/json 등 메타데이터 파서 확장자) 기반으로 교체. |
-| H-3 | 같은 파일에서 `flushing` 플래그 도입. flush 진행 중 들어오는 변경은 큐에 누적만 하고, flush 완료 후 큐가 비어있지 않으면 재귀적으로 다음 flush 예약. threshold 경로에서도 `clearTimeout(this.timer)` 보장. |
+| H-2 | [DONE] `src/watcher/file-watcher.ts`의 하드코딩 확장자 체크를 `LanguageRegistry.getInstance().getAllExtensions()` (+ yaml/md/json 등 메타데이터 파서 확장자) 기반의 `watchedExtensions` Set으로 교체. |
+| H-3 | [DONE] 같은 파일에서 `flushing` 플래그 도입. flush 진행 중 들어오는 변경은 큐에 누적만 하고, flush 완료 후 큐가 비어있지 않으면 재귀적으로 다음 flush 예약(또는 타이머 재설정). threshold 경로에서도 `clearTimeout(this.timer)` 보장. |
 
-**테스트**: `tests/file-watcher.test.ts` (신규) — 비-TS 확장자 변경 감지, flush 도중 추가 이벤트가 유실되지 않음(큐 길이 검증).
+**테스트**: `tests/file-watcher.test.ts` (신규, 7개 테스트) — 비-TS 확장자(.rs/.go/.yaml/.md/.json) 큐잉, 미지원 확장자(.png/.exe) 무시, flush 도중 추가 이벤트가 유실되지 않고 후속 flush로 처리됨, 동시 flush 호출이 no-op임을 검증. `npm test` 225 → 232 통과, `tsc --noEmit` 통과.
 
 **산출물**: 1개 커밋.
 
