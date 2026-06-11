@@ -17,6 +17,9 @@ import * as fs from 'fs';
 import { IpcCoordinator } from '../src/server/ipc-coordinator';
 import { LifecycleManager } from '../src/utils/lifecycle-manager';
 import { EdgeRepository } from '../src/db/edge-repository';
+import { searchSymbolsHandler } from '../src/server/tools/search-symbols';
+import { redactSensitiveFields } from '../src/server/api-server';
+import type { ToolDeps } from '../src/server/tool-dispatcher';
 
 function createInMemoryDb(): Database.Database {
     const db = new Database(':memory:');
@@ -30,41 +33,47 @@ function createInMemoryDb(): Database.Database {
     return db;
 }
 
-describe('O-1: search-symbols limit clamp', () => {
-    it('clamps an oversized limit to 200', () => {
-        const args = { limit: 100000 };
-        const limit = Math.min(args.limit || 10, 200);
-        expect(limit).toBe(200);
+describe('O-1/M4: search-symbols limit clamp (real handler)', () => {
+    // M5: invoke the real handler instead of re-implementing the clamp inline.
+    function makeDeps(searchSymbols: ReturnType<typeof vi.fn>): ToolDeps {
+        return {
+            workspaceManager: {
+                getAllContexts: () => [{
+                    projectPath: '/mock/project',
+                    projectHash: 'hash',
+                    graphEngine: { nodeRepo: { searchSymbols } },
+                }],
+            },
+            embeddingProvider: { generate: vi.fn() },
+        } as unknown as ToolDeps;
+    }
+
+    it('clamps an oversized limit to 200', async () => {
+        const searchSymbols = vi.fn().mockReturnValue([]);
+        await searchSymbolsHandler.execute({ query: 'foo', limit: 100000 }, makeDeps(searchSymbols));
+        expect(searchSymbols).toHaveBeenCalledWith('foo', 200, { symbol_type: undefined });
     });
 
-    it('keeps a small limit unchanged', () => {
-        const args = { limit: 5 };
-        const limit = Math.min(args.limit || 10, 200);
-        expect(limit).toBe(5);
+    it('keeps a small limit unchanged', async () => {
+        const searchSymbols = vi.fn().mockReturnValue([]);
+        await searchSymbolsHandler.execute({ query: 'foo', limit: 5 }, makeDeps(searchSymbols));
+        expect(searchSymbols).toHaveBeenCalledWith('foo', 5, { symbol_type: undefined });
     });
 
-    it('defaults to 10 when limit is missing', () => {
-        const args: { limit?: number } = {};
-        const limit = Math.min(args.limit || 10, 200);
-        expect(limit).toBe(10);
+    it('defaults to 10 when limit is missing', async () => {
+        const searchSymbols = vi.fn().mockReturnValue([]);
+        await searchSymbolsHandler.execute({ query: 'foo' }, makeDeps(searchSymbols));
+        expect(searchSymbols).toHaveBeenCalledWith('foo', 10, { symbol_type: undefined });
+    });
+
+    it('M4 regression: clamps a negative limit to 1 (never reaches SQLite as LIMIT -1)', async () => {
+        const searchSymbols = vi.fn().mockReturnValue([]);
+        await searchSymbolsHandler.execute({ query: 'foo', limit: -1 }, makeDeps(searchSymbols));
+        expect(searchSymbols).toHaveBeenCalledWith('foo', 1, { symbol_type: undefined });
     });
 });
 
-describe('O-12: redactSensitiveFields', () => {
-    // Mirrors the implementation in src/server/api-server.ts
-    const SENSITIVE_FIELD_PATTERN = /token|secret|password|apikey|api_key|authorization/i;
-    function redactSensitiveFields(value: unknown): unknown {
-        if (Array.isArray(value)) return value.map(redactSensitiveFields);
-        if (value && typeof value === 'object') {
-            const result: Record<string, unknown> = {};
-            for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-                result[key] = SENSITIVE_FIELD_PATTERN.test(key) ? '[REDACTED]' : redactSensitiveFields(val);
-            }
-            return result;
-        }
-        return value;
-    }
-
+describe('O-12: redactSensitiveFields (real export from api-server)', () => {
     it('redacts top-level sensitive fields', () => {
         const result = redactSensitiveFields({ token: 'abc123', name: 'foo' }) as any;
         expect(result.token).toBe('[REDACTED]');
@@ -72,8 +81,8 @@ describe('O-12: redactSensitiveFields', () => {
     });
 
     it('redacts nested sensitive fields', () => {
-        const result = redactSensitiveFields({ auth: { password: 'hunter2' }, data: { value: 1 } }) as any;
-        expect(result.auth.password).toBe('[REDACTED]');
+        const result = redactSensitiveFields({ settings: { password: 'hunter2' }, data: { value: 1 } }) as any;
+        expect(result.settings.password).toBe('[REDACTED]');
         expect(result.data.value).toBe(1);
     });
 
@@ -81,6 +90,26 @@ describe('O-12: redactSensitiveFields', () => {
         const result = redactSensitiveFields([{ apiKey: 'xyz' }, { ok: true }]) as any[];
         expect(result[0].apiKey).toBe('[REDACTED]');
         expect(result[1].ok).toBe(true);
+    });
+
+    it('L4: redacts passwd/credential/cookie/session keys', () => {
+        const result = redactSensitiveFields({
+            passwd: 'x', credentials: 'y', cookie: 'z', session_id: 'w',
+        }) as any;
+        expect(result.passwd).toBe('[REDACTED]');
+        expect(result.credentials).toBe('[REDACTED]');
+        expect(result.cookie).toBe('[REDACTED]');
+        expect(result.session_id).toBe('[REDACTED]');
+    });
+
+    it('L4: redacts standalone auth keys but not author', () => {
+        const result = redactSensitiveFields({
+            auth: 'bearer xyz', auth_header: 'v', author: 'jane', authorization: 'w',
+        }) as any;
+        expect(result.auth).toBe('[REDACTED]');
+        expect(result.auth_header).toBe('[REDACTED]');
+        expect(result.author).toBe('jane');
+        expect(result.authorization).toBe('[REDACTED]');
     });
 });
 
