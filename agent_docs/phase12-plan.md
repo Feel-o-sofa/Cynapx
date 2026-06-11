@@ -125,12 +125,14 @@ A-5 (언어 프로바이더)        독립, 작업량 큼 → 후순위
 
 리스크 낮고 변경량 작은 항목을 모아 하나의 "정리" Phase로 처리. 각각 독립적이라 한 커밋에 모아도 무방하나, diff 가독성을 위해 영역별로 3개 커밋 권장.
 
-### 커밋 A — server/IPC 정리
-- O-1: `search-symbols.ts` limit 상한 `Math.min(args.limit ?? 10, 200)`
-- O-12: `api-server.ts` `CYNAPX_LOG_PAYLOADS` 민감 필드 redact (token/secret/password)
-- A-9: `ipc-coordinator.ts` 에러 타입 가드 + `pendingRequests` cleanup 보장
-- A-10: `lifecycle-manager.ts` dispose에 5초 타임아웃 (`Promise.race`)
-- A-11: `edge-repository.ts`/`node-repository.ts` 마이그레이션 후 prepared statement 무효화 훅
+### 커밋 A — server/IPC 정리 — [DONE]
+- [DONE] O-1: `search-symbols.ts` limit 상한 `Math.min(args.limit || 10, 200)`로 변경.
+- [DONE] O-12: `api-server.ts`에 `redactSensitiveFields()` 추가 (token/secret/password/apikey/api_key/authorization 키를 재귀적으로 `[REDACTED]`), `CYNAPX_LOG_PAYLOADS=1` 로깅 경로에 적용.
+- [DONE] A-9: `ipc-coordinator.ts` Host 측 `executeTool` catch를 `err: unknown` + `err instanceof Error ? err.message : String(err)`로 타입 가드. Terminal 측 소켓 `close` 이벤트에서 `pendingRequests`에 남은 요청을 모두 reject 후 clear (30초 타임아웃을 기다리지 않음).
+- [DONE] A-10: `lifecycle-manager.ts`의 `disposeAll()`에서 각 리소스의 `dispose()`를 5초(`DISPOSE_TIMEOUT_MS`) `Promise.race` 타임아웃으로 감싸 무한 대기 방지.
+- [DONE] A-11: `edge-repository.ts`에 `invalidateStatementCache()` 추가 — 캐시된 prepared statement를 모두 초기화해 다음 호출 시 현재 스키마로 재준비되도록 함. (`node-repository.ts`는 prepared statement를 캐시하지 않아 변경 불필요.)
+
+**테스트**: `tests/phase12-6-commit-a.test.ts` (신규, 11개) — limit clamp, redact 재귀 동작, IPC 연결 종료 시 pending 요청 reject 및 비-Error 에러 처리, LifecycleManager의 dispose 타임아웃/예외 후속 처리, EdgeRepository 캐시 무효화 후 정상 동작 검증. `npm test` 250 → 261 통과, `tsc --noEmit` 통과.
 
 ### 커밋 B — 인덱서 정리
 - O-2: `update-pipeline.ts:391-393` canonical 키 저장으로 중복 루프 제거

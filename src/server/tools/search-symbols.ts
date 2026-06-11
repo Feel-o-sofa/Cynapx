@@ -9,7 +9,7 @@ import { mergeResultsRRF, requireEngine } from './_utils.js';
 
 export const searchSymbolsHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
-        const limit = args.limit || 10;
+        const limit = Math.min(args.limit || 10, 200);
         const settled = await Promise.allSettled(deps.workspaceManager.getAllContexts().map(async (ctx) => {
             const graphEngine = requireEngine(ctx, 'graphEngine');
             const keywordNodes = graphEngine.nodeRepo.searchSymbols(args.query, limit, { symbol_type: args.symbol_type });

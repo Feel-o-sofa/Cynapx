@@ -23,6 +23,23 @@ import * as os from 'os';
 import * as path from 'path';
 import { getCentralStorageDir } from '../utils/paths';
 
+// O-12: redact sensitive fields before logging request payloads.
+const SENSITIVE_FIELD_PATTERN = /token|secret|password|apikey|api_key|authorization/i;
+
+function redactSensitiveFields(value: unknown): unknown {
+    if (Array.isArray(value)) {
+        return value.map(redactSensitiveFields);
+    }
+    if (value && typeof value === 'object') {
+        const result: Record<string, unknown> = {};
+        for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+            result[key] = SENSITIVE_FIELD_PATTERN.test(key) ? '[REDACTED]' : redactSensitiveFields(val);
+        }
+        return result;
+    }
+    return value;
+}
+
 // --- Zod Schemas (M-4) ---
 const SymbolRefSchema = z.object({
     qualified_name: z.string().min(1),
@@ -141,7 +158,7 @@ export class ApiServer {
                 console.error(`[${new Date().toISOString()}] ${method} ${url} from ${remoteAddr} - Status: ${status} (${duration}ms)`);
                 if (method === 'POST' && body && Object.keys(body).length > 0) {
                     if (process.env.CYNAPX_LOG_PAYLOADS === '1') {
-                        console.error(`  Payload: ${JSON.stringify(body).substring(0, 200)}`);
+                        console.error(`  Payload: ${JSON.stringify(redactSensitiveFields(body)).substring(0, 200)}`);
                     }
                 }
             });

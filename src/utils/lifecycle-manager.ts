@@ -5,6 +5,9 @@
  */
 import { Disposable } from '../types';
 
+// A-10: cap how long a single resource's dispose() may run before we move on.
+const DISPOSE_TIMEOUT_MS = 5000;
+
 export class LifecycleManager {
     private disposables: Disposable[] = [];
 
@@ -27,7 +30,13 @@ export class LifecycleManager {
 
         for (const resource of toDispose) {
             try {
-                await resource.dispose();
+                await Promise.race([
+                    Promise.resolve(resource.dispose()),
+                    new Promise<void>((_, reject) => {
+                        const timer = setTimeout(() => reject(new Error(`dispose() timed out after ${DISPOSE_TIMEOUT_MS}ms`)), DISPOSE_TIMEOUT_MS);
+                        timer.unref?.();
+                    }),
+                ]);
             } catch (err) {
                 console.error(`[Lifecycle] Error during disposal: ${err}`);
             }

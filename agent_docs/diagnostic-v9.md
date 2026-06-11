@@ -213,21 +213,27 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 - 런타임 스테이지가 root로 실행 → `USER` 지정 필요.
 - `/healthz`가 DB 미준비(pending) 상태에도 200 반환 → 오케스트레이터가 고장 컨테이너를 재시작하지 못함. pending 시 503 반환.
 
-### A-9. IPC 견고성
+### A-9. IPC 견고성 — [DONE — Phase 12-6]
 **`src/server/ipc-coordinator.ts:92-99, 189-199`**
 
 - `err.message` 접근 전 Error 인스턴스 보장 없음 → `err instanceof Error ? err.message : String(err)`.
 - 타임아웃으로 reject된 `pendingRequests` 엔트리가 맵에 잔존 → 거부 시점에 `delete` 보장.
 
-### A-10. LifecycleManager dispose 타임아웃 부재
+**완료 (Phase 12-6)**: Host 측 `executeTool` catch에 타입 가드 적용. Terminal 측 소켓 `close` 이벤트에서 남은 `pendingRequests`를 모두 reject 후 clear (30초 타임아웃 대기 없이 즉시 실패).
+
+### A-10. LifecycleManager dispose 타임아웃 부재 — [DONE — Phase 12-6]
 **`src/utils/lifecycle-manager.ts:22-36`**
 
 하나의 dispose가 행에 걸리면 종료 전체가 멈춘다. `Promise.race` + 5초 타임아웃으로 개별 격리.
 
-### A-11. 마이그레이션 후 prepared statement 무효화 부재
+**완료 (Phase 12-6)**: `disposeAll()`에서 각 리소스의 `dispose()`를 `DISPOSE_TIMEOUT_MS=5000` `Promise.race`로 감싸 타임아웃 시 에러 로그 후 다음 리소스로 진행.
+
+### A-11. 마이그레이션 후 prepared statement 무효화 부재 — [DONE — Phase 12-6]
 **`src/db/edge-repository.ts:23-32`** (node-repository 등 동일 패턴)
 
 스키마 마이그레이션 후 캐시된 statement가 stale해질 수 있다. `DatabaseManager.runMigrations()`에서 리포지토리 캐시 무효화 훅 호출.
+
+**완료 (Phase 12-6)**: `EdgeRepository.invalidateStatementCache()` 추가 — 캐시된 모든 prepared statement를 초기화해 다음 호출 시 현재 스키마로 재준비. `node-repository.ts`는 statement를 캐시하지 않아 별도 변경 불필요.
 
 ### A-12. Vector 검색 차원 불일치 시 무음 실패 — [DONE — already implemented, verified Phase 12-5]
 **`src/db/vector-repository.ts:22-49`**
@@ -242,7 +248,7 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 
 | # | 위치 | 내용 |
 |---|------|------|
-| O-1 | `src/server/tools/search-symbols.ts:13` | `limit` 상한 없음 → `Math.min(args.limit ?? 10, 200)` |
+| O-1 | `src/server/tools/search-symbols.ts:13` | [DONE — Phase 12-6] `limit` 상한 없음 → `Math.min(args.limit \|\| 10, 200)` |
 | O-2 | `src/indexer/update-pipeline.ts:391-393` | `resolveNodeId()` canonical 미스 시 전체 맵 재순회 — 키를 canonical로 저장하면 루프 제거 |
 | O-3 | `src/indexer/cross-project-resolver.ts:47-95` | 외부 심볼 해석마다 원격 DB open/close — 배치 내 캐싱 |
 | O-4 | `src/indexer/typescript-parser.ts:30-42` | 파일마다 `ts.createProgram` 신규 생성 — incremental program 또는 LanguageService 재사용 |
@@ -253,7 +259,7 @@ npm 패키지로 설치되면 상대 경로가 깨질 수 있고, 버전 읽기 
 | O-9 | `schema/schema.sql` | `node_embeddings`(vec0)에 노드 삭제 연동 없음 — AFTER DELETE 트리거로 고아 임베딩 정리 |
 | O-10 | `src/indexer/worker-pool.ts:150-156` | 타임아웃 vs 메시지 settle 경합 — `replaceWorker()`에서 타임아웃 핸들 정리 보장 |
 | O-11 | `src/indexer/index-worker.ts:24-35` | 워커 톱레벨 `uncaughtException`/`unhandledRejection` 핸들러 추가 |
-| O-12 | `src/server/api-server.ts:132-136` | `CYNAPX_LOG_PAYLOADS=1` 시 민감 필드 미마스킹 — token/secret/password 키 redact |
+| O-12 | `src/server/api-server.ts:132-136` | [DONE — Phase 12-6] `CYNAPX_LOG_PAYLOADS=1` 시 민감 필드 미마스킹 — `redactSensitiveFields()`로 token/secret/password/apikey/authorization 키 redact |
 
 ---
 

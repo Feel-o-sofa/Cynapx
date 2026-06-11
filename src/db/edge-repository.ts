@@ -33,6 +33,23 @@ export class EdgeRepository {
 
     constructor(private db: Database) { }
 
+    /**
+     * A-11: drop all cached prepared statements so they get re-prepared
+     * against the current schema. Call this after running migrations on
+     * a database whose EdgeRepository was constructed beforehand.
+     */
+    public invalidateStatementCache(): void {
+        this._insertStmt = undefined;
+        this._allStmt = undefined;
+        this._outAllStmt = undefined;
+        this._outTypedStmt = undefined;
+        this._inAllStmt = undefined;
+        this._inTypedStmt = undefined;
+        this._deleteStmt = undefined;
+        this._inWithCallerStmt = undefined;
+        this._outWithCalleeStmt = undefined;
+    }
+
     public createEdge(edge: CodeEdge): void {
         if (!this._insertStmt) {
             this._insertStmt = this.db.prepare(

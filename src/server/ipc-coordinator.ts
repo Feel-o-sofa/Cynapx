@@ -94,8 +94,9 @@ export class IpcCoordinator extends EventEmitter {
                             try {
                                 const result = await this.mcpServer.executeTool(req.params.name, req.params.args);
                                 socket.write(JSON.stringify({ id: req.id, result }) + '\n');
-                            } catch (err: any) {
-                                socket.write(JSON.stringify({ id: req.id, error: err.message }) + '\n');
+                            } catch (err: unknown) {
+                                const message = err instanceof Error ? err.message : String(err);
+                                socket.write(JSON.stringify({ id: req.id, error: message }) + '\n');
                             }
                         }
                     } catch (err) {
@@ -129,6 +130,11 @@ export class IpcCoordinator extends EventEmitter {
 
             this.client.on('close', () => {
                 console.error('[IPC Terminal] Connection closed.');
+                // A-9: reject any in-flight requests so callers don't hang forever.
+                for (const pending of this.pendingRequests.values()) {
+                    pending.reject(new Error('IPC connection closed'));
+                }
+                this.pendingRequests.clear();
                 this.emit('disconnected');
             });
 
