@@ -63,7 +63,7 @@ export class DatabaseManager implements Disposable {
     /**
      * Current schema version. Increment this when adding new migrations.
      */
-    public static readonly SCHEMA_VERSION = 1;
+    public static readonly SCHEMA_VERSION = 2;
 
     /**
      * Runs pending schema migrations using PRAGMA user_version as the version counter.
@@ -83,6 +83,36 @@ export class DatabaseManager implements Disposable {
                     "INSERT OR IGNORE INTO index_metadata (key, value) VALUES ('indexed_at', '')"
                 ).run();
                 this.db.pragma(`user_version = 1`);
+            }
+
+            if (current < 2) {
+                // Migration 1 → 2 (A-2): normalize nodes.tags (JSON array) into a
+                // node_tags(node_id, tag) table so dead-code/tag filters can JOIN
+                // instead of using LIKE on the JSON blob.
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS node_tags (
+                        node_id INTEGER NOT NULL,
+                        tag TEXT NOT NULL,
+                        PRIMARY KEY (node_id, tag),
+                        FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_node_tags_tag ON node_tags (tag);
+                `);
+
+                const rows = this.db.prepare(
+                    "SELECT id, tags FROM nodes WHERE tags IS NOT NULL AND tags != ''"
+                ).all() as { id: number; tags: string }[];
+                const insertTag = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
+                for (const row of rows) {
+                    try {
+                        const tags = JSON.parse(row.tags) as string[];
+                        for (const tag of tags) insertTag.run(row.id, tag);
+                    } catch {
+                        // Skip rows with malformed tags JSON.
+                    }
+                }
+
+                this.db.pragma(`user_version = 2`);
             }
         });
         migrate();

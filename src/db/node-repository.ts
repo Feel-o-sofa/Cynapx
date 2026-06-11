@@ -76,7 +76,20 @@ export class NodeRepository {
             node.history ? JSON.stringify(node.history) : null
         );
 
-        return result.lastInsertRowid as number;
+        const nodeId = result.lastInsertRowid as number;
+
+        // A-2: keep node_tags in sync with the nodes.tags JSON column so
+        // tag-based queries (e.g. dead-code detection) can JOIN instead of
+        // scanning with LIKE. The old node row's tags are removed via the
+        // ON DELETE CASCADE FK when INSERT OR REPLACE evicts it.
+        if (node.tags && node.tags.length > 0) {
+            const insertTag = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
+            for (const tag of node.tags) {
+                insertTag.run(nodeId, tag);
+            }
+        }
+
+        return nodeId;
     }
 
     public getNodeById(id: number): CodeNode | null {
@@ -207,6 +220,64 @@ export class NodeRepository {
             const rows = stmt.all(`%${sanitizedQuery}%`, ...params.slice(1));
             return rows.map(row => this.mapRowToNode(row));
         }
+    }
+
+    /**
+     * A-3/A-2: Finds dead-code candidates for a given confidence tier.
+     * Moved from OptimizationEngine.findDeadCode() and rewritten to use the
+     * node_tags JOIN table instead of `tags LIKE '%...%'` on the JSON column.
+     *
+     * Common filter (applied to all tiers):
+     *   - fan_in = 0
+     *   - Exclude files, tests, packages, constructors
+     *   - Exclude entrypoints and abstract symbols (via node_tags)
+     *   - Exclude methods whose containing class implements an interface (interface dispatch)
+     *   - Exclude methods whose containing class inherits from a parent (polymorphic override)
+     *
+     * HIGH   : private symbols — likely genuine dead code
+     * MEDIUM : public symbols (non class/interface/function) — internal but exposed
+     * LOW    : public symbols (non class/interface/function) without trait:internal — may be external API surface
+     */
+    public findDeadCodeCandidates(tier: 'high' | 'medium' | 'low'): CodeNode[] {
+        const COMMON_FILTER = `
+            WHERE n.fan_in = 0
+            AND n.symbol_type NOT IN ('file', 'test', 'package')
+            AND n.qualified_name NOT LIKE '%#constructor'
+            AND NOT EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = 'trait:entrypoint')
+            AND NOT EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = 'trait:abstract')
+            AND NOT EXISTS (
+                SELECT 1 FROM edges cont
+                JOIN edges impl ON impl.from_id = cont.from_id
+                WHERE cont.to_id = n.id
+                AND cont.edge_type = 'contains'
+                AND impl.edge_type = 'implements'
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM edges cont
+                JOIN edges inh ON inh.from_id = cont.from_id
+                WHERE cont.to_id = n.id
+                AND cont.edge_type = 'contains'
+                AND inh.edge_type = 'inherits'
+            )
+        `;
+
+        let tierFilter: string;
+        switch (tier) {
+            case 'high':
+                tierFilter = `AND n.visibility = 'private'`;
+                break;
+            case 'medium':
+                tierFilter = `AND n.visibility = 'public' AND n.symbol_type NOT IN ('class', 'interface', 'function')`;
+                break;
+            case 'low':
+                tierFilter = `AND n.visibility = 'public'
+                    AND n.symbol_type NOT IN ('class', 'interface', 'function')
+                    AND NOT EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = 'trait:internal')`;
+                break;
+        }
+
+        const rows = this.db.prepare(`SELECT n.* FROM nodes n ${COMMON_FILTER} ${tierFilter}`).all() as NodeRow[];
+        return rows.map(row => this.mapRowToNode(row));
     }
 
     public findNodesBySymbolName(name: string): CodeNode[] {

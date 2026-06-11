@@ -181,3 +181,14 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
   model_name TEXT,
   FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
 );
+
+-- Tag normalization table (Phase 12-5 / A-2): mirrors nodes.tags (JSON array)
+-- as individual rows so tag-based filters can use a JOIN/EXISTS instead of LIKE.
+CREATE TABLE IF NOT EXISTS node_tags (
+  node_id INTEGER NOT NULL,
+  tag TEXT NOT NULL,
+  PRIMARY KEY (node_id, tag),
+  FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_tags_tag ON node_tags (tag);
