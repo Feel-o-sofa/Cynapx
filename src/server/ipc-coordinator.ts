@@ -27,6 +27,17 @@ export interface IpcResponse {
 const MAX_MSG_BYTES = 1 * 1024 * 1024; // 1 MB
 
 /**
+ * C-3 (diagnostic-v10): computes the authentication response for the IPC
+ * challenge-response handshake. The shared secret (the lock-file nonce) is
+ * never sent on the wire in either direction — the Host sends a random
+ * one-time challenge and the Terminal proves knowledge of the nonce by
+ * returning HMAC-SHA256(key = nonce, msg = challenge).
+ */
+export function computeAuthResponse(nonce: string, challenge: string): string {
+    return crypto.createHmac('sha256', nonce).update(challenge).digest('hex');
+}
+
+/**
  * Coordinates communication between Host and Terminal sessions.
  */
 export class IpcCoordinator extends EventEmitter {
@@ -57,17 +68,40 @@ export class IpcCoordinator extends EventEmitter {
                     console.error('[IPC Host] Socket error:', err.message);
                 });
 
-                // SEC-H-3: Track cumulative received bytes and enforce 1 MB limit.
-                let totalBytes = 0;
+                // SEC-H-3 / H-8 (diagnostic-v10): enforce the 1 MB limit per
+                // MESSAGE (line), not cumulatively over the socket lifetime —
+                // long-lived Terminal sessions legitimately exceed 1 MB of
+                // total traffic. Only the current (unterminated) line buffer
+                // and each completed line are checked.
+                let currentLineBytes = 0;
                 socket.on('data', (chunk) => {
-                    totalBytes += chunk.length;
-                    if (totalBytes > MAX_MSG_BYTES) {
+                    let start = 0;
+                    while (start <= chunk.length) {
+                        const nl = chunk.indexOf(0x0a, start); // '\n'
+                        if (nl === -1) {
+                            currentLineBytes += chunk.length - start;
+                            break;
+                        }
+                        currentLineBytes += nl - start;
+                        if (currentLineBytes > MAX_MSG_BYTES) {
+                            socket.destroy(new Error('IPC message size limit exceeded'));
+                            return;
+                        }
+                        currentLineBytes = 0; // message boundary — reset counter
+                        start = nl + 1;
+                    }
+                    if (currentLineBytes > MAX_MSG_BYTES) {
                         socket.destroy(new Error('IPC message size limit exceeded'));
                     }
                 });
 
-                // SEC-C-1: Send challenge immediately on connection.
-                socket.write(JSON.stringify({ challenge: nonce }) + '\n');
+                // SEC-C-1 / C-3 (diagnostic-v10): send a random ONE-TIME
+                // challenge (unrelated to the nonce). The nonce itself must
+                // never travel on the wire — any local user can connect to
+                // this 127.0.0.1 port.
+                const challenge = crypto.randomBytes(32).toString('hex');
+                const expectedAuth = computeAuthResponse(nonce, challenge);
+                socket.write(JSON.stringify({ challenge }) + '\n');
 
                 let authenticated = false;
 
@@ -77,10 +111,15 @@ export class IpcCoordinator extends EventEmitter {
                 });
                 rl.on('line', async (line) => {
                     try {
-                        // SEC-C-1: If not yet authenticated, expect auth response first.
+                        // SEC-C-1 / C-3: if not yet authenticated, expect an
+                        // HMAC-SHA256(key=nonce, msg=challenge) response first.
                         if (!authenticated) {
                             const msg: { auth?: string } = JSON.parse(line);
-                            if (msg.auth !== nonce) {
+                            const provided = typeof msg.auth === 'string' ? Buffer.from(msg.auth) : Buffer.alloc(0);
+                            const expected = Buffer.from(expectedAuth);
+                            const valid = provided.length === expected.length
+                                && crypto.timingSafeEqual(provided, expected);
+                            if (!valid) {
                                 console.error('[IPC Host] Authentication failed — closing socket.');
                                 socket.destroy();
                                 return;
@@ -145,17 +184,19 @@ export class IpcCoordinator extends EventEmitter {
             });
             rl.on('line', (line) => {
                 try {
-                    // SEC-C-1: First message from Host is the challenge; respond with nonce.
+                    // SEC-C-1 / C-3: first message from Host is a random
+                    // one-time challenge; prove knowledge of the lock-file
+                    // nonce with HMAC-SHA256(key=nonce, msg=challenge).
+                    // The nonce itself is never written to the socket.
                     if (!authResolved) {
                         const msg: { challenge?: string } = JSON.parse(line);
-                        if (msg.challenge === undefined) {
+                        if (typeof msg.challenge !== 'string') {
                             const err = new Error('[IPC Terminal] Expected challenge from Host but got unexpected message.');
                             reject(err);
                             this.client?.destroy();
                             return;
                         }
-                        // Send auth response with the nonce from lock file.
-                        this.client!.write(JSON.stringify({ auth: nonce }) + '\n');
+                        this.client!.write(JSON.stringify({ auth: computeAuthResponse(nonce, msg.challenge) }) + '\n');
                         authResolved = true;
                         console.error(`[IPC Terminal] Connected to Host on port ${port}`);
                         resolve();

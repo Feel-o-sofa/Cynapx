@@ -9,6 +9,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable } from 'stream';
+import * as path from 'path';
 import { EmbeddingManager, NullEmbeddingProvider, EmbeddingProvider, PythonEmbeddingProvider, resolvePythonCommand } from '../src/indexer/embedding-manager';
 
 vi.mock('child_process', () => ({
@@ -334,6 +335,24 @@ describe('PythonEmbeddingProvider start() — interpreter resolution (C-1(3))', 
         provider.dispose();
     });
 
+    it('C-2: resolves the sidecar script relative to the package root, not process.cwd()', async () => {
+        const { spawn, spawnSync } = await import('child_process');
+        (spawnSync as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ status: 0, error: undefined });
+        (spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(makeMockChild());
+        const cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue('/definitely/not/the/package/root');
+
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+
+        const scriptArg = (spawn as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1][0] as string;
+        // tests/ lives directly under the package root, like src/indexer's '../..'
+        expect(scriptArg).toBe(path.resolve(__dirname, '..', 'scripts', 'cynapx_embedder.py'));
+        expect(scriptArg.startsWith('/definitely/not')).toBe(false);
+
+        cwdSpy.mockRestore();
+        provider.dispose();
+    });
+
     it('enters FTS5 fallback mode without spawning when no interpreter exists', async () => {
         const { spawn, spawnSync } = await import('child_process');
         // Probe fails for both python3 and python (ENOENT-like result).
@@ -349,5 +368,117 @@ describe('PythonEmbeddingProvider start() — interpreter resolution (C-1(3))', 
         const result = await provider.generateBatch(['hello']);
         expect(result).toEqual([]);
         provider.dispose();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// C-2 (diagnostic-v10) — spawn 'error' event must not crash the process.
+// A ChildProcess 'error' with no listener throws synchronously
+// (uncaughtException → process.exit(1) in bootstrap). With the fix, the
+// 'error' handler funnels into the same retry/fallback path as 'exit'.
+// Against the pre-fix code, the very first `child.emit('error', ...)` in
+// these tests throws — they cannot pass without the listener.
+// ---------------------------------------------------------------------------
+
+describe("PythonEmbeddingProvider — spawn 'error' handling (C-2)", () => {
+    beforeEach(async () => {
+        // The interpreter probe must succeed so start() reaches spawn():
+        // earlier describes leave spawnSync in a "no interpreter" state.
+        const { spawnSync } = await import('child_process');
+        (spawnSync as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ status: 0, error: undefined });
+    });
+
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.clearAllMocks();
+    });
+
+    function enoent(cmd: string): Error {
+        return Object.assign(new Error(`spawn ${cmd} ENOENT`), { code: 'ENOENT', errno: -2 });
+    }
+
+    it("a spawn 'error' (ENOENT) does not throw and schedules a restart", async () => {
+        const { spawn } = await import('child_process');
+        const children = [makeMockChild(), makeMockChild()];
+        let idx = 0;
+        (spawn as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => children[idx++]);
+
+        vi.useFakeTimers();
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+
+        // Pre-fix code has no 'error' listener — this emit alone would throw.
+        expect(() => children[0].emit('error', enoent('python3'))).not.toThrow();
+
+        expect((provider as any).child).toBeNull();
+        expect((provider as any).ready).toBe(false);
+        expect(provider.fallbackMode).toBe(false);
+
+        // First retry fires after 1s backoff.
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(spawn).toHaveBeenCalledTimes(2);
+        provider.dispose();
+    });
+
+    it("'error' followed by 'exit' on the same child schedules only ONE restart", async () => {
+        const { spawn } = await import('child_process');
+        const children = [makeMockChild(), makeMockChild(), makeMockChild()];
+        let idx = 0;
+        (spawn as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => children[idx++]);
+
+        vi.useFakeTimers();
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+
+        // Some failure modes emit both events — handling must be idempotent.
+        children[0].emit('error', enoent('python3'));
+        children[0].emit('exit', 1);
+
+        await vi.advanceTimersByTimeAsync(10_000);
+        // Initial spawn + exactly one restart (not two).
+        expect(spawn).toHaveBeenCalledTimes(2);
+        provider.dispose();
+    });
+
+    it('repeated spawn errors exhaust retries and enter FTS5 fallback mode (no crash)', async () => {
+        const { spawn } = await import('child_process');
+        const children = [makeMockChild(), makeMockChild(), makeMockChild(), makeMockChild()];
+        let idx = 0;
+        (spawn as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => children[idx++]);
+
+        vi.useFakeTimers();
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+
+        // initial + 3 retries (1s/2s/4s backoff), each failing with ENOENT.
+        children[0].emit('error', enoent('python3'));
+        await vi.advanceTimersByTimeAsync(1000);
+        children[1].emit('error', enoent('python3'));
+        await vi.advanceTimersByTimeAsync(2000);
+        children[2].emit('error', enoent('python3'));
+        await vi.advanceTimersByTimeAsync(4000);
+        children[3].emit('error', enoent('python3'));
+
+        expect(spawn).toHaveBeenCalledTimes(4);
+        expect(provider.fallbackMode).toBe(true);
+
+        // Degraded but functional: batch returns [] instead of crashing.
+        await expect(provider.generateBatch(['hello'])).resolves.toEqual([]);
+        provider.dispose();
+    });
+
+    it("a spawn 'error' after dispose() does not restart the sidecar", async () => {
+        const { spawn } = await import('child_process');
+        const mockChild = makeMockChild();
+        (spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(mockChild);
+
+        vi.useFakeTimers();
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+        provider.dispose();
+
+        expect(() => mockChild.emit('error', enoent('python3'))).not.toThrow();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(spawn).toHaveBeenCalledTimes(1);
     });
 });

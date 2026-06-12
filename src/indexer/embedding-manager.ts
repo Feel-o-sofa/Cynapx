@@ -113,7 +113,11 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
             return;
         }
 
-        const scriptPath = path.join(process.cwd(), 'scripts', 'cynapx_embedder.py');
+        // C-2 (diagnostic-v10): resolve the sidecar script relative to the
+        // package root (__dirname = <root>/dist/indexer or <root>/src/indexer),
+        // not process.cwd() — cwd is wrong for global installs and when the
+        // server is launched from another directory.
+        const scriptPath = path.resolve(__dirname, '..', '..', 'scripts', 'cynapx_embedder.py');
 
         console.error(`[Embedding] Starting Python ML Sidecar (${this.pythonCmd})...`);
         this.child = spawn(this.pythonCmd, [scriptPath]);
@@ -151,14 +155,23 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
             } catch (e) {}
         });
 
-        // H-2(2): 프로세스 종료 시 자동 재시작 (최대 3회, 지수 백오프: 1s/2s/4s)
-        this.child.on('exit', (code) => {
-            this.child = null;
-            this.ready = false;
-            if (code !== 0 && code !== null) {
-                console.error(`[Embedding] Python Sidecar crashed with code ${code}`);
+        // H-2(2)/C-2: shared failure path for 'exit' AND 'error'. spawn
+        // failures (e.g. ENOENT, EACCES) are reported via the 'error' event —
+        // NOT 'exit' — and a listenerless 'error' on a ChildProcess throws,
+        // escalating to uncaughtException → process.exit(1). Both events
+        // funnel into the same retry/fallback logic; the guard makes the
+        // handling idempotent in case both fire for the same child.
+        const child = this.child;
+        let failureHandled = false;
+        const handleChildGone = () => {
+            if (failureHandled) return;
+            failureHandled = true;
+            if (this.child === child) {
+                this.child = null;
             }
+            this.ready = false;
             if (this.disposed) return;
+            // 자동 재시작 (최대 3회, 지수 백오프: 1s/2s/4s)
             if (this.restartAttempts < PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS) {
                 const delay = Math.pow(2, this.restartAttempts) * 1000; // 1s, 2s, 4s
                 this.restartAttempts++;
@@ -168,6 +181,20 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
                 // H-2(3): 재시도 소진 시 FTS5 폴백 모드 활성화
                 this.enterFallbackMode(`Python Sidecar unavailable after ${PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS} retries`);
             }
+        };
+
+        // C-2 (diagnostic-v10): without this listener a spawn failure crashes
+        // the whole host process (uncaughtException). Mirror the exit handler.
+        this.child.on('error', (err) => {
+            console.error(`[Embedding] Python Sidecar spawn error: ${err.message}`);
+            handleChildGone();
+        });
+
+        this.child.on('exit', (code) => {
+            if (code !== 0 && code !== null) {
+                console.error(`[Embedding] Python Sidecar crashed with code ${code}`);
+            }
+            handleChildGone();
         });
     }
 
