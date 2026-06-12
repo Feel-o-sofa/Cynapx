@@ -9,10 +9,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable } from 'stream';
-import { EmbeddingManager, NullEmbeddingProvider, EmbeddingProvider, PythonEmbeddingProvider } from '../src/indexer/embedding-manager';
+import { EmbeddingManager, NullEmbeddingProvider, EmbeddingProvider, PythonEmbeddingProvider, resolvePythonCommand } from '../src/indexer/embedding-manager';
 
 vi.mock('child_process', () => ({
     spawn: vi.fn(),
+    // C-1(3)/P13-1: interpreter probe — default to "python3 is available"
+    // so existing start()/dispose() tests keep exercising the spawn path.
+    spawnSync: vi.fn().mockReturnValue({ status: 0, error: undefined }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -282,5 +285,69 @@ describe('PythonEmbeddingProvider.dispose()', () => {
 
         // spawn should only have been called once (the initial start), not again for restart.
         expect(spawn).toHaveBeenCalledTimes(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// C-1(3)/P13-1 — python3 → python interpreter resolution
+// ---------------------------------------------------------------------------
+
+describe('resolvePythonCommand (C-1(3): python3 → python fallback)', () => {
+    it('prefers python3 when both interpreters are available', () => {
+        expect(resolvePythonCommand(() => true)).toBe('python3');
+    });
+
+    it('falls back to python when python3 is unavailable', () => {
+        expect(resolvePythonCommand((cmd) => cmd === 'python')).toBe('python');
+    });
+
+    it('returns python3 when only python3 is available', () => {
+        expect(resolvePythonCommand((cmd) => cmd === 'python3')).toBe('python3');
+    });
+
+    it('returns null when no interpreter is available', () => {
+        expect(resolvePythonCommand(() => false)).toBeNull();
+    });
+
+    it('probes in python3-first order', () => {
+        const probed: string[] = [];
+        resolvePythonCommand((cmd) => { probed.push(cmd); return false; });
+        expect(probed).toEqual(['python3', 'python']);
+    });
+});
+
+describe('PythonEmbeddingProvider start() — interpreter resolution (C-1(3))', () => {
+    afterEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('spawns the sidecar with the resolved interpreter (python3)', async () => {
+        const { spawn, spawnSync } = await import('child_process');
+        (spawnSync as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ status: 0, error: undefined });
+        (spawn as unknown as ReturnType<typeof vi.fn>).mockReturnValue(makeMockChild());
+
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+
+        expect(spawn).toHaveBeenCalledTimes(1);
+        expect((spawn as unknown as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('python3');
+        provider.dispose();
+    });
+
+    it('enters FTS5 fallback mode without spawning when no interpreter exists', async () => {
+        const { spawn, spawnSync } = await import('child_process');
+        // Probe fails for both python3 and python (ENOENT-like result).
+        (spawnSync as unknown as ReturnType<typeof vi.fn>).mockReturnValue({ status: null, error: new Error('spawnSync ENOENT') });
+
+        const provider = new PythonEmbeddingProvider();
+        await (provider as any).start();
+
+        expect(spawn).not.toHaveBeenCalled();
+        expect(provider.fallbackMode).toBe(true);
+
+        // generateBatch degrades gracefully (no 30s ready-wait, no throw).
+        const result = await provider.generateBatch(['hello']);
+        expect(result).toEqual([]);
+        provider.dispose();
     });
 });

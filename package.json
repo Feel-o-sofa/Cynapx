@@ -8,14 +8,17 @@
     "cynapx-admin": "dist/cli/admin.js"
   },
   "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "ts-node src/bootstrap.ts",
     "build": "npm run build:ts && npm run build:copy",
     "build:ts": "tsc",
-    "build:copy": "node -e \"const fs=require('fs'),path=require('path');fs.cpSync('src/indexer/languages/queries','dist/indexer/languages/queries',{recursive:true});try{fs.readdirSync('src-native').filter(f=>f.endsWith('.node')).forEach(f=>fs.copyFileSync(path.join('src-native',f),path.join('dist',f)));}catch(e){}\"",
+    "build:copy": "node scripts/build-copy.js",
     "build:native": "npm run build --prefix src-native",
     "dev": "ts-node-dev --respawn src/bootstrap.ts",
-    "prepare": "npm run build",
+    "prepack": "npm run build",
     "lint": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",

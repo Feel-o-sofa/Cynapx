@@ -170,6 +170,10 @@ export class ApiServer {
 
         this.app.use((req, res, next) => {
             if (req.path.startsWith('/api/docs')) return next();
+            // P13-1 (C-1/v9 A-8): /healthz is a liveness probe for Docker/k8s —
+            // it must be reachable without a Bearer token (it exposes no
+            // project data beyond readiness/version).
+            if (req.path === '/healthz' && req.method === 'GET') return next();
             if (req.path === '/mcp' && req.method === 'GET') {
                 // Allow if no-auth mode, or if a valid (known) sessionId is present
                 // (MCP Streamable HTTP uses sessionId for reconnection)
@@ -202,7 +206,9 @@ export class ApiServer {
         this.app.get('/healthz', (req: Request, res: Response) => {
             const ctx = this.mcpServer?.workspaceManager?.getActiveContext?.();
             const dbOk = !!(ctx?.dbManager);
-            res.json({
+            // v9 A-8 잔존 (P13-1): report 503 while the engine is still pending
+            // so orchestrators don't route traffic to a not-yet-ready instance.
+            res.status(dbOk ? 200 : 503).json({
                 status: dbOk ? 'ok' : 'pending',
                 version: ((): string => {
                     try {
@@ -471,7 +477,8 @@ export class ApiServer {
         };
     }
 
-    public start(port: number = 3000, bindAddress: string = '127.0.0.1'): void {
+    // P13-1: returns the server handle so callers (and tests) can close it.
+    public start(port: number = 3000, bindAddress: string = '127.0.0.1'): http.Server | https.Server {
         const server = this.httpsOptions ? https.createServer(this.httpsOptions, this.app) : http.createServer(this.app);
         server.listen(port, bindAddress, () => {
             const protocol = this.httpsOptions ? 'HTTPS' : 'HTTP';
@@ -479,8 +486,11 @@ export class ApiServer {
             // SEC-M-3: store port file in central storage dir (~/.cynapx/) instead of cwd to avoid git exposure
             try {
                 const portFile = path.join(getCentralStorageDir(), 'api-server.port');
-                fs.writeFileSync(portFile, String(port), { mode: 0o600 });
+                const addr = server.address();
+                const actualPort = typeof addr === 'object' && addr ? addr.port : port;
+                fs.writeFileSync(portFile, String(actualPort), { mode: 0o600 });
             } catch(e) {}
         });
+        return server;
     }
 }

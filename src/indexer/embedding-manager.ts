@@ -6,9 +6,38 @@
 import { Database } from 'better-sqlite3';
 import { CodeNode } from '../types';
 import { NodeRepository } from '../db/node-repository';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, spawnSync, ChildProcess } from 'child_process';
 import * as readline from 'readline';
 import * as path from 'path';
+
+/**
+ * C-1(3)/P13-1: probes whether a command is runnable (used to pick the
+ * Python interpreter). Kept separate so tests can inject a fake probe.
+ */
+function canRunCommand(cmd: string): boolean {
+    try {
+        const result = spawnSync(cmd, ['--version'], { stdio: 'ignore', timeout: 5000 });
+        return !result.error && result.status === 0;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * C-1(3)/P13-1: resolves the Python interpreter command for the embedding
+ * sidecar. Modern Linux distros (and the Docker runtime image, which installs
+ * only `python3`) have no `python` binary, while some environments expose
+ * only `python` — try `python3` first, then fall back to `python`.
+ * Returns null when no interpreter is available.
+ */
+export function resolvePythonCommand(
+    probe: (cmd: string) => boolean = canRunCommand
+): string | null {
+    for (const cmd of ['python3', 'python']) {
+        if (probe(cmd)) return cmd;
+    }
+    return null;
+}
 
 export interface EmbeddingProvider {
     generate(text: string): Promise<number[]>;
@@ -48,14 +77,46 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
     private disposed: boolean = false;
     private static readonly KILL_TIMEOUT_MS = 5000;
 
+    // C-1(3): resolved lazily on first start(); null = no interpreter found.
+    private pythonCmd: string | null | undefined = undefined;
+
+    /**
+     * H-2(3)/C-1(3): switches the provider into FTS5 fallback mode, warning
+     * once and rejecting any in-flight request.
+     */
+    private enterFallbackMode(reason: string): void {
+        this.fallbackMode = true;
+        if (!this.fallbackWarned) {
+            this.fallbackWarned = true;
+            console.error(`[Embedding] WARNING: ${reason}. Switching to FTS5 fallback mode. Semantic search disabled.`);
+        }
+        const pending = this.pendingRequest;
+        this.pendingRequest = null;
+        if (pending) {
+            pending.reject(new Error(`${reason}; fallback mode active`));
+        }
+    }
+
     private async start() {
         // L6: a disposed provider must never resurrect the sidecar.
         if (this.disposed) return;
         if (this.child) return;
+
+        // C-1(3)/P13-1: pick python3 first (modern distros / Docker runtime
+        // image ship python3 only), fall back to python; if neither exists,
+        // degrade to FTS5 fallback mode instead of spawning a doomed child.
+        if (this.pythonCmd === undefined) {
+            this.pythonCmd = resolvePythonCommand();
+        }
+        if (this.pythonCmd === null) {
+            this.enterFallbackMode('No python3/python interpreter found');
+            return;
+        }
+
         const scriptPath = path.join(process.cwd(), 'scripts', 'cynapx_embedder.py');
 
-        console.error(`[Embedding] Starting Python ML Sidecar...`);
-        this.child = spawn('python', [scriptPath]);
+        console.error(`[Embedding] Starting Python ML Sidecar (${this.pythonCmd})...`);
+        this.child = spawn(this.pythonCmd, [scriptPath]);
 
         // M-7: Close any existing readline interface before creating a new one
         if (this.rl) {
@@ -105,17 +166,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
                 setTimeout(() => { this.start(); }, delay);
             } else {
                 // H-2(3): 재시도 소진 시 FTS5 폴백 모드 활성화
-                this.fallbackMode = true;
-                if (!this.fallbackWarned) {
-                    this.fallbackWarned = true;
-                    console.error(`[Embedding] WARNING: Python Sidecar unavailable after ${PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS} retries. Switching to FTS5 fallback mode. Semantic search disabled.`);
-                }
-                // 현재 대기 중인 요청을 거절
-                const pendingOnFallback = this.pendingRequest;
-                this.pendingRequest = null;
-                if (pendingOnFallback) {
-                    pendingOnFallback.reject(new Error('Sidecar unavailable; fallback mode active'));
-                }
+                this.enterFallbackMode(`Python Sidecar unavailable after ${PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS} retries`);
             }
         });
     }
@@ -137,11 +188,19 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
         }
 
         if (!this.child) await this.start();
+        // C-1(3): start() may have entered fallback mode (no interpreter).
+        if (this.fallbackMode) {
+            return [];
+        }
 
         // Wait for readiness with timeout
         let waitCount = 0;
         const maxWait = 300; // 30 seconds
         while (!this.ready) {
+            // Fallback mode entered while waiting (e.g. crash retries exhausted)
+            if (this.fallbackMode) {
+                return [];
+            }
             if (waitCount > 0 && waitCount % 50 === 0) {
                 console.error(`[Embedding] Still waiting for ML Sidecar... (${waitCount/10}s)`);
             }

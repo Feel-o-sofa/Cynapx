@@ -34,9 +34,20 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 ---
 
-## 2. Phase 13-1: Docker/배포 경로 복구 + Node 22 (C-1, O-6, v9 A-8 잔존)
+## 2. Phase 13-1: Docker/배포 경로 복구 + Node 22 (C-1, O-6, v9 A-8 잔존) — **[DONE]**
 
 **목표**: 배포 경로 전손(C-1)의 일괄 복구. 변경 대상이 전부 빌드/배포 메타 파일이라 런타임 코드 리스크는 낮지만, P13-7(better-sqlite3 12.x)의 선행 조건(engines ≥22)이므로 최우선.
+
+> **[DONE — 2026-06-12]** 1커밋으로 완료. 변경 요약:
+> - **C-1(1)**: 런타임 스테이지에 `COPY schema/ ./schema/` 추가, `node_modules`는 빌더에서 `npm prune --omit=dev` 후 통째로 복사(런타임 `npm ci` 제거 — native 모듈 재빌드/스크립트 순서 문제 원천 차단). `.dockerignore` 신설(컨텍스트 최소화). **주의**: `scripts/cynapx_embedder.py`는 리포에 존재하지 않는 파일이라 COPY 불가 — 사이드카는 FTS5 폴백으로 우아하게 강등(주석으로 문서화).
+> - **C-1(2)**: `"prepare"` → `"prepack"` 전환. 빌더 `npm ci`는 의존성 install 스크립트(native 빌드)가 필요하므로 `--ignore-scripts`를 쓰지 않고 prepack 전환만으로 순서 문제 해소. `npm pack --dry-run`으로 prepack 빌드 + schema/scripts 포함 회귀 확인.
+> - **C-1(3)**: `embedding-manager.ts`에 `resolvePythonCommand()` 신설 — `python3` → `python` 순 프로브(spawnSync), 둘 다 없으면 spawn 없이 FTS5 폴백 모드 진입(+ generateBatch의 30초 ready 대기 루프가 폴백 진입 시 즉시 `[]` 반환). 유닛 테스트 7건 동반.
+> - **Node 22 / O-6**: 베이스 이미지 2곳 `node:22-bookworm-slim`, `engines: {node: ">=22"}` 추가. CI(ci.yml) 매트릭스 [20,22]→[22,24], lint/build-native/release의 Node 20→22.
+> - **v9 A-8 잔존**: Dockerfile에 `USER node`(비-root) + `~/.cynapx` 사전 생성/chown. `/healthz` pending 시 503 (HTTP 레벨 회귀 테스트 3건). **추가 발견**: 인증 미들웨어가 `/healthz`를 면제하지 않아 Docker HEALTHCHECK(무토큰 curl)가 항상 401이었음 — GET `/healthz` 면제 추가. 죽은 설정 `ENV CYNAPX_HOME`(코드 미사용) 제거.
+> - **build:copy 무음 삼킴**: 인라인 `node -e` → `scripts/build-copy.js`로 추출, `catch(e){}` 제거 — src-native 디렉터리 부재만 허용, 그 외 복사 실패는 빌드 실패.
+> - **테스트**: `scripts/docker-smoke.sh` 신규(빌드 → 샘플 프로젝트 마운트 → `--api` 기동 → `/healthz` 200 폴링, Docker 부재 시 SKIP exit 0). 통합 배선은 계획대로 P13-9. 유닛 346/346(+10), tsc 클린. `npm pack --dry-run`으로 prepack/패키징 회귀 확인.
+> - **Docker 검증 (샌드박스 제약 명시)**: 샌드박스 egress 정책이 `deb.debian.org`를 차단(`host_not_allowed`)해 **리포지토리의 Dockerfile 그대로는 apt 단계에서 빌드 불가**. 검증은 apt 2단계만 제거하고 베이스를 `node:22-bookworm`(툴체인 사전 포함)으로 치환한 동등 변형으로 수행 — 그 외 모든 단계(npm ci 순서/prepack, tsc+build:copy, prune, 런타임 스테이지 조립, USER node)는 원본과 동일하게 실행됨. 결과: **빌드 성공 + 스모크 PASS** (`/healthz` 200, `{"status":"ok","indexed":true,"project":"/workspace"}`, 컨테이너 내 `whoami`=node, `/app/schema/schema.sql` 존재 확인). apt install 2줄 자체는 표준 패턴이라 정상 네트워크 환경에서 동작할 것으로 판단하나 본 샌드박스에서는 미실행.
+> - **추가**: release.yml 아카이브에 `schema/` 누락 발견 → 추가(동일 C-1 계열). `.gitignore`의 `scripts/` 패턴을 `scripts/*`로 수정(신규 스크립트 추적 가능하도록).
 
 | 항목 | 파일 | 작업 |
 |------|------|------|
