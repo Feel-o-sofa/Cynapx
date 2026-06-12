@@ -1,0 +1,268 @@
+# Phase 13 작업 계획 — diagnostic-v10 대응
+
+> **작성**: 2026-06-12 / **기준 문서**: `agent_docs/diagnostic-v10.md` (기준 커밋 `ff94ac3`, Phase 12-8 완료)
+> **목표**: CRITICAL 3건(C-1~C-3), HIGH 9건(H-1~H-9), MEDIUM(A) 12건(A-1~A-12), LOW/최적화(O) 12건(O-1~O-12), 테스트 공백 9건을 의존성과 리스크 기준으로 P13-1 ~ P13-9의 9개 서브 Phase로 순서화하여 해소한다. Phase 12에서 이연된 항목(O-4, O-5, IPC MessagePack, 구조화 로깅, YamlParser)의 채택/보류 판정도 본 계획에 반영한다(12장).
+
+---
+
+## 0. 작업 원칙
+
+- 각 서브 Phase는 **독립적으로 커밋 가능한 단위**로 쪼갠다 (한 Phase = 1~3개 PR급 커밋).
+- CRITICAL/HIGH 항목은 **회귀 테스트를 동반**하지 않으면 완료로 보지 않는다 — 특히 이번 진단의 결함 대부분이 "테스트가 닿지 않는 영역"(배포, 멀티프로세스, 비-TS 메트릭, 종료/재초기화)에서 나왔으므로, 수정과 함께 해당 영역의 테스트 인프라(5장 공백)를 단계적으로 구축한다.
+- 파일/모듈이 겹치는 항목은 같은 Phase에 묶어 충돌 없는 순서로 처리한다.
+- 매 Phase 종료 시 `npm test` + `npx tsc --noEmit` 그린 확인 후 커밋. 통합 스크립트(`scripts/integration-test.js`)는 P13-4, P13-6, P13-9 종료 시 추가 확인.
+- 매 Phase 종료 시 `agent_docs/diagnostic-v10.md`에 [DONE] 마킹.
+
+---
+
+## 1. 의존성 맵 (작업 순서에 영향을 주는 관계)
+
+```
+P13-1 (Node 22 / engines)      ──→  P13-7 (better-sqlite3 12.x)   12.x는 Node 20 prebuild 제거 — engines ≥22 선행 필수
+C-1 (Dockerfile/schema 경로)   ──→  P13-9 (Docker smoke 테스트)    smoke는 빌드 가능해진 뒤에만 의미
+C-3 (IPC HMAC 인증)            ──→  P13-9 (IPC 2-프로세스 e2e)     e2e는 새 프로토콜 기준으로 작성
+H-2 (heartbeat 원자화)         ──→  H-1 (heartbeat age 검증)       heartbeat 쓰기가 원자적이어야 age 판정을 신뢰 가능 (같은 파일 lock-manager.ts)
+H-1/H-2 (lock 프리미티브)      ──→  A-11 (PENDING 락 정체성)       락 획득/검증 위에서 동작
+H-4 (트랜잭션 내 await 제거)   ──→  H-3 (diff 실패 폴백)           같은 영역(update-pipeline / sync-strategies), O-2가 H-4 수정에 흡수됨
+A-1 (UPSERT/recursive_triggers)──→  H-4와 같은 파일(update-pipeline.ts applyDelta) — P13-4에 동거
+H-6 (purge unmount)            ──→  P13-9 (purge→re-init 통합 테스트)
+H-7 (isPathInside 헬퍼)        ──→  A-8 (paths.ts 해시)            같은 파일(paths.ts) 순차 — P13-7 → P13-8 순서 유지
+H-5 (decisionPoints 배선)      독립 (tree-sitter-parser / metrics-calculator / src-native)
+P13-8 (구조화 로깅 배선)       마지막 코드 Phase — 215곳 console.* 치환이 앞 Phase들의 diff와 충돌하지 않도록 후순위
+P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
+```
+
+---
+
+## 2. Phase 13-1: Docker/배포 경로 복구 + Node 22 (C-1, O-6, v9 A-8 잔존)
+
+**목표**: 배포 경로 전손(C-1)의 일괄 복구. 변경 대상이 전부 빌드/배포 메타 파일이라 런타임 코드 리스크는 낮지만, P13-7(better-sqlite3 12.x)의 선행 조건(engines ≥22)이므로 최우선.
+
+| 항목 | 파일 | 작업 |
+|------|------|------|
+| C-1(1) schema/scripts 미포함 | `Dockerfile:29-37, 50-54` | 빌더·런타임 스테이지에 `COPY schema/ ./schema/`, `COPY scripts/cynapx_embedder.py ./scripts/` 추가. (대안 검토: `build:copy`에서 schema를 dist로 복사 + `database.ts:58`에 dist 내 후보 경로 추가 — Docker 외 글로벌 설치 경로도 함께 해결되면 이쪽 채택) |
+| C-1(2) prepare 충돌 | `package.json:18` | `"prepare"` → `"prepack"` 변경. Dockerfile의 두 `npm ci`에 `--ignore-scripts` 병기(이중 안전). |
+| C-1(3) python vs python3 | `Dockerfile:45-47` | 런타임 이미지에 `python` 심볼릭 링크 또는 C-2(P13-2)의 python3 폴백과 합류 — Dockerfile 쪽은 `python3` 존재만 보장. |
+| Node 22 전환 | `Dockerfile:29, 43` | 베이스 이미지 `node:20-bookworm-slim` → `node:22-bookworm-slim` (Node 20은 2026-04-30 EOL). |
+| O-6 | `package.json` | `"engines": { "node": ">=22" }` 추가. |
+| v9 A-8 잔존 (A-10 표) | `Dockerfile`, `src/server/api-server.ts:202-218` | Dockerfile에 비-root `USER node` 추가. `/healthz`가 엔진 pending 상태일 때 200 대신 503 반환. |
+| build:copy 무음 삼킴 (A-10 표) | `package.json:15` | `catch(e){}` 제거 — 복사 실패 시 빌드 실패로 표면화. schema 복사를 채택한 경우 여기서 처리. |
+
+**테스트**:
+- `scripts/docker-smoke.sh` 신규 — `docker build` 완주 + `--api` 기동 + `/healthz` 200 확인. CI/통합 테스트 훅은 P13-9에서 배선(Docker 데몬 부재 환경은 skip 처리).
+- `/healthz` pending→503 은 기존 api-server 유닛 테스트 파일에 회귀 추가.
+- `npm pack --dry-run`으로 prepack 전환 후 패키징 회귀 확인.
+
+**산출물**: 1~2개 커밋 (Dockerfile+package.json / healthz·smoke). **리스크: 중간** (런타임 코드 변경은 작으나 빌드 체인 변경 — Docker 환경 검증 필수).
+
+---
+
+## 3. Phase 13-2: 크래시·보안 일괄 패치 (C-2, C-3, H-8, H-9)
+
+**목표**: 서버 전체 크래시 1건 + 인증/보안 결함 3건. 변경량 대비 파급력이 가장 큰 묶음.
+
+| 항목 | 파일 | 작업 |
+|------|------|------|
+| C-2 | `src/indexer/embedding-manager.ts:55-67` | `child.on('error', ...)` 추가 — exit 핸들러와 동일한 재시도/폴백(NullEmbeddingProvider 강등) 처리. spawn 커맨드를 `python3` → `python` 순 폴백 탐색. `scriptPath`를 `process.cwd()` 기준에서 `__dirname` 기준 패키지 루트 해석으로 교체. |
+| C-3 | `src/server/ipc-coordinator.ts:69-90` | 챌린지-응답 재설계: Host는 nonce와 무관한 **일회용 랜덤 챌린지**를 송신, Terminal은 `HMAC-SHA256(key=nonce, msg=challenge)`로 응답, Host는 동일 계산으로 검증. nonce는 어떤 방향으로도 와이어에 싣지 않음. |
+| H-8 | `src/server/ipc-coordinator.ts:60-67` | 누적 `totalBytes`를 메시지(라인) 단위 제한으로 교체 — 줄바꿈 처리 시 카운터 리셋(현재 줄 버퍼 길이만 검사). |
+| H-9 | `src/bootstrap.ts:306-313` | `--https` 요청 시 인증서 생성 실패는 fail-fast(`process.exit(1)`) — 무음 HTTP 폴백 제거. 비-루프백 `--bind`와 HTTP 조합 경고. |
+
+**테스트**:
+- `tests/embedding-queue.test.ts` 확장 — mock spawn으로 `error` 이벤트(ENOENT) 발생 시 크래시 없이 폴백/재시도 동작, python3→python 폴백 순서, `__dirname` 기준 경로 해석 검증 (C-2).
+- `tests/ipc-coordinator.test.ts` (신규 또는 확장) — **nonce를 모르는 클라이언트가 challenge를 에코해도 인증 실패**(C-3 핵심 회귀), 올바른 HMAC 응답은 인증 성공, 정상 메시지 수천 건 누적 1MB+ 트래픽에서 연결 유지 + 단일 1MB+ 메시지는 절단 (H-8).
+- `tests/bootstrap-https.test.ts` 또는 기존 infra 테스트 — 인증서 생성 실패 mock 시 평문 기동 없이 종료 (H-9).
+
+**산출물**: 2개 커밋 (C-2 / C-3+H-8+H-9). **리스크: 중간** (IPC 프로토콜 변경 — Host/Terminal 양쪽 동시 배포 전제, 버전 혼용 시 인증 실패는 의도된 동작).
+
+---
+
+## 4. Phase 13-3: Lock 단일성 (H-2 → H-1 → A-11)
+
+**목표**: split-brain(Host 이중화)으로 수렴하는 락 결함 3건을 의존성 순서대로. Phase 12-2와 같은 영역이라 기존 테스트 기반 위에서 작업.
+
+### Step 1 — H-2: heartbeat/release 원자화
+- `src/utils/lock-manager.ts:110-113, 187-191, 196-203, 208-213`: `heartbeat()`/`signalShutdown()`을 tmp 파일 + `renameSync`로 원자화. `release()`는 파일의 nonce가 자신의 것일 때만 unlink. corrupt-락 삭제 경로(110-113행)는 짧은 sleep 후 1회 재독 재시도 후에만 수행.
+
+### Step 2 — H-1: heartbeat 검증 + 재시도 상한 + failover heartbeat
+- `src/utils/lock-manager.ts:57-61`: `getValidLock()`에 heartbeat age 검증 추가 — `process.kill(pid, 0)` 생존 + heartbeat 90초 초과 + IPC 접속 실패 조합이면 stale 판정 (PID 재사용 대응).
+- `src/bootstrap.ts:239-244`: `connectToHost` 실패 시 무한 2초 재귀 재시도에 상한(5회) 도입 — 초과 시 stale 처리로 에스컬레이션해 acquire 재시도.
+- `src/bootstrap.ts:217-222`: `attemptFailover` 승격 경로에 acquireAndRun(265행)과 동일한 heartbeat `setInterval` 시작 추가.
+
+### Step 3 — A-11: PENDING 모드 락 정체성
+- `src/bootstrap.ts:105-109`, `src/server/workspace-manager.ts`: `initialize_project` 완료 시 해당 프로젝트의 프로젝트 락을 추가 획득 — 실패(`LockHeldError`) 시 Terminal로 강등해 기존 Host에 연결. 최소 보증으로 DB open 시 프로젝트 락 보유 검증.
+
+**테스트**:
+- `tests/lock-manager.test.ts` 확장 — heartbeat 원자성(쓰기 도중 read 경합 시뮬레이션: 100회 반복 heartbeat+getValidLock에서 corrupt 오판 0회), release가 타인 nonce 락을 삭제하지 않음, heartbeat age 90초 초과 + 접속 불가 시 stale 판정(PID 재사용 시뮬레이션 — 살아있는 무관 PID 기재).
+- `tests/bootstrap-failover.test.ts` (신규 또는 기존 확장) — connect 재시도 상한 후 에스컬레이션, failover 승격 후 heartbeat 타이머 가동, PENDING→initialize_project 시 프로젝트 락 획득/강등.
+
+**산출물**: 2~3개 커밋 (H-2 / H-1 / A-11). **리스크: 높음** (동시성 코어 — Phase 12-2의 H-4/H-1과 같은 수준의 신중함 필요).
+
+---
+
+## 5. Phase 13-4: 인덱싱 정합성·트랜잭션 (H-4, H-3, A-1, O-2)
+
+**목표**: 증분 동기화의 무음 중단과 트랜잭션 오염 — 인덱스 신뢰성의 핵심 묶음. 전부 `src/indexer/` + `src/db/` 영역.
+
+### Step 1 — H-4 + O-2: 트랜잭션 내 await 제거 + git 단일 패스
+- `src/indexer/update-pipeline.ts:273, 285, 349, 359`: 파일별 `getHistoryForFile` 호출을 `BEGIN` **이전** 프리페치로 이동 — `mapHistoryToProject`의 CHUNK_SIZE=20 청크 병렬 패턴 재사용. 트랜잭션 본문은 순수 동기로 유지.
+- `src/indexer/sync-strategies/full-scan-strategy.ts:18-24` (O-2): 파일당 `getLatestCommit` 호출을 `git log --name-only` 단일 패스로 대체해 전체 파일의 최신 커밋을 한 번에 구축 (H-4 프리페치와 동일 메커니즘으로 흡수).
+
+### Step 2 — H-3: diff 실패 구분 + 풀스캔 폴백
+- `src/indexer/git-service.ts:60-87`: `getDiffFiles()`가 "빈 diff"와 "diff 실패"를 구분해 반환(실패 시 throw 또는 sentinel). diff 파싱을 `--name-status -z` NUL 구분으로 교체(공백 포함 경로 대응).
+- `src/indexer/sync-strategies/incremental-sync-strategy.ts:17-19`: from-커밋 무효(`git cat-file -e` 실패) 시 `FullScanStrategy` 폴백으로 워터마크 복구 — rebase/force-push/shallow 후 영구 중단 해소.
+
+### Step 3 — A-1: UPSERT + recursive_triggers
+- `src/db/database.ts:36-47`: `PRAGMA recursive_triggers = ON` 추가.
+- `src/db/node-repository.ts:34-49`: `createNode()`의 `INSERT OR REPLACE`를 `ON CONFLICT(qualified_name) DO UPDATE`로 교체 — 노드 id 보존으로 타 파일발 에지 소실까지 함께 해소.
+
+**테스트**:
+- `tests/update-pipeline-batch.test.ts` 확장 — 트랜잭션 본문에 await 부재 검증(프리페치 후 동기 처리), 프리페치 결과가 기존과 동일한 히스토리 매핑 생성.
+- `tests/git-sync.test.ts` (신규) — 실제 임시 git 리포로 rebase 후 `syncWithGit()`이 풀스캔 폴백으로 복구(5장 "git 이력 재작성" 공백), 공백 포함 파일명 diff 파싱.
+- `tests/database-migration.test.ts` 또는 node-repository 테스트 확장 — qualified_name 충돌 REPLACE 후 `fts_symbols` 고아 행 0건, 노드 id 보존으로 기존 에지 유지 (A-1 회귀).
+
+**산출물**: 2~3개 커밋 (H-4+O-2 / H-3 / A-1). **리스크: 높음** (인덱싱 파이프라인 핵심 경로 — 통합 스크립트 69케이스 전체 재검증 필수).
+
+---
+
+## 6. Phase 13-5: 비-TS 언어 메트릭 정확성 (H-5)
+
+**목표**: 12개 비-TS 언어의 cyclomatic complexity가 가짜 값(항상 1 또는 토큰 카운트)인 문제 — 경쟁력 직결 항목(6.4장).
+
+| 항목 | 파일 | 작업 |
+|------|------|------|
+| H-5(1) tree-sitter 경로 | `src/indexer/tree-sitter-parser.ts:112`, `src/indexer/metrics-calculator.ts:49-88` | tree-sitter 커서 순회로 `provider.getDecisionPoints()`(각 언어 디스크립터에 이미 정의된 AST 노드 타입 목록, 예: `languages/rust.ts:20`)의 출현 횟수를 세는 `calculateCyclomaticComplexityTreeSitter(node, decisionPoints)` 경로 신설. `TreeSitterParser`는 이 경로만 사용 — TypeScript AST 순회 폴백(`ts.forEachChild`)으로 tree-sitter 노드를 넘기는 호출 제거. |
+| H-5(2) 네이티브 경로 | `src-native/src/lib.rs:46-54` | 공백 분할 토큰 카운터 제거 — TS 파서 전용으로 유지하거나 AST 기반 동일 의미로 재작성. 비-TS 언어는 항상 (1)의 tree-sitter 경로 사용으로 일원화. |
+
+**테스트**:
+- `tests/metrics-calculator.test.ts` 확장 — Rust/Go/Java/Python fixture(if/for/match/&&를 포함한 알려진 CC의 함수)에 대해 **언어별 CC 기대값(≠1) 회귀 테스트** (5장 "비-TS 언어 메트릭" 공백 해소). 문자열/주석 속 `if`가 카운트되지 않음 검증.
+- TS 언어의 기존 CC 스냅샷 회귀 유지 (네이티브/JS 경로 동등성).
+
+**산출물**: 1~2개 커밋. **리스크: 중간** (계산 로직 신설이지만 hotspots/risk_profile/클러스터 분류의 입력값이 일제히 변함 — 다운스트림 스냅샷 갱신 동반).
+
+---
+
+## 7. Phase 13-6: 수명주기·운영 도구 (H-6, A-9)
+
+**목표**: purge 후 좀비 컨텍스트와 admin CLI의 라이브 DB 파괴 가능성 — 운영 경로 정리.
+
+| 항목 | 파일 | 작업 |
+|------|------|------|
+| H-6 | `src/server/workspace-manager.ts:224-229`, `src/server/tools/purge-index.ts:20-23`, `src/server/mcp-server.ts:136-138`, `src/bootstrap.ts:117, 180-183` | `WorkspaceManager.unmountProject(hash)` 신설 — watcher/pipeline/workerPool dispose, dbManager dispose 후 ctx의 엔진 필드(graphEngine/metadataRepo/optEngine 등) 전부 제거(또는 컨텍스트 자체 삭제). bootstrap에서 `mcpServer.setOnPurge(...)` 배선(현재 미호출 — grep 검증됨). `startHostServicesForContext`의 `if (ctx.dbManager) return;` 가드가 dispose된 dbManager를 살아있는 것으로 오판하지 않도록 null 처리와 합류. |
+| A-9 | `src/cli/admin.ts:300-311, 351-372, 393-396, 449-451` | `backup`을 `fs.copyFileSync` → better-sqlite3 온라인 백업 API(`db.backup()`) 또는 `VACUUM INTO`로 교체. `purge`/`compact`/`restore` 실행 전 `~/.cynapx/locks/<hash>.lock` 생존 확인 — 라이브 Host 존재 시 경고/거부(`--force`로만 우회). |
+
+**테스트**:
+- `tests/workspace-manager.test.ts` 확장 — `unmountProject` 후 ctx 엔진 필드 제거, 재초기화 시 가드 통과, 닫힌 DB 핸들 참조 0건.
+- 통합 스크립트에 **"purge → initialize_project → search_symbols 정상 동작"** 시나리오 추가 (5장 "purge → 재초기화" 공백 해소 — P13-9에서 최종 배선해도 무방하나 본 Phase에서 작성).
+- `tests/admin-cli.test.ts` (신규 또는 확장) — 라이브 락 존재 시 purge/compact/restore 거부, 온라인 백업 산출물이 열리는 유효 DB임을 검증.
+
+**산출물**: 1~2개 커밋 (H-6 / A-9). **리스크: 중간** (수명주기 분해 순서 — Phase 12-4 H-5 dispose 체계 위에서 작업).
+
+---
+
+## 8. Phase 13-7: 경로 경계·API 보안 + CVE 의존성 업그레이드 (H-7, A-2, A-3, CVE)
+
+**목표**: 보안 마이너 묶음 + 의존성 보안 업그레이드. P13-1의 engines ≥22 전환이 선행 조건.
+
+| 항목 | 파일 | 작업 |
+|------|------|------|
+| H-7 | `src/utils/security.ts:43`, `src/server/mcp-server.ts:115-119`, `src/utils/paths.ts:179` | `isPathInside(child, parent)` 공용 헬퍼 신설(`path.relative` 결과가 `..` 시작/절대경로가 아님 기준) — separator 없는 prefix-match 3곳 전부 교체(sibling 디렉터리 `/proj-secrets` 우회 차단). 케이스 비교는 win32만 case-insensitive로 플랫폼 분기. (`initialize-project.ts:50,68`은 이미 올바름 — 헬퍼로 통일만.) |
+| A-2 | `src/server/api-server.ts:120, 153-169, 171-186, 245-271` | `mcpSessions`에 idle TTL(30분) + 상한(100) 도입. 요청 로거(161행)에서 `sessionId` 쿼리 파라미터 마스킹. |
+| A-3 | `src/server/api-server.ts:182` | Bearer 토큰 비교를 `crypto.timingSafeEqual`로 교체(길이 불일치 선처리 포함). |
+| CVE-2025-7709 | `package.json`, lockfile | better-sqlite3 11.10.0 → **12.x**(SQLite 3.53.1 번들 — 현 번들 3.49.2는 FTS5 heap OOB write 영향 범위). sqlite-vec `0.1.7-alpha.2` → **0.1.9 안정판**. `@modelcontextprotocol/sdk` 1.26.0 → 1.29.0 (마이너, A-12의 tasks/progress 채택 기반). 업그레이드 후 전체 테스트 + 통합 스크립트로 native 바인딩 회귀 확인. |
+
+**테스트**:
+- `tests/security.test.ts` 확장 — `isPathInside` 단위 매트릭스: sibling(`/proj-secrets`), 정확히 루트, 하위, `..` 탈출, 케이스 차이(Linux는 구분/win32는 무시) (H-7).
+- REST API HTTP 레벨 테스트의 1차분 — supertest 류로 실제 listen: 세션 TTL 만료/상한 초과 시 거부, 로그에 sessionId 미노출, timing-safe 비교 경로 정상 동작(401) (5장 "REST API HTTP 레벨" 공백의 인증/세션 부분 — 잔여는 P13-9).
+- 의존성 업그레이드 후 `sqlite_version()` ≥ 3.50.3 어서션 테스트 추가 (CVE 회귀 방지).
+
+**산출물**: 2개 커밋 (H-7+A-2+A-3 / 의존성 업그레이드). **리스크: 중간** (native 모듈 메이저 업그레이드 — prebuild/ABI 검증 필요, P13-1 선행 전제).
+
+---
+
+## 9. Phase 13-8: 아키텍처 정리 일괄 (A-4~A-8, A-10, A-12, O-1/O-3/O-4, 구조화 로깅, 잔여 O)
+
+**목표**: 리스크 낮은~중간의 정리 항목을 영역별 커밋으로 일괄 처리. Phase 12-6과 같은 "정리" 성격.
+
+### 커밋 A — DB/인덱서 성능 (A-4, A-5, A-7, O-4)
+- A-4: `src/indexer/update-pipeline.ts:435-441` — `recomputeFanMetrics()`를 배치에서 변경된 노드 집합으로 한정(스키마 트리거가 증분 유지 중이므로 사실상 이중 작업 제거). `src/db/node-repository.ts:320-325` — `LIKE '%#name'` 폴백 제거: `symbol_name` 컬럼 + 인덱스 추가(스키마 마이그레이션)로 역조회 인덱스화.
+- A-5: `src/db/node-repository.ts:35, 86, 101-108` — statement 캐싱(+ Phase 12-6 `invalidateStatementCache()` 패턴 재사용). `src/graph/graph-engine.ts:247-303` — `persistClusters()` 전체(클러스터 INSERT + `updateCluster()` 루프)를 단일 트랜잭션으로.
+- A-7: `src/indexer/embedding-manager.ts:77-89, 152-156, 251-267` — 임베딩 IPC에 요청 `id` 필드 추가, 응답 id 불일치 시 폐기(타임아웃 후 늦은 응답의 오배달 차단). 타임아웃 시 사이드카 재시작 검토.
+- O-4 **(v9 이월 — 채택)**: `src/indexer/typescript-parser.ts:30-42` — 파일마다 `ts.createProgram` + lib 재로딩을 LanguageService/incremental Program 재사용으로 교체.
+
+### 커밋 B — 워처/경로/IPC (A-6, A-8, A-12)
+- A-6: `src/watcher/file-watcher.ts:48-52` — chokidar `ignored` 콜백에 `FileFilter`(.gitignore 해석) 적용. `src/utils/profile.ts` — `ProjectProfile`의 excludePatterns/maxFileSize를 파이프라인/워처/스캔 전략에 실제 배선(불가 판단 시 기능 제거 + 문서화 — 죽은 설정 방치 금지).
+- A-8: `src/utils/paths.ts:193-196` — `getProjectHash()`의 lowercase를 win32/darwin에만 적용(Linux 케이스 구분 FS에서 별개 프로젝트의 DB/락 공유 차단). 레지스트리 tmp 파일명에 pid 포함 + 재시도 기반 병합(lost-update 완화).
+- A-12: `src/server/ipc-coordinator.ts:196-199` — 30초 고정 타임아웃을 도구별 타임아웃 테이블로 교체(`backfill_history`/`re_tag_project`/`initialize_project`/`check_consistency`는 장기 허용) + Host의 진행 중 keepalive 응답. (장기 해법인 MCP 2025-11-25 task 워크플로는 SDK 1.29 기반 후속 Phase 후보로 기록.)
+
+### 커밋 C — LOW 일괄 (O-1, O-3, O-7~O-12) + A-10 잔존
+- O-1: `src/graph/graph-engine.ts:510-511` — BFS `queue.shift()`를 인덱스 포인터(head++)로 교체 (dfs/reTag 기적용 패턴).
+- O-3 + A-10(version 중복): `src/utils/version.ts` 신설(1회 읽기 + 캐싱) — `bootstrap.ts:48`, `mcp-server.ts:52-55,161-165`, `workspace-manager.ts:114,180`, `admin.ts:460`, `api-server.ts:207-212`의 5곳 중복 제거. `/healthz`의 매 요청 디스크 읽기 해소.
+- O-7: `src/server/interactive-shell.ts:21` — 미등록 도구 `perform_clustering` 표기 제거(`_registry.ts` 기준 동기화).
+- O-8: `src/utils/certificate-generator.ts:32` — 0700 디렉터리 생성 후 그 안에서 키 파일 작업.
+- O-9: `src/utils/audit-logger.ts:84-93` — `readRecent()`를 tail 방식 부분 읽기로.
+- O-10: `src/bootstrap.ts:290-303` — one-shot CLI가 `disposeAll()` 후 종료(WAL 체크포인트 보장).
+- O-11: `src/utils/file-filter.ts:19-28` — 중첩 .gitignore 지원.
+- O-12: `src/server/tools/search-symbols.ts:15-28` — 전 컨텍스트 `EngineNotReadyError` 시 빈 결과 대신 에러 반환.
+
+### 커밋 D — 구조화 로깅 배선 (v8 이월 — 채택)
+- `src/utils/logger.ts`(작성 완료, 사용처 0곳 — dead code)를 22개 파일 215곳의 `console.*`에 배선. MCP stdio 오염 방지를 위해 stderr 출력 유지, 레벨/컨텍스트 필드 표준화. **앞 커밋들과의 diff 충돌을 피하기 위해 Phase 13 코드 변경의 마지막 커밋으로 수행.**
+
+**테스트**:
+- 커밋 A: fan 메트릭 한정 재계산 정합성(트리거 결과와 일치), `symbol_name` 마이그레이션/조회, persistClusters 트랜잭션 원자성(중간 실패 시 전무), mock sidecar로 **늦은 응답 오배달 차단**(5장 "임베딩 프로토콜" 공백), O-4 파싱 결과 동등성 + 벤치마크(`tests/benchmarks/parsing.bench.ts` 갱신).
+- 커밋 B: gitignore된 경로의 워처 이벤트 무시, profile excludePatterns 실효성, 케이스 구분 FS 해시 분리(5장 "크로스 플랫폼" 일부), 도구별 타임아웃 적용.
+- 커밋 C: 각 항목 단위 회귀 (Phase 12-6 커밋 A/B/C 테스트 패턴 재사용).
+- 커밋 D: logger 배선 후 기존 로그 어서션 테스트 갱신 + stdio 비오염 검증.
+
+**산출물**: 4개 커밋 (A/B/C/D). **리스크: 중간** (A-4/A-5는 스키마 마이그레이션 동반, D는 변경 파일 수가 많으나 기계적).
+
+---
+
+## 10. Phase 13-9: 테스트 공백 일괄 + 최종 통합 검증 (5장)
+
+**목표**: 각 Phase에서 수정 직후 동반 작성된 테스트 외에, 인프라가 필요해 이연된 공백을 일괄 구축. 전 단계 완료 후 최종 검증.
+
+| 공백 (5장) | 작업 | 커버 결함 |
+|------|------|------|
+| REST API HTTP 레벨 | supertest 기반 `tests/api-server-http.test.ts` — 실제 listen: 401/timing, rate limit 429, `/mcp` 세션 생성·GET 우회·정리, `/healthz` 상태별 코드 (P13-7 1차분의 잔여) | A-2, A-3, v9 A-8 |
+| Docker 빌드/기동 | P13-1의 `scripts/docker-smoke.sh`를 통합 테스트/CI에 배선 (Docker 부재 환경 skip) | C-1 |
+| IPC 2-프로세스 e2e | `scripts/integration-test.js` 또는 전용 스크립트 — 실제 Host/Terminal 프로세스 분리: 악성 에코 클라이언트 인증 거부(C-3), 누적 1MB+ 정상 트래픽 유지(H-8), Host kill → failover 승격 | C-3, H-8, H-1 |
+| purge → 재초기화 | P13-6에서 작성한 시나리오를 통합 스크립트 정식 Phase로 편입 | H-6 |
+| lock 경합 스트레스 | heartbeat 중 동시 `getValidLock` 반복(원자성), PID 재사용 + 재시도 상한 — P13-3 유닛의 통합판 | H-1, H-2 |
+| 크로스 플랫폼 | python3-only 환경 spawn(C-2), 케이스 구분 FS 해시/경계(H-7, A-8) — CI 매트릭스 또는 시뮬레이션 | C-2, H-7, A-8 |
+
+(비-TS 메트릭 공백은 P13-5, git 이력 재작성 공백은 P13-4, 임베딩 프로토콜 공백은 P13-8 커밋 A에서 수정과 동반 작성 — 본 Phase는 누락분 점검만.)
+
+- 최종: `npm test` 전체 그린, `npx tsc --noEmit`, 통합 스크립트 전체(신규 Phase 포함) 통과, `agent_docs/diagnostic-v10.md` 전 항목 [DONE] 마킹, `agent_docs/improvement-plan.md`에 Phase 13 완료 요약 추가.
+
+**산출물**: 1~2개 커밋. **리스크: 낮음** (테스트 전용 — 단 e2e 인프라 신설로 작업량은 큼).
+
+---
+
+## 11. 전체 순서 요약
+
+| Phase | 핵심 항목 | 커밋 수 | 리스크 |
+|-------|-----------|---------|--------|
+| 13-1 | C-1 Docker/배포 + Node 22 + O-6 + v9 A-8 잔존 | 1~2 | 중간 (빌드 체인) |
+| 13-2 | C-2, C-3, H-8, H-9 (크래시·보안) | 2 | 중간 (IPC 프로토콜 변경) |
+| 13-3 | H-2, H-1, A-11 (lock 단일성) | 2~3 | 높음 (동시성 코어) |
+| 13-4 | H-4, H-3, A-1, O-2 (인덱싱 정합성·트랜잭션) | 2~3 | 높음 (파이프라인 핵심) |
+| 13-5 | H-5 (비-TS 메트릭 정확성) | 1~2 | 중간 (다운스트림 값 변동) |
+| 13-6 | H-6, A-9 (수명주기·운영 도구) | 1~2 | 중간 |
+| 13-7 | H-7, A-2, A-3 + CVE 의존성 업그레이드 | 2 | 중간 (native 메이저 업그레이드) |
+| 13-8 | A-4~A-8, A-10, A-12, O-1/O-3/O-4, O-7~O-12, 구조화 로깅 | 4 | 중간 (마이그레이션 포함) |
+| 13-9 | 테스트 공백 일괄 + 최종 통합 검증 | 1~2 | 낮음 |
+
+**총 16~22개 커밋**, P13-1부터 순차 진행 (P13-1 → P13-7 의존성 외에는 P13-5/P13-6의 순서 유연성 있음). 각 Phase 종료 시 `agent_docs/diagnostic-v10.md`에 [DONE] 마킹.
+
+---
+
+## 12. Phase 12 이연 항목 판정 (phase12-plan.md 11장 → diagnostic-v10 verdict)
+
+| 이연 항목 | diagnostic-v10 판정 | Phase 13 처리 |
+|-----------|--------------------|---------------|
+| O-4: TS Program 재사용/incremental | 여전히 유효 — 파일마다 `ts.createProgram` + lib 재로딩 (v10 O-4, **verdict: 채택**) | **P13-8 커밋 A**에 편입 |
+| O-5: 클러스터링 파티셔닝 (100k+ 노드) | 현재 규모 무해 (v10 O-5, **verdict: 계속 보류**) — 단 persistClusters 트랜잭션화는 v10 A-5로 흡수 | 트랜잭션화만 **P13-8 커밋 A**, 파티셔닝은 Phase 14 후보 유지 |
+| IPC MessagePack 직렬화 | 성능 문제 미관측 (v10 A-10 표, **verdict: 보류 권고**) | Phase 13 범위 제외 — Phase 14 후보 기록만 유지 |
+| 구조화 로깅 (pino/winston) | Logger 클래스 작성 완료·사용처 0곳(dead code) — 배선만 하면 됨 (v10 A-10 표, **verdict: 채택**) | **P13-8 커밋 D**로 배선 |
+| YamlParser → js-yaml | 현 용도(top-level key + jobs)에 충분, 우선순위 낮음 (v10 A-10 표, **verdict: 계속 보류**) | Phase 13 범위 제외 — Phase 14 후보 유지 |
