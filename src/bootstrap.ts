@@ -30,7 +30,7 @@ import { ApiServer } from './server/api-server';
 import { LifecycleManager } from './utils/lifecycle-manager';
 import { SecurityProvider } from './utils/security';
 import { WorkerPool } from './indexer/worker-pool';
-import { CertificateGenerator } from './utils/certificate-generator';
+import { resolveHttpsOptions } from './utils/https-options';
 
 process.on('unhandledRejection', (reason: unknown) => {
     console.error('[Process] Unhandled Promise rejection:', reason);
@@ -304,9 +304,17 @@ async function bootstrap() {
 
     // Start Interfaces
     if (options.api) {
+        // H-9 (diagnostic-v10): when --https is requested, certificate
+        // generation failure is fatal — never fall back silently to plain
+        // HTTP (with --bind 0.0.0.0 that would leak tokens on the wire).
         let httpsOptions;
-        if (options.https) {
-            try { httpsOptions = CertificateGenerator.generate(); } catch(e) { console.error("[!] SSL generation failed."); }
+        try {
+            const resolved = resolveHttpsOptions(options.https, options.bind);
+            httpsOptions = resolved.httpsOptions;
+            for (const warning of resolved.warnings) console.error(warning);
+        } catch (e) {
+            console.error(`[!] ${e instanceof Error ? e.message : e}`);
+            process.exit(1);
         }
         const apiServer = new ApiServer(httpsOptions);
         apiServer.setMcpServer(mcpServer);

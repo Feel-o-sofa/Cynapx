@@ -68,9 +68,17 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 ---
 
-## 3. Phase 13-2: 크래시·보안 일괄 패치 (C-2, C-3, H-8, H-9)
+## 3. Phase 13-2: 크래시·보안 일괄 패치 (C-2, C-3, H-8, H-9) — **[DONE]**
 
 **목표**: 서버 전체 크래시 1건 + 인증/보안 결함 3건. 변경량 대비 파급력이 가장 큰 묶음.
+
+> **[DONE — 2026-06-12]** 변경 요약:
+> - **C-2**: `embedding-manager.ts`에 `child.on('error', ...)` 추가 — exit 핸들러와 공유하는 `handleChildGone()`(멱등 가드: error+exit 동시 발화 시 1회 재시도)로 funnel. spawn ENOENT/EACCES가 더는 uncaughtException으로 호스트를 죽이지 않고 재시도(1s/2s/4s)→FTS5 폴백으로 강등. P13-1의 `resolvePythonCommand()` probe가 spawn 자체 실패(권한 등)를 막지 못하는 경로를 방어적으로 커버. `scriptPath`를 `process.cwd()`→`__dirname` 패키지 루트 기준으로 교체.
+> - **C-3**: `ipc-coordinator.ts` 챌린지-응답 재설계. Host는 nonce와 무관한 일회용 랜덤 challenge(32B) 송신, Terminal은 `HMAC-SHA256(key=nonce, msg=challenge)`로 응답, Host는 `crypto.timingSafeEqual` 검증(`computeAuthResponse` export). nonce는 양방향 와이어에 부재. 공개 API/연결 흐름(`startHost`/`connectToHost`/`forwardExecuteTool`)은 불변 — 와이어 핸드셰이크만 변경, 기존 IPC 테스트(infrastructure / phase12-6-commit-a A-9)는 대칭 사용이라 무수정 통과.
+> - **H-8**: 누적 `totalBytes`→라인 단위 `currentLineBytes`(청크 내 `\n` 경계마다 리셋). 장수 연결 누적 1MB+ 정상 트래픽 생존, 단일 1MB+ 메시지는 절단.
+> - **H-9**: `src/utils/https-options.ts` 신설(`resolveHttpsOptions`/`isLoopbackAddress`/`HttpsUnavailableError`). `--https` 실패는 fail-fast(`process.exit(1)`), 비-루프백+평문 경고. `CertificateGenerator` 직접 호출을 헬퍼로 추출(테스트 주입 가능).
+> - **C-3 회귀 증명**: git stash로 구 코드(challenge===nonce)에서 에코-공격 테스트가 즉시 실패함을 확인 후 복원.
+> - **테스트**: `tests/ipc-coordinator.test.ts`(신규, C-3 6건 + H-8 3건), `tests/bootstrap-https.test.ts`(신규, H-9), `tests/embedding-queue.test.ts` 확장(C-2 spawn-error 5건 + 패키지 루트 경로 1건). 유닛 **376/376**(+30), `tsc --noEmit` 클린.
 
 | 항목 | 파일 | 작업 |
 |------|------|------|
