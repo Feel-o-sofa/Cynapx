@@ -6,6 +6,20 @@
 import { simpleGit, SimpleGit } from 'simple-git';
 
 /**
+ * H-3: Thrown when a `git diff` command itself fails (e.g. the from-commit no
+ * longer exists after a rebase/force-push/shallow fetch). This is distinct from
+ * a successful diff that simply reports no changes — callers must be able to
+ * tell "nothing changed" apart from "the diff range is invalid" so they can
+ * fall back to a full scan and recover the watermark instead of stalling.
+ */
+export class DiffFailedError extends Error {
+    constructor(public readonly from: string, public readonly to: string, cause?: unknown) {
+        super(`git diff ${from}..${to} failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+        this.name = 'DiffFailedError';
+    }
+}
+
+/**
  * GitService provides information about git commits for files.
  */
 export class GitService {
@@ -42,6 +56,57 @@ export class GitService {
     }
 
     /**
+     * O-2: Builds a map of repo-relative file path → latest commit hash for the
+     * whole repository in a *single* `git log --name-only` pass, instead of one
+     * `git log` subprocess per file. Walking commits newest-first, the first
+     * commit that touches a file is its latest commit; later (older) commits for
+     * the same file are ignored. Returns repo-relative paths exactly as git
+     * prints them (callers resolve them against the project root).
+     */
+    public async getLatestCommitsForFiles(): Promise<Map<string, string>> {
+        const latest = new Map<string, string>();
+        try {
+            // %x00 = NUL after the hash so a "<hash>\0<file>\n<file>\n..." block
+            // per commit is unambiguous regardless of file path contents.
+            const raw = await this.git.raw([
+                'log',
+                '--name-only',
+                '--no-renames',
+                '--pretty=format:%x01%H',
+            ]);
+            let currentHash = '';
+            for (const line of raw.split('\n')) {
+                if (line.startsWith('\x01')) {
+                    currentHash = line.slice(1).trim();
+                    continue;
+                }
+                const file = line.trim();
+                if (!file || !currentHash) continue;
+                // Newest-first: keep the first hash seen for each file.
+                if (!latest.has(file)) latest.set(file, currentHash);
+            }
+        } catch (error) {
+            console.warn('Could not build latest-commit map via git log --name-only:', error);
+        }
+        return latest;
+    }
+
+    /**
+     * H-3: Returns true if the given commit-ish exists in the repository.
+     * Used to detect a from-commit that was rewritten away (rebase/force-push)
+     * before attempting a diff that would otherwise fail opaquely.
+     */
+    public async commitExists(ref: string): Promise<boolean> {
+        if (!ref) return false;
+        try {
+            await this.git.raw(['cat-file', '-e', `${ref}^{commit}`]);
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    /**
      * Returns the current HEAD commit hash.
      */
     public async getCurrentHead(): Promise<string> {
@@ -56,34 +121,52 @@ export class GitService {
 
     /**
      * Returns the list of changed files between two commits.
+     *
+     * H-3: Uses `--name-status -z` (NUL-delimited) so file paths containing
+     * spaces, tabs, or other whitespace are parsed correctly — the old
+     * `line.split(/\s+/)` parsing corrupted such paths. A genuinely empty diff
+     * returns `[]`; a *failed* diff (e.g. the from-commit was rewritten away)
+     * throws {@link DiffFailedError} so callers can fall back to a full scan
+     * instead of mistaking failure for "no changes" and stalling forever.
      */
     public async getDiffFiles(from: string, to: string): Promise<{ file: string, status: string }[]> {
+        let raw: string;
         try {
-            const raw = await this.git.diff(['--name-status', `${from}..${to}`]);
-            const lines = raw.split('\n').filter(line => line.trim().length > 0);
-            return lines.flatMap(line => {
-                const parts = line.split(/\s+/);
-                const statusChar = parts[0][0]; // A, M, D, R, etc.
-
-                if (statusChar === 'R' && parts.length >= 3) {
-                    // Rename: return DELETE for old path + ADD for new path
-                    return [
-                        { file: parts[1], status: 'DELETE' },
-                        { file: parts[2], status: 'ADD' }
-                    ];
-                }
-
-                const file = parts[parts.length - 1];
-                let event: string = 'MODIFY';
-                if (statusChar === 'A') event = 'ADD';
-                else if (statusChar === 'D') event = 'DELETE';
-
-                return [{ file, status: event }];
-            });
+            raw = await this.git.raw(['diff', '--name-status', '-z', `${from}..${to}`]);
         } catch (error) {
             console.error(`Failed to get diff between ${from} and ${to}:`, error);
-            return [];
+            throw new DiffFailedError(from, to, error);
         }
+
+        // -z output is NUL-separated. For A/M/D each record is two fields:
+        //   <status>\0<path>\0
+        // For renames/copies (R###/C###) it is three fields:
+        //   <status>\0<oldPath>\0<newPath>\0
+        const tokens = raw.split('\0').filter(t => t.length > 0);
+        const results: { file: string, status: string }[] = [];
+        let i = 0;
+        while (i < tokens.length) {
+            const statusField = tokens[i++];
+            const statusChar = statusField[0]; // A, M, D, R, C, T, ...
+            if (statusChar === 'R' || statusChar === 'C') {
+                // Rename/Copy: consume old + new path.
+                const oldPath = tokens[i++];
+                const newPath = tokens[i++];
+                if (statusChar === 'R') {
+                    results.push({ file: oldPath, status: 'DELETE' });
+                }
+                results.push({ file: newPath, status: 'ADD' });
+                continue;
+            }
+
+            const file = tokens[i++];
+            if (file === undefined) break;
+            let event: string = 'MODIFY';
+            if (statusChar === 'A') event = 'ADD';
+            else if (statusChar === 'D') event = 'DELETE';
+            results.push({ file, status: event });
+        }
+        return results;
     }
 
     /**

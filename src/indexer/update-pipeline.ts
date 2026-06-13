@@ -8,7 +8,7 @@ import * as path from 'path';
 import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
 import { MetadataRepository } from '../db/metadata-repository';
-import { GitService } from './git-service';
+import { GitService, DiffFailedError } from './git-service';
 import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
 import { WorkerPool } from './worker-pool';
 import { toCanonical } from '../utils/paths';
@@ -201,6 +201,40 @@ export class UpdatePipeline {
         console.error(`[UpdatePipeline] History backfill complete.`);
     }
 
+    /**
+     * H-4: Pre-fetches git history for the given file paths BEFORE any
+     * transaction is opened, using the same chunked-parallel pattern as
+     * mapHistoryToProject() (CHUNK_SIZE=20). Returns a Map keyed by file path.
+     *
+     * This is the mechanism that lets the transaction body in processBatch()
+     * and applyDelta() be purely synchronous: all `await`-ing git subprocess
+     * work happens here, outside BEGIN/COMMIT, so the open SQLite transaction
+     * never yields the event loop (which previously allowed a background
+     * embeddingManager.refreshAll() write to join the outer transaction).
+     */
+    private async prefetchHistories(filePaths: string[]): Promise<Map<string, any[]>> {
+        const result = new Map<string, any[]>();
+        if (!this.gitService || filePaths.length === 0) return result;
+
+        // De-duplicate so the same file isn't fetched twice within one batch.
+        const unique = Array.from(new Set(filePaths));
+        const CHUNK_SIZE = 20;
+        for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
+            const chunk = unique.slice(i, i + CHUNK_SIZE);
+            const fetched = await Promise.all(
+                chunk.map(fp =>
+                    this.gitService!.getHistoryForFile(fp)
+                        .then(history => ({ filePath: fp, history }))
+                        .catch(() => ({ filePath: fp, history: [] as any[] }))
+                )
+            );
+            for (const { filePath, history } of fetched) {
+                result.set(filePath, history);
+            }
+        }
+        return result;
+    }
+
     public async processChangeEvent(event: FileChangeEvent, version: number): Promise<void> {
         const { event: type, file_path, commit } = event;
 
@@ -259,6 +293,14 @@ export class UpdatePipeline {
 
         const results = allResults;
 
+        // H-4: pre-fetch git history for every non-DELETE file BEFORE opening
+        // the transaction, so the transaction body below contains zero `await`
+        // (no git subprocess spawn while BEGIN is held).
+        const historyFiles = results
+            .filter(r => r.status === 'success' && r.event.event !== 'DELETE')
+            .map(r => r.event.file_path);
+        const historyByFile = await this.prefetchHistories(historyFiles);
+
         const previousLock = this.writeLock;
         let resolveLock: () => void;
         this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
@@ -271,7 +313,7 @@ export class UpdatePipeline {
 
         try {
             this.db.prepare('BEGIN').run();
-            
+
             // Pass 1: Definitions
             for (const res of results) {
                 if (res.status === 'success') {
@@ -282,7 +324,7 @@ export class UpdatePipeline {
                     }
                     this.nodeRepo.deleteNodesByFilePath(res.event.file_path);
                     if (res.event.event !== 'DELETE') {
-                        const history = this.gitService ? await this.gitService.getHistoryForFile(res.event.file_path) : undefined;
+                        const history = this.gitService ? historyByFile.get(res.event.file_path) : undefined;
                         for (const node of res.delta.nodes) {
                             node.tags = StructuralTagger.tagNode(node);
                             if (history) node.history = history;
@@ -340,6 +382,12 @@ export class UpdatePipeline {
     }
 
     public async applyDelta(filePath: string, delta: DeltaGraph, type: ChangeType): Promise<void> {
+        // H-4: pre-fetch git history BEFORE opening the transaction so the
+        // transaction body below is purely synchronous (no await under BEGIN).
+        const history = this.gitService
+            ? (await this.prefetchHistories([filePath])).get(filePath)
+            : undefined;
+
         const previousLock = this.writeLock;
         let resolveLock: () => void;
         this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
@@ -356,7 +404,6 @@ export class UpdatePipeline {
                 this.nodeRepo.deleteNodesByFilePath(filePath);
             }
 
-            const history = this.gitService ? await this.gitService.getHistoryForFile(filePath) : undefined;
             const symbolCache = new Map<string, number>();
             for (const node of delta.nodes) {
                 node.tags = StructuralTagger.tagNode(node);
@@ -422,11 +469,34 @@ export class UpdatePipeline {
         // Already up to date — nothing to do
         if (lastCommit && lastCommit === currentHead) return;
 
-        const strategy = lastCommit
-            ? new IncrementalSyncStrategy(this.gitService, lastCommit, currentHead)
-            : new FullScanStrategy(this.gitService);
+        // H-3: if a prior watermark exists but its commit was rewritten away
+        // (rebase/force-push/shallow fetch), an incremental diff against it
+        // would fail and the watermark would never advance again. Detect that
+        // up front and fall back to a full scan to recover the watermark.
+        let useFullScan = !lastCommit;
+        if (lastCommit && !(await this.gitService.commitExists(lastCommit))) {
+            console.error(`[UpdatePipeline] lastIndexedCommit ${lastCommit} is missing from the repo (rebase/force-push?); falling back to full scan to recover.`);
+            useFullScan = true;
+        }
 
-        const result = await strategy.buildEvents(projectPath);
+        let result;
+        if (useFullScan) {
+            result = await new FullScanStrategy(this.gitService).buildEvents(projectPath);
+        } else {
+            try {
+                result = await new IncrementalSyncStrategy(this.gitService, lastCommit!, currentHead).buildEvents(projectPath);
+            } catch (err) {
+                if (err instanceof DiffFailedError) {
+                    // Secondary safety net: the diff failed for a reason the
+                    // up-front commitExists() check didn't catch. Recover via
+                    // full scan rather than stalling.
+                    console.error(`[UpdatePipeline] Incremental diff failed (${err.message}); falling back to full scan.`);
+                    result = await new FullScanStrategy(this.gitService).buildEvents(projectPath);
+                } else {
+                    throw err;
+                }
+            }
+        }
         if (!result) return;
 
         await this.processBatch(result.events, Date.now(), result.head);

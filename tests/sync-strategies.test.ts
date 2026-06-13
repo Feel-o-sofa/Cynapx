@@ -8,6 +8,8 @@ function mockGit(overrides: Partial<Record<keyof GitService, unknown>> = {}): Gi
     getCurrentHead: vi.fn().mockResolvedValue('abc123'),
     getAllTrackedFiles: vi.fn().mockResolvedValue([]),
     getLatestCommit: vi.fn().mockResolvedValue('abc123'),
+    getLatestCommitsForFiles: vi.fn().mockResolvedValue(new Map<string, string>()),
+    commitExists: vi.fn().mockResolvedValue(true),
     getDiffFiles: vi.fn().mockResolvedValue([]),
     getHistoryForFile: vi.fn().mockResolvedValue([]),
     ...overrides,
@@ -22,11 +24,13 @@ describe('FullScanStrategy', () => {
     expect(result).toBeNull();
   });
 
-  it('returns ADD events for each tracked file', async () => {
+  it('returns ADD events for each tracked file (O-2 single-pass commit map)', async () => {
     const git = mockGit({
       getCurrentHead: vi.fn().mockResolvedValue('head1'),
       getAllTrackedFiles: vi.fn().mockResolvedValue(['src/a.ts', 'src/b.ts']),
-      getLatestCommit: vi.fn().mockResolvedValue('commit1'),
+      getLatestCommitsForFiles: vi.fn().mockResolvedValue(
+        new Map([['src/a.ts', 'commit1'], ['src/b.ts', 'commit2']])
+      ),
     });
     const strategy = new FullScanStrategy(git);
     const result = await strategy.buildEvents('/project');
@@ -34,14 +38,19 @@ describe('FullScanStrategy', () => {
     expect(result!.head).toBe('head1');
     expect(result!.events).toHaveLength(2);
     expect(result!.events[0].event).toBe('ADD');
+    expect(result!.events[0].commit).toBe('commit1');
     expect(result!.events[1].event).toBe('ADD');
+    expect(result!.events[1].commit).toBe('commit2');
+    // O-2: a single log pass, not one getLatestCommit per file.
+    expect(git.getLatestCommitsForFiles).toHaveBeenCalledTimes(1);
+    expect(git.getLatestCommit).not.toHaveBeenCalled();
   });
 
-  it('falls back to HEAD commit when getLatestCommit rejects', async () => {
+  it('falls back to HEAD commit when a file is absent from the commit map', async () => {
     const git = mockGit({
       getCurrentHead: vi.fn().mockResolvedValue('fallback-head'),
       getAllTrackedFiles: vi.fn().mockResolvedValue(['src/a.ts']),
-      getLatestCommit: vi.fn().mockRejectedValue(new Error('git error')),
+      getLatestCommitsForFiles: vi.fn().mockResolvedValue(new Map<string, string>()),
     });
     const strategy = new FullScanStrategy(git);
     const result = await strategy.buildEvents('/project');
@@ -63,7 +72,9 @@ describe('IncrementalSyncStrategy', () => {
         { file: 'src/a.ts', status: 'ADD' },
         { file: 'src/b.ts', status: 'DELETE' },
       ]),
-      getLatestCommit: vi.fn().mockResolvedValue('new-commit'),
+      getLatestCommitsForFiles: vi.fn().mockResolvedValue(
+        new Map([['src/a.ts', 'new-commit']])
+      ),
     });
     const strategy = new IncrementalSyncStrategy(git, 'old', 'new-hash');
     const result = await strategy.buildEvents('/project');

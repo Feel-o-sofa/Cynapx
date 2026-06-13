@@ -15,13 +15,17 @@ export class FullScanStrategy implements SyncStrategy {
     const allFiles = await this.gitService.getAllTrackedFiles();
     if (allFiles.length === 0) return null;
 
-    const events: FileIndexEvent[] = await Promise.all(
-      allFiles.map(async (f) => {
-        const fullPath = path.resolve(projectPath, f);
-        const commit = await this.gitService.getLatestCommit(fullPath).catch(() => head);
-        return { event: 'ADD' as ChangeType, file_path: fullPath, commit };
-      })
-    );
+    // O-2: resolve every file's latest commit in a single `git log --name-only`
+    // pass instead of one `git log` subprocess per file (previously near-serial
+    // due to simple-git's default concurrency of 5).
+    const latestCommits = await this.gitService.getLatestCommitsForFiles();
+
+    const events: FileIndexEvent[] = allFiles.map((f) => {
+      const fullPath = path.resolve(projectPath, f);
+      // git prints repo-relative paths; the latest-commit map is keyed the same way.
+      const commit = latestCommits.get(f) ?? head;
+      return { event: 'ADD' as ChangeType, file_path: fullPath, commit };
+    });
 
     return { events, head };
   }
