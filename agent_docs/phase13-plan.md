@@ -185,9 +185,15 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 ---
 
-## 7. Phase 13-6: 수명주기·운영 도구 (H-6, A-9)
+## 7. Phase 13-6: 수명주기·운영 도구 (H-6, A-9) — **[DONE]**
 
 **목표**: purge 후 좀비 컨텍스트와 admin CLI의 라이브 DB 파괴 가능성 — 운영 경로 정리.
+
+> **[DONE — 2026-06-13]** 1커밋(H-6+A-9). 변경 요약:
+> - **H-6**: `WorkspaceManager.unmountProject(hash, {remove?})` 신설 — Phase 12-4 H-5 dispose 역순(watcher → workerPool → dbManager) 으로 정리 후 ctx의 모든 엔진 필드(`dbManager`/`graphEngine`/`metadataRepo`/`vectorRepo`/`archEngine`/`refactorEngine`/`optEngine`/`policyDiscoverer`/`gitService`/`updatePipeline`/`securityProvider`/`watcher`/`workerPool`/`reindexTriggeredByVersion`) 를 `undefined` 처리(컨텍스트는 path/hash만 남겨 재마운트 가능, `remove:true` 시 엔트리 삭제 + active 재지정). `EngineContext`에 `watcher`/`workerPool` 필드 추가, bootstrap `startHostServicesForContext`가 두 핸들을 ctx에 저장(이전엔 `lifecycle.track`만). `mcpServer.setOnPurge(...)` 를 bootstrap에서 처음으로 배선(`unmountProject(hash)` + 해당 프로젝트의 A-11 락 release) — 이전엔 정의만 있고 호출처 0곳(grep 확인). `onPurge` 시그니처를 `(hash)` 인자로 확장(tool-dispatcher/mcp-server/purge-index 합류). purge-index 핸들러는 `onPurge` 배선 시 unmount에 위임, 미배선(테스트) 시에만 bare `dbManager.dispose()+null`. **가드 합류**: unmount가 `dbManager`를 null 처리하므로 `initializeEngine`의 `if (ctx.dbManager) return ctx`와 bootstrap `startHostServicesForContext`의 `if (ctx.dbManager) return` 가드가 더는 dispose된 dbManager를 살아있는 것으로 오판하지 않음 → purge 후 `initialize_project` 재초기화가 정상 재빌드.
+> - **A-9**: `admin.ts` `backup`을 `fs.copyFileSync`(.db+volatile -wal/-shm) → better-sqlite3 `VACUUM INTO ?` 온라인 백업으로 교체(`onlineBackup()`) — 라이브 WAL DB에서도 단일·일관·체크포인트 완료 스냅샷(sidecar 없음). `restore`는 VACUUM INTO 산출물(self-contained)에 맞춰 대상의 stale -wal/-shm 선삭제(legacy sidecar 백업은 호환 복사 유지). `purge`/`compact`/`restore` 파괴 명령 전 `assertNoLiveHost()` 가드 추가 — Phase 13-3의 PID 생존+heartbeat staleness 정책을 재사용하는 신규 **read-only** `LockManager.probeProjectLock(projectPath)`(side-effect 없음 — admin은 남의 락을 관찰만, 절대 삭제·정리하지 않음)로 라이브 Host 검출, 존재 시 거부(`-f/--force`로만 우회). 세 명령에 `--force` 플래그 추가.
+> - **테스트**: `tests/workspace-manager.test.ts` 신규(6건 — 엔진 필드 null화, watcher/workerPool dispose 순서, 닫힌 DB 핸들 사용불가, 재초기화 가드 통과+신규 핸들, `remove:true` active 재지정, unknown hash no-op), `tests/admin-cli.test.ts` 신규(7건 — probeProjectLock 매트릭스: 무락/라이브/죽은 PID/stale heartbeat/unparseable/read-only 불변 + VACUUM INTO 백업이 integrity_check ok 통과·sidecar 없음). 통합 스크립트 Phase 25 추가(purge → 엔진필드 null화 검증 → initialize_project → 라이브 DB 핸들 → search_symbols 정상). 유닛 **431/431**(+13, 418→431), `tsc --noEmit` 클린, `node scripts/integration-test.js` **74/74**(+5).
+> - **Phase 12-4 H-5 보존**: unmount의 dispose 순서가 LifecycleManager 역순(watcher→pool→DB) 과 동일 — 기존 종료 경로 무변경. Phase 13-3 락 정체성/heartbeat 보존: admin은 LockManager 헬퍼만 재사용(PID/heartbeat 로직 재구현 0).
 
 | 항목 | 파일 | 작업 |
 |------|------|------|
@@ -291,7 +297,7 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 | 13-3 | H-2, H-1, A-11 (lock 단일성) | 2~3 | 높음 (동시성 코어) |
 | 13-4 **[DONE]** | H-4, H-3, A-1, O-2 (인덱싱 정합성·트랜잭션) | 3 | 높음 (파이프라인 핵심) |
 | 13-5 | H-5 (비-TS 메트릭 정확성) | 1~2 | 중간 (다운스트림 값 변동) |
-| 13-6 | H-6, A-9 (수명주기·운영 도구) | 1~2 | 중간 |
+| 13-6 **[DONE]** | H-6, A-9 (수명주기·운영 도구) | 1 | 중간 |
 | 13-7 | H-7, A-2, A-3 + CVE 의존성 업그레이드 | 2 | 중간 (native 메이저 업그레이드) |
 | 13-8 | A-4~A-8, A-10, A-12, O-1/O-3/O-4, O-7~O-12, 구조화 로깅 | 4 | 중간 (마이그레이션 포함) |
 | 13-9 | 테스트 공백 일괄 + 최종 통합 검증 | 1~2 | 낮음 |

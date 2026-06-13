@@ -123,6 +123,9 @@ async function bootstrap() {
         const compositeParser = new CompositeParser([typescriptParser, treeSitterParser, new YamlParser(), new MarkdownParser(), new JsonConfigParser()]);
         const gitService = new GitService(ctx.projectPath);
         const workerPool = lifecycle.track(new WorkerPool(Math.min(os.cpus().length, 4)));
+        // H-6: hold the worker pool on the context so unmountProject(hash) can
+        // terminate it (in dispose order) when the project is purged.
+        ctx.workerPool = workerPool;
 
         const updatePipeline = new UpdatePipeline(
             ctx.dbManager!.getDb(),
@@ -165,6 +168,10 @@ async function bootstrap() {
         if (!options.noWatch) {
             const watcher = lifecycle.track(new FileWatcher(updatePipeline, ctx.projectPath));
             watcher.start(ctx.projectPath);
+            // H-6: hold the watcher on the context so unmountProject(hash) can
+            // stop it before the DB is closed (otherwise a post-purge flush
+            // would write to a closed handle).
+            ctx.watcher = watcher;
         }
     };
 
@@ -221,6 +228,25 @@ async function bootstrap() {
                 return;
             }
             throw err;
+        }
+    });
+
+    // H-6: purge_index tears down the live engine for a project. Wire it to
+    // WorkspaceManager.unmountProject(hash) so the watcher / worker pool /
+    // dbManager are disposed in order and every engine field is nulled — this
+    // prevents the zombie-context bug where a post-purge watcher flush writes to
+    // a closed DB handle, and lets a subsequent initialize_project rebuild the
+    // engine (the disposed-but-non-null dbManager no longer short-circuits the
+    // re-init guard). Previously setOnPurge was never called, so onPurge was
+    // always a no-op.
+    mcpServer.setOnPurge(async (hash: string) => {
+        await workspaceManager.unmountProject(hash);
+        // If this project held its own A-11 lock, release it — the index it
+        // guarded no longer exists.
+        const projectLock = projectLocks.get(hash);
+        if (projectLock) {
+            await projectLock.release();
+            projectLocks.delete(hash);
         }
     });
 

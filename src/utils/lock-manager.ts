@@ -80,6 +80,42 @@ export class LockManager {
     }
 
     /**
+     * A-9: Read-only liveness probe for a project's lock, reusing the same
+     * PID-liveness + heartbeat-staleness primitives the Host uses, so admin
+     * tooling never reimplements that policy. Unlike {@link getValidLock} this
+     * has NO side effects (never deletes/cleans up the lock file) — admin CLI
+     * must only *observe*, never mutate, another process's lock.
+     *
+     * Returns the live lock info if a process owns the lock and is reachable
+     * (PID alive AND heartbeat fresh), otherwise null (no lock / dead PID /
+     * stale heartbeat / unparseable file).
+     */
+    public static probeProjectLock(projectPath: string): LockInfo | null {
+        const hash = getProjectHash(projectPath);
+        const lockPath = path.join(getLocksDir(), `${hash}.lock`);
+        if (!fs.existsSync(lockPath)) return null;
+        let lock: LockInfo;
+        try {
+            lock = JSON.parse(fs.readFileSync(lockPath, 'utf8')) as LockInfo;
+        } catch {
+            return null;
+        }
+        // PID liveness (process.kill(pid, 0) throws ESRCH for a dead process).
+        try {
+            process.kill(lock.pid, 0);
+        } catch {
+            return null;
+        }
+        // Heartbeat freshness — a stale heartbeat (with PID possibly reused)
+        // means the recorded Host is not actually live.
+        const ts = Date.parse(lock.lastHeartbeat);
+        if (Number.isNaN(ts) || Date.now() - ts > HEARTBEAT_STALE_MS) {
+            return null;
+        }
+        return lock;
+    }
+
+    /**
      * Checks if a valid lock exists for the project.
      * Returns the lock info if it exists and the process is alive.
      * Automatically cleans up stale locks and residual DB journal files.

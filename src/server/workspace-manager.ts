@@ -21,6 +21,7 @@ import { getAuditLogger } from '../utils/audit-logger';
 import { GitService } from '../indexer/git-service';
 import { UpdatePipeline } from '../indexer/update-pipeline';
 import { SecurityProvider } from '../utils/security';
+import { Disposable } from '../types';
 
 export interface EngineContext {
     projectPath: string;
@@ -36,6 +37,14 @@ export interface EngineContext {
     gitService?: GitService;
     updatePipeline?: UpdatePipeline;
     securityProvider?: SecurityProvider;
+    /**
+     * H-6: live host services attached to this context (file watcher, worker
+     * pool). Held so {@link WorkspaceManager.unmountProject} can dispose them in
+     * the correct order before the DB is closed — otherwise a watcher flush or a
+     * queued worker job could write to a closed DB handle after purge.
+     */
+    watcher?: Disposable;
+    workerPool?: Disposable;
     /** Project-specific indexing/analysis profile (loaded from ~/.cynapx/profiles/{hash}.json) */
     profile?: ProjectProfile;
     /** Set to true when a version mismatch auto-reindex was triggered at init */
@@ -219,6 +228,75 @@ export class WorkspaceManager {
 
     public getContextByHash(hash: string): EngineContext | undefined {
         return this.contexts.get(hash);
+    }
+
+    /**
+     * H-6: Tears down all live host services for a project and releases its DB
+     * handle, leaving a "bare" mounted context (path + hash only) that can be
+     * re-initialized via {@link initializeEngine} again.
+     *
+     * Dispose ordering mirrors Phase 12-4 H-5's LifecycleManager reverse order
+     * (watcher → pipeline → worker pool → DB): stop the file watcher first so no
+     * further flushes are scheduled, drop the pipeline (it owns no OS resources
+     * but must not be invoked after the DB closes), terminate the worker pool so
+     * no queued parse job can write to the DB, and only then dispose the
+     * DatabaseManager. Every engine field that wraps the now-closed connection
+     * is nulled out so:
+     *   1. no engine keeps a reference to a closed handle ("database connection
+     *      is not open" on later calls), and
+     *   2. {@link initializeEngine}'s `if (ctx.dbManager) return ctx` guard (and
+     *      bootstrap's `startHostServicesForContext` guard) no longer mistakes a
+     *      disposed-but-non-null dbManager for a live engine and short-circuits
+     *      re-initialization.
+     *
+     * The context entry itself is retained (path/hash) so the project stays
+     * mounted and `initialize_project` can rebuild it; pass `remove: true` to
+     * delete the entry entirely.
+     */
+    public async unmountProject(hash: string, opts: { remove?: boolean } = {}): Promise<void> {
+        const ctx = this.contexts.get(hash);
+        if (!ctx) return;
+
+        // 1. Stop the file watcher (no further debounced flushes).
+        try { ctx.watcher?.dispose(); } catch (err) {
+            console.error(`[WorkspaceManager] watcher dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        }
+
+        // 2. Terminate the worker pool (reject any in-flight/queued parse jobs).
+        try { ctx.workerPool?.dispose(); } catch (err) {
+            console.error(`[WorkspaceManager] workerPool dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        }
+
+        // 3. Close the DB connection LAST — after everything that might write.
+        try { ctx.dbManager?.dispose(); } catch (err) {
+            console.error(`[WorkspaceManager] dbManager dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        }
+
+        // 4. Null every field that wraps the closed connection / disposed
+        //    services so nothing references a dead handle and the init guards
+        //    correctly see an un-initialized context.
+        ctx.dbManager = undefined;
+        ctx.graphEngine = undefined;
+        ctx.metadataRepo = undefined;
+        ctx.vectorRepo = undefined;
+        ctx.archEngine = undefined;
+        ctx.refactorEngine = undefined;
+        ctx.optEngine = undefined;
+        ctx.policyDiscoverer = undefined;
+        ctx.gitService = undefined;
+        ctx.updatePipeline = undefined;
+        ctx.securityProvider = undefined;
+        ctx.watcher = undefined;
+        ctx.workerPool = undefined;
+        ctx.reindexTriggeredByVersion = undefined;
+
+        if (opts.remove) {
+            this.contexts.delete(hash);
+            if (this.activeProjectId === hash) {
+                const next = this.contexts.keys().next();
+                this.activeProjectId = next.done ? null : next.value;
+            }
+        }
     }
 
     public async dispose() {

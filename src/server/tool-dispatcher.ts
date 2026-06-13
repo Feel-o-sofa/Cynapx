@@ -26,7 +26,7 @@ export interface ToolDeps {
     workspaceManager: WorkspaceManager;
     remediationEngine: RemediationEngine;
     onInitialize?: (targetPath: string) => Promise<void>;
-    onPurge?: () => Promise<void>;
+    onPurge?: (hash: string) => Promise<void>;
     markReady: (state: boolean) => void;
     getIsInitialized: () => boolean;
     setIsInitialized: (value: boolean) => void;

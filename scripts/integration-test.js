@@ -127,6 +127,8 @@ async function main() {
         ctx.gitService      = gitService;
         ctx.updatePipeline  = updatePipeline;
         ctx.securityProvider = new SecurityProvider(projectPath);
+        // H-6: attach the worker pool so onPurge -> unmountProject can dispose it.
+        ctx.workerPool      = _workerPool;
 
         // 6. Run actual indexing
         console.log(info(`  Running syncWithGit — indexing ${projectPath}...`));
@@ -143,7 +145,13 @@ async function main() {
         workspaceManager:    wm,
         remediationEngine:   new RemediationEngine(),
         onInitialize,
-        onPurge:             undefined,
+        // H-6: wire onPurge to WorkspaceManager.unmountProject (as bootstrap.ts
+        // does) so purge_index tears the engine down in order and nulls every
+        // field, letting a subsequent initialize_project rebuild it cleanly.
+        onPurge:             async (hash) => {
+            await wm.unmountProject(hash);
+            _workerPool = null; // unmount disposed it; re-init builds a fresh pool
+        },
         markReady:           (v) => { initialized = v; },
         getIsInitialized:    ()  => initialized,
         setIsInitialized:    (v) => { initialized = v; },
@@ -565,6 +573,57 @@ async function main() {
                 : fail(`FAILOVER_GUARD_MSG — unexpected error text: ${txt.slice(0, 100)}`));
             results.push({ label: 'FAILOVER_GUARD_MSG', toolName: 'find_dead_code', status: structured ? 'PASS' : 'FAIL', ms: 0 });
         }
+    }
+
+    // ══ Phase 25: purge → re-initialize → search (H-6) ════════════════════════
+    // diagnostic-v10 §5 "purge → 재초기화" gap: purge_index must unmount the
+    // project (dispose watcher/worker-pool/dbManager + null engine fields) so a
+    // following initialize_project rebuilds a LIVE engine — not a zombie context
+    // whose closed DB handle yields "database connection is not open" errors.
+    banner('Phase 25: purge_index → initialize_project → search_symbols (H-6)');
+    {
+        const beforeHash = wm.getActiveContext()?.projectHash;
+
+        // 25a. Purge the live index (confirm: true triggers onPurge -> unmount).
+        const purgeRes = await runTool('PURGE_LIVE', 'purge_index', { confirm: true }, deps);
+
+        // 25b. The context's engine fields must be nulled (no zombie).
+        {
+            const ctxAfter = wm.getContextByHash(beforeHash);
+            const cleaned = !!ctxAfter
+                && ctxAfter.dbManager == null
+                && ctxAfter.graphEngine == null
+                && ctxAfter.updatePipeline == null
+                && ctxAfter.workerPool == null;
+            console.log(cleaned
+                ? ok('PURGE_UNMOUNT_CLEAN — engine fields nulled after purge (no zombie context)')
+                : fail(`PURGE_UNMOUNT_CLEAN — engine fields not fully cleared: dbManager=${ctxAfter?.dbManager}`));
+            results.push({ label: 'PURGE_UNMOUNT_CLEAN', toolName: 'purge_index', status: cleaned ? 'PASS' : 'FAIL', ms: 0 });
+        }
+
+        // 25c. Re-initialize the same project — must pass the dbManager guard and
+        // fully re-index (this would silently no-op against a zombie context).
+        const reinitRes = await runTool('REINIT_AFTER_PURGE', 'initialize_project', { path: ROOT, mode: 'current' }, deps);
+
+        // 25d. search_symbols must work correctly against the rebuilt engine.
+        if (reinitRes && !reinitRes.isError) {
+            const reCtx = wm.getActiveContext();
+            const liveDb = !!reCtx?.dbManager && reCtx.dbManager.getDb().open === true;
+            console.log(liveDb
+                ? ok('REINIT_LIVE_DB — rebuilt engine has a live, open DB handle')
+                : fail('REINIT_LIVE_DB — rebuilt context has no live DB handle'));
+            results.push({ label: 'REINIT_LIVE_DB', toolName: 'initialize_project', status: liveDb ? 'PASS' : 'FAIL', ms: 0 });
+
+            const reSearch = await runTool('SEARCH_AFTER_REINIT', 'search_symbols', { query: 'WorkspaceManager', limit: 5 }, deps);
+            const found = reSearch && !reSearch.isError && (reSearch.content?.[0]?.text ?? '').length > 0;
+            if (!found) {
+                console.log(fail('SEARCH_AFTER_REINIT — search returned empty/error after re-init'));
+            }
+        } else {
+            console.log(fail('REINIT_AFTER_PURGE — re-initialization failed; cannot verify search'));
+        }
+
+        void purgeRes;
     }
 
     printSummary();

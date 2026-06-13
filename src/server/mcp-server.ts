@@ -43,7 +43,7 @@ export class McpServer {
     private terminalCoordinator?: IpcCoordinator;
 
     private onInitializeCallback?: (newPath: string) => Promise<void>;
-    private onPurgeCallback?: () => Promise<void>;
+    private onPurgeCallback?: (hash: string) => Promise<void>;
     private healthMonitor: HealthMonitor = new HealthMonitor();
     private toolDeps!: ToolDeps;
 
@@ -133,7 +133,7 @@ export class McpServer {
         this.onInitializeCallback = callback;
     }
 
-    public setOnPurge(callback: () => Promise<void>) {
+    public setOnPurge(callback: (hash: string) => Promise<void>) {
         this.onPurgeCallback = callback;
     }
 
@@ -205,7 +205,7 @@ export class McpServer {
             remediationEngine: this.remediationEngine,
             // Use lazy thunks so callbacks set after construction are picked up
             onInitialize: (p: string) => this.onInitializeCallback ? this.onInitializeCallback(p) : Promise.resolve(),
-            onPurge: () => this.onPurgeCallback ? this.onPurgeCallback() : Promise.resolve(),
+            onPurge: (hash: string) => this.onPurgeCallback ? this.onPurgeCallback(hash) : Promise.resolve(),
             markReady: this.markReady.bind(this),
             getIsInitialized: () => this.isInitialized,
             setIsInitialized: (value: boolean) => {
