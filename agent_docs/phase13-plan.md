@@ -96,9 +96,16 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 ---
 
-## 4. Phase 13-3: Lock 단일성 (H-2 → H-1 → A-11)
+## 4. Phase 13-3: Lock 단일성 (H-2 → H-1 → A-11) — **[DONE]**
 
 **목표**: split-brain(Host 이중화)으로 수렴하는 락 결함 3건을 의존성 순서대로. Phase 12-2와 같은 영역이라 기존 테스트 기반 위에서 작업.
+
+> **[DONE — 2026-06-13]** 3커밋(H-2 원자화 / H-1 staleness+재시도 상한 / A-11+docs). 변경 요약:
+> - **H-2**: `lock-manager.ts`에 `atomicWrite()` 신설(tmp `${lockPath}.${pid}.${rand}.tmp` → `renameSync`) — `heartbeat()`/`signalShutdown()`이 제자리 `writeFileSync` 대신 원자 교체. 경합 reader가 잘린 JSON을 볼 수 없음. `getValidLock()`의 corrupt-락 삭제 경로는 50ms sleep 후 1회 재독·재liveness 후에만 삭제(transient partial write 보호). `release()`는 on-disk nonce가 자신의 것일 때만 unlink — failover 교체 후 남의 락 삭제 차단. 회귀: 100회 heartbeat+getValidLock 인터리브 corrupt 오판 0회, partial→완성 재시도 보존, release 타인-nonce 보존.
+> - **H-1**: `getValidLock()`은 stale을 자동 삭제하지 않음(정체성 보존) — 대신 `isHeartbeatStale(lock)`(90s 임계 `HEARTBEAT_STALE_MS`) 제공. bootstrap `acquireAndRun` connect 실패 처리는 순수 함수 `decideConnectFailureAction(stale, retries, max=5)`로 추출 — heartbeat stale이거나 재시도 5회 도달 시 `forceReclaim(nonce)`(자기-관측 nonce 일치 시에만 삭제) 후 재acquire 에스컬레이션, 그 외 2s 백오프. 무한 루프 제거. heartbeat 타이머를 단일 `startHeartbeatTimer()`로 통합해 `attemptFailover` 승격 경로에도 가동(이전엔 acquireAndRun에만 존재). 회귀: stale 판정 매트릭스, retry-cap 결정표, 무한루프 부재(반드시 5회에 reclaim 수렴), forceReclaim nonce 가드.
+> - **A-11**: `setOnInitialize`가 primary 락 base와 다른 프로젝트를 초기화할 때 해당 프로젝트 전용 `LockManager.acquire()` 추가 획득(Host의 ipcPort/nonce 재사용) — `LockHeldError` 시 host 서비스 시작을 건너뛰어(DB open·파이프라인 미가동) 기존 Host에 정체성 양보. 프로젝트 락도 heartbeat 타이머에 합류. `hostIpcPort`/`hostNonce`를 acquire/failover 양 경로에서 기록. 회귀(`tests/bootstrap-failover.test.ts` 신규): 동일 경로 2차 acquire→LockHeldError, 상이 경로 독립 락, 승격-Host heartbeat 신선도.
+> - **테스트**: `tests/lock-manager.test.ts` +17(16→33), `tests/bootstrap-failover.test.ts` 신규 3건. 유닛 **405/405**(+17), `tsc --noEmit` 클린. 동시성 민감 테스트 안정성 위해 전체 2회 + 락 스위트 3회 반복 그린 확인.
+> - **Phase 12-2 보존**: 기존 "atomic acquire (H-4)" 블록(O_EXCL `wx` 획득) 무변경 — H-2는 heartbeat/release 쓰기 경로만 원자화, acquire의 생성 원자성은 그대로. 16개 기존 락 테스트 전수 통과.
 
 ### Step 1 — H-2: heartbeat/release 원자화
 - `src/utils/lock-manager.ts:110-113, 187-191, 196-203, 208-213`: `heartbeat()`/`signalShutdown()`을 tmp 파일 + `renameSync`로 원자화. `release()`는 파일의 nonce가 자신의 것일 때만 unlink. corrupt-락 삭제 경로(110-113행)는 짧은 sleep 후 1회 재독 재시도 후에만 수행.
