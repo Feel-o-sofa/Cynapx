@@ -6,7 +6,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { addToRegistry, ANCHOR_FILE, getProjectHash } from '../../utils/paths.js';
+import { addToRegistry, ANCHOR_FILE, getProjectHash, isPathInside } from '../../utils/paths.js';
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
 
@@ -47,7 +47,7 @@ export const initializeProjectHandler: ToolHandler = {
             if (args.path) {
                 const homeDir = os.homedir();
                 const allowed = [homeDir, process.cwd()];
-                if (!allowed.some(base => resolvedPath === base || resolvedPath.startsWith(base + path.sep))) {
+                if (!allowed.some(base => isPathInside(resolvedPath, base))) {
                     return { isError: true, content: [{ type: 'text', text: `Path '${resolvedPath}' is outside allowed boundaries (home dir or cwd).` }] };
                 }
             }
@@ -65,7 +65,7 @@ export const initializeProjectHandler: ToolHandler = {
             if (args.path) {
                 const homeDir = os.homedir();
                 const allowed = [homeDir, process.cwd()];
-                if (!allowed.some(base => resolvedPath === base || resolvedPath.startsWith(base + path.sep))) {
+                if (!allowed.some(base => isPathInside(resolvedPath, base))) {
                     return { isError: true, content: [{ type: 'text', text: `Path '${resolvedPath}' is outside allowed boundaries (home dir or cwd).` }] };
                 }
             }

@@ -32,6 +32,32 @@ const SYSTEM_PATH_PREFIXES: string[] = [
  * Returns true if the given path is a known system/OS directory that should
  * never be treated as a user project root.
  */
+/**
+ * H-7: Returns true if `child` is the same path as `parent` or a true
+ * descendant of it. Both paths are resolved to absolute first. Containment is
+ * decided via `path.relative(parent, child)` — the result must NOT start with
+ * `..` and must NOT itself be an absolute path. This avoids the separator-less
+ * prefix-match bug where a sibling directory like `/proj-secrets` would pass a
+ * naive `startsWith('/proj')` check.
+ *
+ * Case sensitivity is platform-dependent: win32 file systems are
+ * case-insensitive (lowercase both before comparison); POSIX is case-sensitive.
+ */
+export function isPathInside(child: string, parent: string): boolean {
+    let absChild = path.resolve(child);
+    let absParent = path.resolve(parent);
+
+    if (process.platform === 'win32') {
+        absChild = absChild.toLowerCase();
+        absParent = absParent.toLowerCase();
+    }
+
+    const rel = path.relative(absParent, absChild);
+    // Same path → rel is '' (inside). Descendant → rel has no leading '..' and
+    // is not absolute. Sibling/escape → rel starts with '..' or is absolute.
+    return rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel));
+}
+
 export function isSystemPath(p: string): boolean {
     const normalized = path.resolve(p).toLowerCase().replace(/\\/g, '/');
     return SYSTEM_PATH_PREFIXES.some(sp => {
@@ -176,7 +202,7 @@ export function findProjectAnchor(startPath: string): string | null {
     if (isSystemPath(current)) return null;
 
     const registry = readRegistry();
-    const registeredProject = registry.find(p => current.toLowerCase().startsWith(p.path.toLowerCase()));
+    const registeredProject = registry.find(p => isPathInside(current, p.path));
     if (registeredProject) return registeredProject.path;
 
     while (true) {

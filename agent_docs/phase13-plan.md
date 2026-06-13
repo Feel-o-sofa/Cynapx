@@ -209,7 +209,14 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 ---
 
-## 8. Phase 13-7: 경로 경계·API 보안 + CVE 의존성 업그레이드 (H-7, A-2, A-3, CVE)
+## 8. Phase 13-7: 경로 경계·API 보안 + CVE 의존성 업그레이드 (H-7, A-2, A-3, CVE) **[DONE]**
+
+> **[DONE — Phase 13-7]**
+> - **H-7**: `isPathInside(child, parent)` 공용 헬퍼 신설(`src/utils/paths.ts`) — `path.relative(parent, child)` 결과가 `..`로 시작/절대경로면 외부로 판정, sibling `<root>-secrets` 우회 차단. win32만 lowercase 후 비교(POSIX 케이스 구분). `security.ts:43`·`mcp-server.ts:117`·`paths.ts:179`(findProjectAnchor) 3곳 separator-less prefix-match를 헬퍼로 교체, `initialize-project.ts` 경계 검사 2곳도 헬퍼로 통일(동작 동일). 기존 case-insensitive 단언 테스트는 플랫폼 분기로 갱신.
+> - **A-2**: `mcpSessions`에 idle TTL 30분 + 상한 100 도입 — `setInterval` 5분 sweep(HealthMonitor 패턴, `.unref()`) + `/mcp` 요청마다 lazy sweep. 상한 도달 시 새 세션 429 거부, 기존 세션 접근 시 `lastAccess` 갱신. 요청 로거에서 `sessionId` 쿼리 파라미터 마스킹(`maskSessionInUrl`/`maskSessionId`, prefix 8자 + `***`).
+> - **A-3**: Bearer 비교를 `timingSafeEqualStr`로 교체 — 양측을 SHA-256(32바이트 고정 길이) 해시 후 `crypto.timingSafeEqual` 비교. 길이 불일치 throw 회피 + 길이 기반 조기 종료 타이밍 누출 제거.
+> - **CVE-2025-7709 — 성공**: better-sqlite3 11.10.0 → **12.10.0**(SQLite **3.53.1** 번들 확인), sqlite-vec `0.1.7-alpha.2` → **0.1.9**(`vec_version()` v0.1.9 확인), `@modelcontextprotocol/sdk` 1.26.0 → **1.29.0**. native 바인딩 정상 로드, FTS5/sqlite-vec 동작 확인. P13-6의 백업은 `db.backup()`이 아닌 `VACUUM INTO`(표준 SQL)라 12.x API 변경 무영향. `sqlite_version() >= 3.50.3` 회귀 테스트 추가.
+> - **테스트**: `tests/security.test.ts`(isPathInside 매트릭스 + sibling + 플랫폼 케이스), `tests/api-server-security.test.ts`(신규 — timingSafeEqualStr/마스킹/TTL eviction/cap 429/로그 미노출), `tests/database-migration.test.ts`(SQLite 버전 가드). **455/455 통과**(431 → +24), tsc 클린, 통합 스크립트 74/74.
 
 **목표**: 보안 마이너 묶음 + 의존성 보안 업그레이드. P13-1의 engines ≥22 전환이 선행 조건.
 

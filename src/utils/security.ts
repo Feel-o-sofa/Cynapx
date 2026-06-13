@@ -6,6 +6,7 @@
 import * as path from 'path';
 import * as fs from 'fs';
 import { CynapxError, CynapxErrorCode } from '../types';
+import { isPathInside } from './paths';
 
 /**
  * SecurityProvider handles centralized file access authority verification.
@@ -40,7 +41,10 @@ export class SecurityProvider {
             realRoot = this.projectRoot;
         }
 
-        if (!realTarget.toLowerCase().startsWith(realRoot.toLowerCase())) {
+        // H-7: use separator-aware containment (path.relative based) instead of
+        // a separator-less prefix match, which let sibling dirs like
+        // `<root>-secrets` slip through. Case sensitivity is platform-correct.
+        if (!isPathInside(realTarget, realRoot)) {
             throw new CynapxError(
                 CynapxErrorCode.PATH_TRAVERSAL_DENIED,
                 `Access to file outside project directory denied: ${targetPath}`

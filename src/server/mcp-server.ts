@@ -15,7 +15,7 @@ import { RemediationEngine } from '../graph/remediation-engine';
 import { IpcCoordinator } from './ipc-coordinator';
 import { EmbeddingProvider, PythonEmbeddingProvider } from '../indexer/embedding-manager';
 import { WorkspaceManager, EngineContext } from './workspace-manager';
-import { readRegistry } from '../utils/paths';
+import { readRegistry, isPathInside } from '../utils/paths';
 import { registerResourceHandlers } from './resource-provider';
 import { registerPromptHandlers } from './prompt-provider';
 import { HealthMonitor } from './health-monitor';
@@ -114,7 +114,7 @@ export class McpServer {
         if (!this.isInitialized) {
             const currentPath = process.cwd();
             const registry = readRegistry();
-            const isRegistered = registry.some(p => currentPath.toLowerCase().startsWith(p.path.toLowerCase()));
+            const isRegistered = registry.some(p => isPathInside(currentPath, p.path));
             if (!isRegistered) {
                 throw new McpError(ErrorCode.InvalidRequest, "Project not initialized. Please use 'initialize_project' first.");
             }

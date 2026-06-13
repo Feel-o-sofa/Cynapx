@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as path from 'path';
 import * as os from 'os';
 import { SecurityProvider } from '../src/utils/security';
+import { isPathInside } from '../src/utils/paths';
 import { CynapxError, CynapxErrorCode } from '../src/types';
 
 describe('SecurityProvider', () => {
@@ -98,12 +99,77 @@ describe('SecurityProvider', () => {
             expect(provider2.isPathAllowed(targetPath)).toBe(true);
         });
 
-        it('should be case-insensitive in path comparison', () => {
-            // The implementation lowercases both paths before comparing
+        it('should be case-sensitive on POSIX, case-insensitive on win32 (H-7)', () => {
+            // H-7: comparison is now platform-aware. On Linux (case-sensitive FS)
+            // an uppercased root is a DIFFERENT directory and must be rejected;
+            // on win32 it is the same directory and is allowed.
             const upperCasePath = projectRoot.toUpperCase() + path.sep + 'file.ts';
-            // path.resolve will not change the case, but the implementation normalizes to lowercase
-            // so this should be allowed
-            expect(provider.isPathAllowed(upperCasePath)).toBe(true);
+            if (process.platform === 'win32') {
+                expect(provider.isPathAllowed(upperCasePath)).toBe(true);
+            } else {
+                expect(provider.isPathAllowed(upperCasePath)).toBe(false);
+            }
         });
+
+        it('H-7: should block a sibling directory sharing the root prefix', () => {
+            // `<root>-secrets` shares the `<root>` string prefix but is NOT inside
+            // the project. The old separator-less startsWith check let it through.
+            const siblingPath = projectRoot + '-secrets' + path.sep + 'credentials.ts';
+            expect(provider.isPathAllowed(siblingPath)).toBe(false);
+            expect(() => provider.validatePath(siblingPath)).toThrow(CynapxError);
+        });
+    });
+});
+
+describe('isPathInside (H-7)', () => {
+    const parent = path.join(os.tmpdir(), 'proj');
+
+    afterEach(() => {
+        vi.restoreAllMocks();
+    });
+
+    it('returns true for the parent itself (exact root)', () => {
+        expect(isPathInside(parent, parent)).toBe(true);
+    });
+
+    it('returns true for a direct subdirectory', () => {
+        expect(isPathInside(path.join(parent, 'src'), parent)).toBe(true);
+    });
+
+    it('returns true for a deeply nested descendant', () => {
+        expect(isPathInside(path.join(parent, 'a', 'b', 'c.ts'), parent)).toBe(true);
+    });
+
+    it('returns false for a sibling sharing the prefix (proj-secrets vs proj)', () => {
+        expect(isPathInside(parent + '-secrets', parent)).toBe(false);
+        expect(isPathInside(path.join(parent + '-secrets', 'creds.ts'), parent)).toBe(false);
+    });
+
+    it('returns false for a `..` escape', () => {
+        expect(isPathInside(path.join(parent, '..', 'other'), parent)).toBe(false);
+        expect(isPathInside(path.join(parent, '..'), parent)).toBe(false);
+    });
+
+    it('returns false for a completely unrelated absolute path', () => {
+        expect(isPathInside(path.join(os.homedir(), '.ssh', 'id_rsa'), parent)).toBe(false);
+    });
+
+    it('POSIX: differs by case → not inside (case-sensitive)', () => {
+        vi.stubGlobal('process', { ...process, platform: 'linux' });
+        expect(isPathInside(parent.toUpperCase(), parent)).toBe(false);
+    });
+
+    it('win32: differs by case → inside (case-insensitive)', () => {
+        // Mock process.platform to win32. On a POSIX host path.relative still uses
+        // POSIX semantics, but the case-folding branch under test is what matters:
+        // identical paths differing only in case must be treated as the same.
+        const origDesc = Object.getOwnPropertyDescriptor(process, 'platform');
+        Object.defineProperty(process, 'platform', { value: 'win32', configurable: true });
+        try {
+            expect(isPathInside(parent.toUpperCase(), parent)).toBe(true);
+            expect(isPathInside(path.join(parent, 'SUB').toUpperCase(), parent)).toBe(true);
+        } finally {
+            if (origDesc) Object.defineProperty(process, 'platform', origDesc);
+        }
     });
 });
