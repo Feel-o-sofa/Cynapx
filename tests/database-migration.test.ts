@@ -40,6 +40,19 @@ describe('DatabaseManager.runMigrations()', () => {
         manager.dispose();
     });
 
+    // CVE-2025-7709 (Phase 13-7): better-sqlite3 was upgraded to 12.x, which
+    // bundles SQLite >= 3.53.1. The vulnerable FTS5 heap OOB write was fixed in
+    // SQLite 3.50.3. This guards against an accidental downgrade.
+    it('bundles a SQLite version >= 3.50.3 (CVE-2025-7709 regression guard)', () => {
+        const manager = new DatabaseManager(':memory:');
+        const db = manager.getDb();
+        const version = (db.prepare('SELECT sqlite_version() AS v').get() as { v: string }).v;
+        const [maj, min, patch] = version.split('.').map(Number);
+        const asNum = maj * 10000 + min * 100 + patch;
+        expect(asNum).toBeGreaterThanOrEqual(3 * 10000 + 50 * 100 + 3);
+        manager.dispose();
+    });
+
     it('creates the node_tags table and idx_node_tags_tag index', () => {
         const manager = new DatabaseManager(':memory:');
         const db = manager.getDb();
