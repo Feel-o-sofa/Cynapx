@@ -37,6 +37,13 @@ export class DatabaseManager implements Disposable {
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('foreign_keys = ON');
         this.db.pragma('synchronous = NORMAL');
+        // A-1: recursive_triggers must be ON so that triggers which themselves
+        // modify tables (e.g. the nodes_au AFTER UPDATE trigger that rewrites
+        // the fts_symbols contentless FTS index) fire correctly during the
+        // ON CONFLICT(qualified_name) DO UPDATE upsert in createNode(). Without
+        // it, an upsert that resolves to an UPDATE could skip the FTS-sync
+        // trigger path and leak orphan fts_symbols rows.
+        this.db.pragma('recursive_triggers = ON');
         // Dynamic cache/mmap sizing based on DB file size
         const dbSizeMB = fs.existsSync(dbPath) ? fs.statSync(dbPath).size / (1024 * 1024) : 0;
         const cacheSizeKB = Math.min(Math.max(Math.ceil(dbSizeMB * 2), 64), 512) * 1024; // 64MB ~ 512MB

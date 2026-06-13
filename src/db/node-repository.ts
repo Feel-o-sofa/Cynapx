@@ -32,8 +32,17 @@ export class NodeRepository {
     }
 
     public createNode(node: CodeNode): number {
+        // A-1: explicit UPSERT on qualified_name instead of INSERT OR REPLACE.
+        // INSERT OR REPLACE deletes the conflicting row and inserts a new one,
+        // which (a) allocates a fresh id — silently breaking every edge in
+        // other files that referenced the old id via the FK ON DELETE CASCADE,
+        // and (b) fires nodes_ad/nodes_ai instead of nodes_au. ON CONFLICT DO
+        // UPDATE keeps the existing id and fires nodes_au (which keeps
+        // fts_symbols in sync), so cross-file edges and the FTS index survive a
+        // re-index of the same symbol. RETURNING id works for both the INSERT
+        // and the UPDATE branch (lastInsertRowid is not set on a pure UPDATE).
         const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO nodes (
+      INSERT INTO nodes (
         qualified_name, symbol_type, language, file_path, start_line, end_line,
         visibility, is_generated, last_updated_commit, version,
         checksum, modifiers, signature, return_type, field_type,
@@ -46,9 +55,35 @@ export class NodeRepository {
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?
       )
+      ON CONFLICT(qualified_name) DO UPDATE SET
+        symbol_type = excluded.symbol_type,
+        language = excluded.language,
+        file_path = excluded.file_path,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        visibility = excluded.visibility,
+        is_generated = excluded.is_generated,
+        last_updated_commit = excluded.last_updated_commit,
+        version = excluded.version,
+        checksum = excluded.checksum,
+        modifiers = excluded.modifiers,
+        signature = excluded.signature,
+        return_type = excluded.return_type,
+        field_type = excluded.field_type,
+        loc = excluded.loc,
+        cyclomatic = excluded.cyclomatic,
+        fan_in = excluded.fan_in,
+        fan_out = excluded.fan_out,
+        fan_in_dynamic = excluded.fan_in_dynamic,
+        fan_out_dynamic = excluded.fan_out_dynamic,
+        cluster_id = excluded.cluster_id,
+        remote_project_path = excluded.remote_project_path,
+        tags = excluded.tags,
+        history = excluded.history
+      RETURNING id
     `);
 
-        const result = stmt.run(
+        const row = stmt.get(
             node.qualified_name,
             node.symbol_type,
             node.language,
@@ -74,14 +109,15 @@ export class NodeRepository {
             node.remote_project_path || null,
             node.tags ? JSON.stringify(node.tags) : null,
             node.history ? JSON.stringify(node.history) : null
-        );
+        ) as { id: number };
 
-        const nodeId = result.lastInsertRowid as number;
+        const nodeId = row.id;
 
-        // A-2: keep node_tags in sync with the nodes.tags JSON column so
-        // tag-based queries (e.g. dead-code detection) can JOIN instead of
-        // scanning with LIKE. The old node row's tags are removed via the
-        // ON DELETE CASCADE FK when INSERT OR REPLACE evicts it.
+        // A-2/A-1: keep node_tags in sync with the nodes.tags JSON column. On a
+        // DO UPDATE branch the node id is preserved, so stale tags from a prior
+        // index of this symbol would otherwise remain — clear them first, then
+        // re-insert the current tag set.
+        this.db.prepare('DELETE FROM node_tags WHERE node_id = ?').run(nodeId);
         if (node.tags && node.tags.length > 0) {
             const insertTag = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
             for (const tag of node.tags) {

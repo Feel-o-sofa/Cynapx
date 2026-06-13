@@ -126,9 +126,17 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 ---
 
-## 5. Phase 13-4: 인덱싱 정합성·트랜잭션 (H-4, H-3, A-1, O-2)
+## 5. Phase 13-4: 인덱싱 정합성·트랜잭션 (H-4, H-3, A-1, O-2) — **[DONE]**
 
 **목표**: 증분 동기화의 무음 중단과 트랜잭션 오염 — 인덱스 신뢰성의 핵심 묶음. 전부 `src/indexer/` + `src/db/` 영역.
+
+> **[DONE — 2026-06-13]** 3스텝(Step 1 H-4+O-2 / Step 2 H-3 / Step 3 A-1+docs). 변경 요약:
+> - **Step 1 (H-4 + O-2)**: `UpdatePipeline.prefetchHistories(filePaths)` 신설 — `mapHistoryToProject`의 CHUNK_SIZE=20 청크 병렬 패턴 재사용 + Set de-dup. `processBatch`/`applyDelta`가 BEGIN **이전**에 모든 비-DELETE 파일의 git 히스토리를 프리페치하고, 트랜잭션 본문(Pass 1/Pass 2)은 프리페치된 `Map`만 조회 → await 0(트랜잭션 중 git subprocess spawn으로 인한 이벤트루프 양보·외부 트랜잭션 합류 제거). O-2: `git-service.ts`에 `getLatestCommitsForFiles()`(`git log --name-only --pretty=format:%x01%H` 단일 패스, NUL/%x01 구분으로 commit→files 블록 파싱, 최신순 first-seen 맵) 신설 — `FullScanStrategy`/`IncrementalSyncStrategy`의 파일당 `getLatestCommit` 호출 제거(맵 미스 시 head 폴백).
+> - **Step 2 (H-3)**: `getDiffFiles()`가 diff 명령 실패 시 `DiffFailedError`(typed) throw — "빈 diff `[]`"와 "diff 실패"를 구분. 파싱을 `git diff --name-status -z` NUL 구분으로 교체(공백/탭 포함 경로 무손상, R###/C### rename/copy 처리). `git-service.ts`에 `commitExists(ref)`(`cat-file -e <ref>^{commit}`) 추가. `syncWithGit()`는 (1) lastCommit 존재 시 `commitExists` 선검사 — 소실 시 즉시 `FullScanStrategy` 폴백, (2) Incremental 경로에서 `DiffFailedError` catch 시에도 폴백 — rebase/force-push로 워터마크가 사라져도 풀스캔으로 복구하며 워터마크 전진.
+> - **Step 3 (A-1)**: `database.ts`에 `PRAGMA recursive_triggers = ON` 추가 — UPSERT의 UPDATE 분기가 `nodes_au` AFTER UPDATE 트리거(fts_symbols delete+insert)를 올바르게 발화시키도록(트리거가 다른 테이블을 수정하므로 필요). `node-repository.ts:createNode()`를 `INSERT ... ON CONFLICT(qualified_name) DO UPDATE SET ... RETURNING id`로 교체 — 노드 id 보존(`lastInsertRowid`는 순수 UPDATE에서 미설정이므로 `RETURNING id` 사용), 타 파일발 에지(FK CASCADE)·FTS 정합성 유지. UPDATE 분기 stale `node_tags` 선삭제 후 재삽입.
+> - **테스트**: `tests/update-pipeline-batch.test.ts`(+3: BEGIN 이전 프리페치 호출순서·동일 히스토리 매핑·de-dup), `tests/git-sync.test.ts`(신규 7: 실제 임시 git 리포 — 빈 diff vs DiffFailedError, 공백 파일명 `-z` 파싱, A/M/D, O-2 단일패스 맵, 첫 동기화 워터마크, **orphan checkout+reflog expire+gc로 lastCommit 소실 후 풀스캔 폴백·워터마크 복구**), `tests/database-migration.test.ts`(+3: id 보존·cross-file 에지 유지·재인덱스 5회 후 fts 1행·pragma ON), `tests/sync-strategies.test.ts`(O-2 단일패스 맵으로 갱신). 임시 리포는 `mkdtempSync`+`afterEach rmSync`로 정리.
+> - **검증**: 유닛 **418/418**(+13, 405→418), `tsc --noEmit` 클린, `scripts/integration-test.js` **69/69**. git 리포 기반 타이밍 민감성 위해 전체 2회 + 대상 스위트 추가 반복 그린 확인.
+> - **Phase 12 보존**: 12-4 H-7(`targetCommit`/실패 파일 워터마크 미전진)·12-6 O-2/O-3(`resolveNodeId`/CrossProjectResolver 배칭) 무변경 — 프리페치는 처리 파일 집합/순서를 바꾸지 않고(히스토리만 사전 조회) 기존 batch 테스트 전수 통과.
 
 ### Step 1 — H-4 + O-2: 트랜잭션 내 await 제거 + git 단일 패스
 - `src/indexer/update-pipeline.ts:273, 285, 349, 359`: 파일별 `getHistoryForFile` 호출을 `BEGIN` **이전** 프리페치로 이동 — `mapHistoryToProject`의 CHUNK_SIZE=20 청크 병렬 패턴 재사용. 트랜잭션 본문은 순수 동기로 유지.
@@ -281,7 +289,7 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 | 13-1 | C-1 Docker/배포 + Node 22 + O-6 + v9 A-8 잔존 | 1~2 | 중간 (빌드 체인) |
 | 13-2 | C-2, C-3, H-8, H-9 (크래시·보안) | 2 | 중간 (IPC 프로토콜 변경) |
 | 13-3 | H-2, H-1, A-11 (lock 단일성) | 2~3 | 높음 (동시성 코어) |
-| 13-4 | H-4, H-3, A-1, O-2 (인덱싱 정합성·트랜잭션) | 2~3 | 높음 (파이프라인 핵심) |
+| 13-4 **[DONE]** | H-4, H-3, A-1, O-2 (인덱싱 정합성·트랜잭션) | 3 | 높음 (파이프라인 핵심) |
 | 13-5 | H-5 (비-TS 메트릭 정확성) | 1~2 | 중간 (다운스트림 값 변동) |
 | 13-6 | H-6, A-9 (수명주기·운영 도구) | 1~2 | 중간 |
 | 13-7 | H-7, A-2, A-3 + CVE 의존성 업그레이드 | 2 | 중간 (native 메이저 업그레이드) |
