@@ -144,9 +144,18 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 ---
 
-## 6. Phase 13-5: 비-TS 언어 메트릭 정확성 (H-5)
+## 6. Phase 13-5: 비-TS 언어 메트릭 정확성 (H-5) — **[DONE]**
 
 **목표**: 12개 비-TS 언어의 cyclomatic complexity가 가짜 값(항상 1 또는 토큰 카운트)인 문제 — 경쟁력 직결 항목(6.4장).
+
+> **[DONE — 2026-06-13]** 1커밋으로 완료. 변경 요약:
+> - **H-5(1) tree-sitter 경로**: `MetricsCalculator.calculateCyclomaticComplexityTreeSitter(node, decisionPoints)` 신설 — tree-sitter `SyntaxNode`를 `.children`/`child(i)` 기반 반복 DFS로 순회하며 `decisionPoints`(provider.getDecisionPoints())에 든 노드 타입 출현 횟수를 카운트(CC = 결정점 + 1). `tree-sitter-parser.ts:112`를 이 경로로 배선, `(node, node.text)`로 TS-AST 폴백(native 포함)에 넘기던 호출 제거. 기존 `calculateCyclomaticComplexity(node)`는 TS-AST 전용(`sourceCode` 파라미터/native 분기 제거)으로 축소 — `typescript-parser.ts:509`가 인자 1개로 호출하므로 무영향.
+> - **문자열/주석 격리**: 실제 파싱 트리를 걷기 때문에 문자열 리터럴(`string`/`string_literal`)·주석(`comment`)은 결정점 노드 타입과 절대 매칭되지 않고 내부로 내려가지도 않음 → `"if for while"`/`// if for` 속 키워드 미카운트(언어별 회귀 테스트로 검증).
+> - **연산자 분별**: `binary_expression`/`boolean_operator`/`binary_operator`는 `operator` 필드가 단락 논리연산자(`&&`/`||`/`??`/`and`/`or`)일 때만 +1(산술/비교 미카운트). `switch_label`(Java)은 case 값이 있을 때만 +1(bare `default:` 제외).
+> - **디스크립터 보정**: Go `decisionPoints`의 `expression_case_clause`(문법에 없는 오타 — 항상 미매칭) → `expression_case`/`type_case`/`communication_case`로 수정 + `binary_expression` 추가. Rust에 `loop_expression`/`binary_expression`, Java에 `enhanced_for_statement`/`do_statement`/`switch_label`/`ternary_expression`/`binary_expression`, Python은 TS용 잘못된 토큰(`binary_expression`/`catch_clause`/`for_in_statement`/`if_expression`)을 실제 문법 노드(`elif_clause`/`except_clause`/`boolean_operator`)로 교체. (실제 grammar node-types를 노드 인스펙션으로 확인 후 반영.)
+> - **H-5(2) 네이티브 경로**: `src-native/src/lib.rs`의 `calculate_cyclomatic_complexity_native`(공백 분할 토큰 카운터) **삭제** — 이제 비-TS 포함 모든 언어가 JS-side AST 경로로 일원화돼 native CC 함수는 호출처가 없는 dead+broken 코드. `calculate_bulk_line_counts_parallel`(라인 수 전용)만 유지. **네이티브 빌드 검증**: 샌드박스에 Rust 툴체인 존재 → `cargo build --release` 성공으로 lib.rs 소스 정합성 확인(napi `.node` 패키징은 배포 시점 `napi build`로 수행). TS 측 native 로더(`metrics-calculator.ts`)도 더는 사용처가 없어 함께 제거 — CC는 항상 정확한 단일 JS 경로.
+> - **테스트**: `tests/metrics-calculator.test.ts` 신규(12건) — Rust/Go/Java/Python 손계산 CC(6/6/6/5 등 ≠1) + 문자열/주석 격리 + Go case-node 회귀(과거 오타 증명) + Java catch + Python except/match + TS AST 경로 불변(CC=5) + TS tree-sitter 디스크립터(CC=4). 유닛 **388/388**(+12), `tsc --noEmit` 클린.
+> - **다운스트림 스냅샷**: 비-TS CC가 1→실값으로 변하지만, 스냅샷/하드코딩 테스트 중 비-TS CC 실값에 의존하는 것은 없음(`tests/parser.test.ts.snap`은 capture 텍스트만, hotspots/dispatcher 테스트는 메트릭 *이름* 문자열만 검증) → 스냅샷 갱신 불필요(전수 확인).
 
 | 항목 | 파일 | 작업 |
 |------|------|------|

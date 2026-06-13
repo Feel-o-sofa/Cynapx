@@ -109,7 +109,7 @@ export class TreeSitterParser implements CodeParser {
                         last_updated_commit: commit,
                         version: version,
                         loc: node.endPosition.row - node.startPosition.row + 1,
-                        cyclomatic: MetricsCalculator.calculateCyclomaticComplexity(node, node.text),
+                        cyclomatic: MetricsCalculator.calculateCyclomaticComplexityTreeSitter(node, provider.getDecisionPoints()),
                         signature: paramsCapture ? `${name}${paramsCapture.node.text}` : undefined,
                         return_type: returnCapture ? returnCapture.node.text.replace(/^[:\s->]+/, '') : undefined,
                         modifiers: modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : undefined

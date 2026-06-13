@@ -16,7 +16,7 @@ export const goDescriptor: LanguageDescriptor = {
         ['method', 'method']
     ],
     defaultSymbolType: 'field',
-    decisionPoints: ['if_statement', 'for_statement', 'expression_case_clause'],
+    decisionPoints: ['if_statement', 'for_statement', 'expression_case', 'type_case', 'communication_case', 'binary_expression'],
     resolveImport(node, fromQName, edges) {
         const pathNode = node.descendantsOfType('interpreted_string_literal')[0];
         if (pathNode) {

@@ -17,7 +17,7 @@ export const rustDescriptor: LanguageDescriptor = {
         ['module', 'module']
     ],
     defaultSymbolType: 'field',
-    decisionPoints: ['if_expression', 'for_expression', 'while_expression', 'match_arm'],
+    decisionPoints: ['if_expression', 'for_expression', 'while_expression', 'loop_expression', 'match_arm', 'binary_expression'],
     resolveImport(node, fromQName, edges) {
         const pathNode = node.descendantsOfType('identifier').pop();
         if (pathNode) {

@@ -17,9 +17,8 @@ export const pythonDescriptor: LanguageDescriptor = {
     ],
     defaultSymbolType: 'field',
     decisionPoints: [
-        'if_statement', 'for_statement', 'while_statement', 'case_clause',
-        'catch_clause', 'conditional_expression', 'binary_expression',
-        'for_in_statement', 'if_expression'
+        'if_statement', 'elif_clause', 'for_statement', 'while_statement',
+        'case_clause', 'except_clause', 'conditional_expression', 'boolean_operator'
     ],
     resolveImport(node, fromQName, edges, captureName) {
         if (captureName === 'relation.inherits') {

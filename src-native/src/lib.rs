@@ -42,13 +42,13 @@ pub fn calculate_bulk_line_counts_parallel(file_paths: Vec<String>) -> Vec<i32> 
         .collect()
 }
 
-#[napi]
-pub fn calculate_cyclomatic_complexity_native(source: String, decision_points: Vec<String>) -> i32 {
-    let mut complexity = 1;
-    for word in source.split_whitespace() {
-        if decision_points.contains(&word.to_string()) {
-            complexity += 1;
-        }
-    }
-    complexity
-}
+// NOTE (Phase 13-5 / H-5): the previous `calculate_cyclomatic_complexity_native`
+// counted whitespace-split tokens against a decision-point word list. That was
+// fundamentally wrong — `if(x)` (no space) was missed, while `if` inside string
+// literals/comments was counted, and the keyword list never matched non-TS
+// grammar node types. Cyclomatic complexity for every language is now computed
+// AST-accurately on the JS side via
+// `MetricsCalculator.calculateCyclomaticComplexityTreeSitter()` walking the real
+// tree-sitter syntax tree, so the broken native token counter has been removed
+// to keep a single, correct code path. (`calculate_bulk_line_counts_parallel`
+// above remains the only native helper, and it is line-count only.)

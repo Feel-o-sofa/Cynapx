@@ -15,7 +15,7 @@ export const javaDescriptor: LanguageDescriptor = {
         ['interface', 'interface']
     ],
     defaultSymbolType: 'function',
-    decisionPoints: ['if_statement', 'for_statement', 'while_statement', 'catch_clause'],
+    decisionPoints: ['if_statement', 'for_statement', 'enhanced_for_statement', 'while_statement', 'do_statement', 'switch_label', 'catch_clause', 'ternary_expression', 'binary_expression'],
     resolveImport(node, fromQName, edges, captureName) {
         const text = node.text;
         if (captureName === 'relation.inherits') {
