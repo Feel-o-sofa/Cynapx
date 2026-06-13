@@ -11,7 +11,7 @@ import * as os from 'os';
 import * as fs from 'fs';
 import { McpServer } from './server/mcp-server';
 import { IpcCoordinator } from './server/ipc-coordinator';
-import { LockManager, LockHeldError } from './utils/lock-manager';
+import { LockManager, LockHeldError, CONNECT_MAX_RETRIES, decideConnectFailureAction } from './utils/lock-manager';
 import { findProjectAnchor, addToRegistry, getDatabasePath, getCentralStorageDir } from './utils/paths';
 import { getAuditLogger } from './utils/audit-logger';
 import { InteractiveShell } from './server/interactive-shell';
@@ -175,12 +175,81 @@ async function bootstrap() {
         }
     };
 
-    // Wire up the onInitialize callback: when initialize_project registers a NEW project,
-    // mount it and start its services immediately (no server restart required).
+    // A-11: per-project lock identity. The primary `lockManager` keys on the
+    // initial project path (or, in PENDING mode, the global central-storage
+    // dir). When initialize_project later registers a DIFFERENT project, the
+    // primary lock does NOT cover that project — a separate process started
+    // inside that project directory would hold *its* project lock and both
+    // would believe they are Host, double-indexing the same DB. We therefore
+    // acquire a project-specific lock per newly initialized project. If another
+    // live Host already owns it, we must not start host services for that
+    // project (avoid the double-indexing / watermark race); we log and skip,
+    // deferring ownership to the existing Host.
+    const projectLocks = new Map<string, LockManager>();
+    const primaryLockBase = path.resolve(lockBasePath);
+    // This Host's live IPC identity, captured whenever this process becomes (or
+    // is promoted to) Host. Project locks acquired on behalf of newly
+    // initialized projects reuse it so Terminals reading those locks reach us.
+    let hostIpcPort = 0;
+    let hostNonce = '';
     mcpServer.setOnInitialize(async (newPath: string) => {
         const ctx = await workspaceManager.mountProject(newPath);
-        await startHostServicesForContext(ctx);
+
+        // If this project is already covered by the primary lock (same path),
+        // no extra lock is needed — start services directly.
+        if (path.resolve(newPath) === primaryLockBase) {
+            await startHostServicesForContext(ctx);
+            return;
+        }
+
+        const projectLock = new LockManager(newPath);
+        try {
+            // Reuse this Host's IPC port/nonce as the project lock's identity so
+            // Terminals that read the project lock can still reach this Host.
+            await projectLock.acquire(hostIpcPort, hostNonce || crypto.randomBytes(32).toString('hex'));
+            projectLocks.set(ctx.projectHash, projectLock);
+            lifecycle.track({ dispose: () => projectLock.release() });
+            await startHostServicesForContext(ctx);
+        } catch (err) {
+            if (err instanceof LockHeldError) {
+                // Another live Host already owns this project — do NOT open the
+                // DB / start a pipeline here (that would be the A-11 split-brain).
+                console.error(
+                    `[!] Project ${newPath} is already hosted by PID ${err.lock.pid} ` +
+                    `(ipcPort=${err.lock.ipcPort}). Skipping host services to avoid double-indexing.`
+                );
+                return;
+            }
+            throw err;
+        }
     });
+
+    // H-1: a single heartbeat timer, started by whichever path becomes Host
+    // (acquireAndRun's fresh acquire OR attemptFailover's promotion). Tracked
+    // so it is cleared on shutdown and never duplicated.
+    let heartbeatTimer: NodeJS.Timeout | null = null;
+    const startHeartbeatTimer = () => {
+        if (heartbeatTimer) return;
+        heartbeatTimer = setInterval(() => {
+            lockManager.heartbeat().catch(err =>
+                console.error(`[!] Heartbeat write failed: ${err instanceof Error ? err.message : err}`));
+            // A-11: project locks acquired for initialize_project'd projects must
+            // also heartbeat, or they would look stale and be reclaimed.
+            for (const pl of projectLocks.values()) {
+                pl.heartbeat().catch(err =>
+                    console.error(`[!] Project heartbeat write failed: ${err instanceof Error ? err.message : err}`));
+            }
+        }, 30000);
+        lifecycle.track({ dispose: () => { if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; } } });
+    };
+
+    // H-1: cap the Terminal connect retry loop. A dead Host whose PID was reused
+    // by an unrelated process keeps getValidLock() returning a "live" lock
+    // forever; without a cap, acquireAndRun retries connect every 2s endlessly
+    // and the MCP server never becomes ready. After CONNECT_MAX_RETRIES failed
+    // connects, if the lock's heartbeat is also stale we forcibly reclaim it and
+    // re-run acquisition (escalation), instead of looping indefinitely.
+    let connectRetries = 0;
 
     // [Restoration 2] Robust Failover with Double-Check
     const attemptFailover = async () => {
@@ -205,6 +274,10 @@ async function bootstrap() {
                 throw err;
             }
 
+            // A-11: record the promoted Host's IPC identity for project locks.
+            hostIpcPort = ipcPort;
+            hostNonce = sessionNonce;
+
             // H-1: readyPromise is already resolved from this session's prior
             // Terminal-mode markReady(true), so executeTool would pass
             // waitUntilReady() immediately. Reset it BEFORE promoting so any
@@ -217,6 +290,12 @@ async function bootstrap() {
             try {
                 // Re-start services for all contexts
                 await startHostServices();
+                // H-1: a promoted Host MUST emit heartbeats too. Previously only
+                // acquireAndRun's fresh-acquire path started the timer, so a
+                // failover-promoted Host wrote no heartbeats — once heartbeat age
+                // is used for staleness validation, that omission would make the
+                // promoted Host look stale and invite split-brain.
+                startHeartbeatTimer();
             } finally {
                 mcpServer.markReady(true);
             }
@@ -231,13 +310,32 @@ async function bootstrap() {
             console.error(`[*] Found Host (PID: ${lock.pid}). Starting Terminal mode...`);
             try {
                 await ipcCoordinator.connectToHost(lock.ipcPort, lock.nonce);
+                connectRetries = 0;
                 mcpServer.setTerminal(ipcCoordinator);
                 ipcCoordinator.on('disconnected', () => {
                     console.error("[!] Connection lost. Retrying failover...");
                     attemptFailover().catch(() => process.exit(1));
                 });
             } catch (err) {
-                console.error(`[!] Stale lock? Retrying...`);
+                connectRetries++;
+                // H-1: PID-reuse defence. A dead Host whose PID was reused keeps
+                // getValidLock() returning a "live" lock forever; retrying
+                // connect to its dead port endlessly means the MCP server never
+                // becomes ready. Decide whether to reclaim (heartbeat stale, or
+                // retry cap reached) or back off and retry.
+                const action = decideConnectFailureAction(
+                    lockManager.isHeartbeatStale(lock),
+                    connectRetries,
+                );
+                if (action === 'reclaim') {
+                    console.error(`[!] Host PID ${lock.pid} unreachable (retries=${connectRetries}, heartbeatStale=${lockManager.isHeartbeatStale(lock)}) — reclaiming stale lock.`);
+                    lockManager.forceReclaim(lock.nonce);
+                    connectRetries = 0;
+                    const retryTimer = setTimeout(acquireAndRun, 200);
+                    lifecycle.track({ dispose: () => clearTimeout(retryTimer) });
+                    return;
+                }
+                console.error(`[!] Stale lock? Retrying (${connectRetries}/${CONNECT_MAX_RETRIES})...`);
                 const retryTimer = setTimeout(acquireAndRun, 2000);
                 lifecycle.track({ dispose: () => clearTimeout(retryTimer) });
                 return;
@@ -259,11 +357,14 @@ async function bootstrap() {
                 throw err;
             }
             console.error(`[*] Host mode active (Singleton Lock Acquired)`);
+            connectRetries = 0;
+            // A-11: record this Host's IPC identity for project locks.
+            hostIpcPort = port;
+            hostNonce = sessionNonce;
 
             await startHostServices();
 
-            const heartbeatTimer = setInterval(() => lockManager.heartbeat(), 30000);
-            lifecycle.track({ dispose: () => clearInterval(heartbeatTimer) });
+            startHeartbeatTimer();
             mcpServer.markReady(true);
         }
     };
