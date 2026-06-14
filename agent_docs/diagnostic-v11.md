@@ -102,12 +102,19 @@ SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LI
 - **테스트** (`tests/phase14-2-cross-project.test.ts`, 5건): (1) modern(v3) 원격 심볼 해석 + `EXPLAIN QUERY PLAN`에 SEARCH/`idx_nodes_symbol_name` 확인 + `SCAN nodes` 부재, (2) 글로벌 심볼 probe, (3) corrupt DB(nodes 테이블 부재, user_version=3 스푸핑) skip + good DB 정상 해석, (4) 절대값 user_version(999999999) crafted DB skip, (5) 구버전 폴백 1회 경고. 기존 `phase12-6-commit-b.test.ts`(O-3 배치 캐싱) 회귀 그린.
 - **검증**: `npx tsc --noEmit` clean, `npx vitest run` **530/530**(525 → +5).
 
-### A-4(v11). MCP 2025-11-25 task/progress 워크플로 미채택 — A-12 타임아웃은 keepalive로만 완화 **[이월: v10 A-12 후속, P13-8에서 후보 기록만]**
+### A-4(v11). MCP 2025-11-25 task/progress 워크플로 미채택 — A-12 타임아웃은 keepalive로만 완화 **[DONE — Phase 14-5]**
 **`src/server/ipc-coordinator.ts:43-67`, `src/server/api-server.ts`(MCP transport)**
 
 장기 작업(`initialize_project`, `backfill_history` 등)은 현재 (a) 도구별 IPC 타임아웃 테이블 + (b) Host→Terminal keepalive ping으로 "끊김"만 방지한다. **진행률/취소가 없다** — 사용자는 대형 리포 첫 인덱싱 중 진행 상황을 알 수 없고 중단도 못 한다. MCP 2025-11-25 stable이 도입한 **task 기반 워크플로(SEP-1686)** 가 이 문제의 표준 해법이다(streamed progress + cancellation). SDK는 이미 1.29.0(2025-11-25 스펙 지원)이라 **채택 기반은 갖춰져 있다**.
 
 **판정**: Phase 14에서 **단계적 채택 검토** — 전면 마이그레이션은 범위가 크므로, 우선 `notifications/progress`(progress token) 송신만 장기 도구에 배선하는 최소 변경을 1차로. 본격 task lifecycle은 그 다음. **테스트**: 장기 도구가 progress 통지를 emit하는지(mock transport).
+
+**해소 결과 [DONE — Phase 14-5]**:
+- **A-4(1) progress 송신** `[DONE]` (`src/server/tools/_progress.ts`(신규), `tool-dispatcher.ts`, `tools/{initialize-project,backfill-history,re-tag-project,check-consistency}.ts`): SDK 1.29.0 API 확인 결과 progress는 (a) 요청 `params._meta.progressToken`(`string|number`, `BaseRequestParamsSchema`)으로 opt-in되고 (b) 요청 핸들러의 `extra.sendNotification`(요청 상관 sender)으로 `{method:'notifications/progress', params:{progressToken, progress, total?, message?}}`를 송신하는 구조. `createProgressReporter(token, send)`가 token 미존재 시 `NOOP_PROGRESS`(emit 안 함, 스펙 준수)를 반환. `ToolHandler.execute(args, deps, progress?)`로 reporter를 옵셔널 주입(기존 핸들러 무영향). 장기 4개 도구가 단계 경계(검증→등록→인덱싱→활성 등)에서 coarse progress emit. **결과 payload는 불변**(progress는 순수 부가 통지). emit 오류는 swallow(best-effort).
+- **A-4(2) IPC 경유 진행률** `[SKIP — 후속 후보]`: Host↔Terminal IPC 프레이밍이 `id` 상관 request/response라 out-of-band progress 라인 demux + Terminal MCP 요청 컨텍스트 back-correlation이 필요 — 보안 민감 계층에 유의미한 복잡도 추가로 판단해 이번 범위 제외. keepalive ping(A-12)이 Terminal 위임 장기 호출의 연결 유지를 이미 담당하므로 Terminal-mode 도구는 progress 없이 동작. 후속 후보로 명시.
+- **A-4(3) 문서/주석** `[DONE]` (`src/server/ipc-coordinator.ts:43-46`): "future direction" 주석을 1차 progress 배선 완료 + A-4(2) skip 사유 + 전면 task lifecycle(SEP-1686)/IPC relay 후속 명시로 갱신.
+- **테스트** (`tests/phase14-5-progress.test.ts`, +13건): (1) `createProgressReporter` token 미존재 시 no-op·존재 시 emit·숫자 token·sender 오류 swallow·`NOOP_PROGRESS`, (2) `executeTool` 장기 도구 token 제공 시 emit·미제공 시 emit 안 됨, (3) token 유무에 payload byte 동일(회귀), (4) `initialize_project` 단조 증가 progress(total=4), (5) `CallToolRequest` 핸들러가 `_meta.progressToken`에서 token 도출 + `extra.sendNotification` 라우팅·미존재 시 미송신.
+- **검증**: `npx tsc --noEmit` clean, `npx vitest run` **558/558**(545 → +13), `npm run build && node scripts/integration-test.js` **76/76**(Docker skip), `initialize_project` 정상 완료.
 
 ### A-5(v11). 클러스터링 라벨 전파가 `Math.random()` 비결정적 — 재현 불가·테스트 취약 **[DONE — Phase 14-4]**
 **`src/graph/graph-engine.ts:192-196`**
