@@ -33,7 +33,7 @@ L-6 (Node 24 tree-sitter 빌드)     ──추적만──→  [node-tree-sitter
 
 ---
 
-## 2. Phase 16-1: fast-uri override floor 명시성 복원 + 추적 상태 갱신 (M-1 v13) — 동작 무변경·저위험
+## 2. Phase 16-1: fast-uri override floor 명시성 복원 + 추적 상태 갱신 (M-1 v13) — 동작 무변경·저위험 [DONE]
 
 **목표**: diagnostic-v13의 유일한 코드-변경 항목을 처리한다. (a) `overrides.fast-uri`의 선언 floor `^3.1.1`을 `^3.1.2`로 올려 CVE-2026-6322(host confusion, ≤3.1.1 영향, 3.1.2 패치) 패치 버전에 못 박는다 — 실제 설치본은 이미 3.1.2라 **위험은 0이고, "override floor ≥ 알려진 패치 버전" 불변을 선언 수준에서 복원**하는 명시성 개선이다. (b) 추적 항목(Miasma 공급망 포스처, MCP SDK v2 대기, Node 24 빌드)의 현 상태를 진단 문서에 갱신해 다음 사이클 출발점을 명확히 한다.
 
@@ -78,9 +78,9 @@ L-6 (Node 24 tree-sitter 빌드)     ──추적만──→  [node-tree-sitter
 
 | Phase | 핵심 항목 | 커밋 수 | 리스크 |
 |-------|-----------|---------|--------|
-| 16-1 | M-1 fast-uri override floor `^3.1.1`→`^3.1.2`(CVE-2026-6322 패치 못 박기) + L-2/L-3/L-6 추적 상태 갱신 | 1 | 매우 낮음 (override 한 글자, 설치본·동작 불변) |
+| 16-1 | M-1 fast-uri override floor `^3.1.1`→`^3.1.2`(CVE-2026-6322 패치 못 박기) + L-2/L-3/L-6 추적 상태 갱신 [DONE] | 1 | 매우 낮음 (override 한 글자, 설치본·동작 불변) |
 
-**총 1개 커밋.** Phase 15 대비도 **더 작다** — 코드 변경이 필요한 항목이 M-1 한 건(동작 무변경)뿐이고 나머지는 전부 추적/이연이다. **이번 사이클의 본질은 코드 결함 수정이 아니라 (1) 공급망 위생 명시성 한 칸 복원 + (2) 유지보수 모드 포스처 선언 + (3) 두 외부 신호(Miasma, MCP SDK v2)의 추적 상태 고정**이다. Phase 16 종료 시 `agent_docs/diagnostic-v13.md`에 [DONE] 마킹.
+**총 1개 커밋.** Phase 16 전체 완료 — 다음 사이클은 신규 진단(diagnostic-v14.md) + phase17-plan.md 수립. Phase 15 대비도 **더 작다** — 코드 변경이 필요한 항목이 M-1 한 건(동작 무변경)뿐이고 나머지는 전부 추적/이연이다. **이번 사이클의 본질은 코드 결함 수정이 아니라 (1) 공급망 위생 명시성 한 칸 복원 + (2) 유지보수 모드 포스처 선언 + (3) 두 외부 신호(Miasma, MCP SDK v2)의 추적 상태 고정**이다. Phase 16 종료 시 `agent_docs/diagnostic-v13.md`에 [DONE] 마킹.
 
 ---
 

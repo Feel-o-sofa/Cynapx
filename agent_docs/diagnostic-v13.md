@@ -24,7 +24,7 @@
 
 ## 3. MEDIUM — 아키텍처/정합성 개선 (M)
 
-### M-1(v13). fast-uri override 선언 floor(`^3.1.1`)가 CVE-2026-6322(host confusion) 패치 버전(3.1.2)보다 낮음 — lockfile은 3.1.2지만 floor 명시성 갭
+### M-1(v13). fast-uri override 선언 floor(`^3.1.1`)가 CVE-2026-6322(host confusion) 패치 버전(3.1.2)보다 낮음 — lockfile은 3.1.2지만 floor 명시성 갭 [DONE — Phase 16-1]
 **`package.json:69-74` (`overrides.fast-uri: "^3.1.1"`), 잠재 라우트: `src/server/api-server.ts`(SDK transport import)**
 
 진단 일자 신규 advisory **CVE-2026-6322**(fast-uri host confusion via percent-encoded authority delimiters: `http://trusted.com%40evil.com/`이 정규화 시 host=`evil.com`/userinfo=`trusted.com`으로 재해석 → 도메인 검증 우회)는 **fast-uri ≤ 3.1.1 영향, 3.1.2에서 패치**(출처 직접 확인: GHSA-v39h-62p7-jpjc / CVE-2026-6322, CVSS 3.1 LOW-MEDIUM, CWE-436 Interpretation Conflict). Phase 14-1에서 추가한 fast-uri 관련 advisory(CVE-2026-6321 path traversal, ≤3.1.0 영향)는 floor `^3.1.1`로 충분했지만, **그 후 CVE-2026-6322가 3.1.1까지 영향 범위를 넓혔다.**
@@ -35,18 +35,20 @@
 
 **판정**: 코드 결함이 아니고 실제 설치본은 이미 안전하므로 **LOW 경계의 MEDIUM 하단**이다 — 단일 한 글자 변경(`^3.1.1` → `^3.1.2`)으로 선언적 floor를 CVE-2026-6322 패치에 못 박아 "override floor ≥ 알려진 패치 버전" 불변을 복원한다. qs(`^6.15.2`)·hono(`^4.12.21`)·tree-sitter(`^0.25.0`) floor는 각자 패치/최신을 이미 만족하므로 변경 불필요(확인). **테스트**: `npm ls fast-uri`가 `3.1.2`(또는 이상)인지, override 변경 후 `npm audit --omit=dev` **0 vulnerabilities 유지**, `tests/api-server-http.test.ts`·`tests/mcp-server.test.ts` transport 회귀 그린.
 
+**해결 (Phase 16-1)**: `package.json:71` `overrides.fast-uri`를 `^3.1.1` → `^3.1.2`로 변경. `npm install` 재해석 후 `npm ls fast-uri` = `3.1.2 overridden`, `npm audit --omit=dev` = 0 vulnerabilities(불변), `npx tsc --noEmit` 클린, `npx vitest run` 563/563(불변, 동작 무변경 확인). M-1 및 흡수 항목 L-1(v13) 모두 해소.
+
 ---
 
 ## 4. 최적화 (LOW)
 
 | # | 위치 | 내용 |
 |---|------|------|
-| L-1(v13) | `package.json` overrides | M-1(fast-uri floor `^3.1.1`→`^3.1.2`)을 LOW로도 추적 가능 — 실설치본 이미 3.1.2라 위험 0, 선언 명시성만 보강. M-1에서 처리하면 본 항목 흡수 |
-| L-2(v13) | `package.json` (native deps), CI / Dockerfile | **Miasma / Phantom Gyp 공급망 캠페인(2026-06-03) 포스처 추적.** binding.gyp가 `--ignore-scripts`를 우회해 node-gyp 빌드 시점에 임의 코드를 실행하는 install-time 웜. 컴프로마이즈 57개 패키지(autotel/awaitly/executable-stories/node-env-resolver/wrangler-deploy/vapi-ai 계열)는 **Cynapx 의존 트리에 0건**(직접 대조), Cynapx native 의존(better-sqlite3 12.10.0 = clean 최신, tree-sitter 12 grammar)도 전부 clean. **즉각 조치 불필요** — CI가 `npm ci`(lockfile 고정 install)를 쓰고 audit 게이트(P14-1)가 있으므로 1차 방어선은 있다. 추적 항목: (a) lockfile 무결성(`npm ci`만 사용, `npm install` 금지)·(b) 의존 추가 시 binding.gyp 검토·(c) audit 게이트 유지. **verdict: 추적만**(6.3 상세) |
-| L-3(v13) | `src/server/api-server.ts` (session-id StreamableHTTP) | MCP stateless transport(2026-07-28 RC) 충돌 표면 — SDK v2 업그레이드 시 회귀 표면. SDK v2 **여전히 pre-alpha**(npm `latest`=1.29.0, v2.x 미배포 직접 확인) → **계속 이연**, P15-3의 `handleMcp()` 설계 메모가 출발점 |
+| L-1(v13) | `package.json` overrides | M-1(fast-uri floor `^3.1.1`→`^3.1.2`)을 LOW로도 추적 가능 — 실설치본 이미 3.1.2라 위험 0, 선언 명시성만 보강. M-1에서 처리하면 본 항목 흡수 **[DONE — Phase 16-1, M-1과 함께 해소]** |
+| L-2(v13) | `package.json` (native deps), CI / Dockerfile | **Miasma / Phantom Gyp 공급망 캠페인(2026-06-03) 포스처 추적.** binding.gyp가 `--ignore-scripts`를 우회해 node-gyp 빌드 시점에 임의 코드를 실행하는 install-time 웜. 컴프로마이즈 57개 패키지(autotel/awaitly/executable-stories/node-env-resolver/wrangler-deploy/vapi-ai 계열)는 **Cynapx 의존 트리에 0건**(직접 대조), Cynapx native 의존(better-sqlite3 12.10.0 = clean 최신, tree-sitter 12 grammar)도 전부 clean. **즉각 조치 불필요** — CI가 `npm ci`(lockfile 고정 install)를 쓰고 audit 게이트(P14-1)가 있으므로 1차 방어선은 있다. 추적 항목: (a) lockfile 무결성(`npm ci`만 사용, `npm install` 금지)·(b) 의존 추가 시 binding.gyp 검토·(c) audit 게이트 유지. **verdict: 추적만**(6.3 상세) — **Phase 16-1 재확인(2026-06-14)**: 상태 불변, Cynapx 의존 트리 영향 0건 유지, `npm ci`+audit 게이트 1차 방어선 유효. 다음 사이클도 추적만 |
+| L-3(v13) | `src/server/api-server.ts` (session-id StreamableHTTP) | MCP stateless transport(2026-07-28 RC) 충돌 표면 — SDK v2 업그레이드 시 회귀 표면. SDK v2 **여전히 pre-alpha**(npm `latest`=1.29.0, v2.x 미배포 직접 확인) → **계속 이연**, P15-3의 `handleMcp()` 설계 메모가 출발점 — **Phase 16-1 재확인(2026-06-14)**: npm `latest` 여전히 1.29.0, v2.x 미배포. 상태 불변, 계속 이연 |
 | L-4(v13) | `src/server/ipc-coordinator.ts` (전체) | IPC JSON 평문 직렬화 — MessagePack 미전환(v8→v13 이월). **성능 문제 미관측, verdict: 계속 보류.** 메시지가 작고(주로 메타데이터) round-trip이 드물어 직렬화가 병목 아님. 기록만 유지 |
 | L-5(v13) | `src/graph/graph-engine.ts` | 클러스터링 본격 서브그래프 파티셔닝(O-5) — 100k+ 노드 실측 시 재검토(**verdict: 계속 이연**). M-4(v12)의 count-first 가드가 OOM 1차 방어 |
-| L-6(v13) | CI / Dockerfile | Node 24 + tree-sitter 0.25.x 빌드 fragility(C++20/prebuild 부재) — 상류 이슈 [node-tree-sitter#268]가 **진단 일자 여전히 open**(직접 확인). CI `build-and-test`가 Node 22/24 매트릭스에서 `npm test`를 돌리고 **현재 그린**이나, Node 24 LTS 전환 전 prebuild 가용성 재확인 필요. **추적만**(O-6 v12 승계) |
+| L-6(v13) | CI / Dockerfile | Node 24 + tree-sitter 0.25.x 빌드 fragility(C++20/prebuild 부재) — 상류 이슈 [node-tree-sitter#268]가 **진단 일자 여전히 open**(직접 확인). CI `build-and-test`가 Node 22/24 매트릭스에서 `npm test`를 돌리고 **현재 그린**이나, Node 24 LTS 전환 전 prebuild 가용성 재확인 필요. **추적만**(O-6 v12 승계) — **Phase 16-1 재확인(2026-06-14)**: node-tree-sitter#268 여전히 open, Node 22/24 CI 그린 유지. 상태 불변, 다음 사이클도 추적만 |
 
 ---
 
