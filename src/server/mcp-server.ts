@@ -19,7 +19,10 @@ import { registerResourceHandlers } from './resource-provider';
 import { registerPromptHandlers } from './prompt-provider';
 import { HealthMonitor } from './health-monitor';
 import { registerToolHandlers, ToolDeps, executeTool } from './tool-dispatcher';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('MCP');
 const CYNAPX_INSTRUCTIONS = `
 # Cynapx Operator Manual (v1.0.6)
 You are operating the Cynapx high-performance code knowledge engine. Adhere to these protocol invariants:
@@ -85,7 +88,7 @@ export class McpServer {
     public promoteToHost() {
         this.isTerminal = false;
         this.terminalCoordinator = undefined;
-        console.error("[McpServer] Promoted to Host mode.");
+        log.error("[McpServer] Promoted to Host mode.");
     }
 
     public markReady(ready: boolean) {

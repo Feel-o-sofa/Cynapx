@@ -23,6 +23,9 @@ import * as os from 'os';
 import * as path from 'path';
 import { getCentralStorageDir } from '../utils/paths';
 import { getVersion } from '../utils/version';
+import { Logger } from '../utils/logger';
+
+const log = new Logger('API');
 
 // O-12: redact sensitive fields before logging request payloads.
 // L4: standalone `auth` keys (underscore-delimited, so `author` is NOT
@@ -211,9 +214,9 @@ export class ApiServer {
             try {
                 fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
                 fs.writeFileSync(tokenFile, generatedToken, { encoding: 'utf8', mode: 0o600 });
-                console.error(`[cynapx] WARNING: No KNOWLEDGE_TOOL_TOKEN set. Generated temporary token written to: ${tokenFile}`);
+                log.warn('No KNOWLEDGE_TOOL_TOKEN set — generated a temporary token', { tokenFile });
             } catch (err) {
-                console.error(`[cynapx] WARNING: No KNOWLEDGE_TOOL_TOKEN set. Failed to persist generated token: ${err}`);
+                log.warn('No KNOWLEDGE_TOOL_TOKEN set — failed to persist generated token', { detail: String(err) });
             }
         }
         
@@ -227,10 +230,10 @@ export class ApiServer {
                 const duration = Date.now() - start;
                 const status = res.statusCode;
                 // A-2: mask the sessionId query param so it never lands in logs.
-                console.error(`[${new Date().toISOString()}] ${method} ${maskSessionInUrl(url)} from ${remoteAddr} - Status: ${status} (${duration}ms)`);
+                log.info('request', { method, url: maskSessionInUrl(url), remoteAddr, status, durationMs: duration });
                 if (method === 'POST' && body && Object.keys(body).length > 0) {
                     if (process.env.CYNAPX_LOG_PAYLOADS === '1') {
-                        console.error(`  Payload: ${JSON.stringify(redactSensitiveFields(body)).substring(0, 200)}`);
+                        log.debug('request payload', { payload: JSON.stringify(redactSensitiveFields(body)).substring(0, 200) });
                     }
                 }
             });
@@ -310,7 +313,7 @@ export class ApiServer {
 
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         this.app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
-            console.error('[API] Unhandled error:', err?.message ?? err);
+            log.error('Unhandled error', { detail: err?.message ?? String(err) });
             if (!res.headersSent) {
                 res.status(500).json({ error_code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.' });
             }
@@ -567,7 +570,7 @@ export class ApiServer {
         const server = this.httpsOptions ? https.createServer(this.httpsOptions, this.app) : http.createServer(this.app);
         server.listen(port, bindAddress, () => {
             const protocol = this.httpsOptions ? 'HTTPS' : 'HTTP';
-            console.log(`API Server listening on ${bindAddress}:${port} (${protocol})`);
+            log.info('API server listening', { bindAddress, port, protocol });
             // SEC-M-3: store port file in central storage dir (~/.cynapx/) instead of cwd to avoid git exposure
             try {
                 const portFile = path.join(getCentralStorageDir(), 'api-server.port');

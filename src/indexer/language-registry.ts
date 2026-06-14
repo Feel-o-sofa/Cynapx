@@ -7,7 +7,10 @@ import { LanguageProvider } from './types';
 import { LanguageDescriptor, LANGUAGE_DESCRIPTORS, createLanguageProvider } from './languages';
 import * as path from 'path';
 import * as fs from 'fs';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('LanguageRegistry');
 export class LanguageRegistry {
     private static instance: LanguageRegistry;
     private providers: Map<string, LanguageProvider> = new Map();
@@ -56,7 +59,7 @@ export class LanguageRegistry {
                     }
                 }
             } catch (err) {
-                console.error(`LanguageRegistry: Error scanning directory ${dir}: ${err}`);
+                log.error(`LanguageRegistry: Error scanning directory ${dir}: ${err}`);
             }
         }
     }
@@ -82,10 +85,10 @@ export class LanguageRegistry {
                 }
             }
             if (registeredCount > 0) {
-                console.error(`LanguageRegistry: Registered ${registeredCount} provider(s) from ${fullPath}`);
+                log.error(`LanguageRegistry: Registered ${registeredCount} provider(s) from ${fullPath}`);
             }
         } catch (err) {
-            console.error(`LanguageRegistry: Failed to load plugin ${fullPath}: ${err}`);
+            log.error(`LanguageRegistry: Failed to load plugin ${fullPath}: ${err}`);
         }
     }
 
@@ -125,7 +128,7 @@ export class LanguageRegistry {
                 this.register(provider);
                 return provider;
             } catch (err) {
-                console.error(`LanguageRegistry: Failed to lazy load provider for .${ext}: ${err}`);
+                log.error(`LanguageRegistry: Failed to lazy load provider for .${ext}: ${err}`);
             }
         }
 

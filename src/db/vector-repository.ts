@@ -4,7 +4,10 @@
  * See LICENSE in the project root for license information.
  */
 import { Database } from 'better-sqlite3';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('VectorRepo');
 export interface VectorSearchResult {
     id: number;
     distance: number;
@@ -26,7 +29,7 @@ export class VectorRepository {
             if (schema && schema.sql) {
                 const match = schema.sql.match(/float\[(\d+)\]/);
                 if (match && parseInt(match[1]) !== embedding.length) {
-                    console.error(`[VectorRepo] Dimension mismatch: DB expects ${match[1]}, query has ${embedding.length}. Skipping vector search.`);
+                    log.error(`[VectorRepo] Dimension mismatch: DB expects ${match[1]}, query has ${embedding.length}. Skipping vector search.`);
                     return [];
                 }
             }

@@ -262,7 +262,9 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 - O-11: `src/utils/file-filter.ts:19-28` — 중첩 .gitignore 지원.
 - O-12: `src/server/tools/search-symbols.ts:15-28` — 전 컨텍스트 `EngineNotReadyError` 시 빈 결과 대신 에러 반환.
 
-### 커밋 D — 구조화 로깅 배선 (v8 이월 — 채택)
+### 커밋 D — 구조화 로깅 배선 (v8 이월 — 채택) — **[DONE]**
+> **[DONE — Phase 13-8 커밋 D]** dead code였던 `src/utils/logger.ts`(Logger)를 17개 라이브러리 파일에 배선 — embedding-manager/ipc-coordinator/workspace-manager/health-monitor/mcp-server/dependency-parser/language-registry/worker-pool/index-worker/update-pipeline/git-service/consistency-checker/file-watcher/vector-repository/lock-manager/lifecycle-manager/api-server. 각 파일에 모듈 레벨 `const log = new Logger('Ctx')` + 진단성 `console.*`를 `log.{info,warn,error,debug}`로 변환(2인자 `console.x(msg, err)` 형태는 `{ detail }` 구조화 필드로 흡수). Logger를 보강: 모든 출력은 **stderr 전용**(stdout은 MCP stdio 프로토콜 예약), `data` 내 Error 값을 `{message,name}`으로 정규화(JSON `{}` 직렬화 손실 방지). bootstrap에 `CYNAPX_LOG_LEVEL`(debug|info|warn|error|silent) → `Logger.setGlobalLevel()` 배선. **의도적 미변환(판단)**: `cli/admin.ts`(73 console.log — 별도 admin CLI의 사용자 대상 대시보드 UI, MCP stdio와 무관), `server/interactive-shell.ts`(REPL 사용자 출력/배너), `bootstrap.ts` 시작 배너·`[*]`/`[!]` 운영자 상태 라인(이미 stderr + 기존 MCP-mode `console.log=console.error` 가드로 stdout 오염 차단)과 one-shot CLI 결과 stdout 출력(파이프 의도). 테스트: `tests/phase13-8-commit-d.test.ts`(6 — stderr 전용/레벨 필터/SILENT/Error 정규화 + 17개 배선 파일의 stdout 비오염 소스 가드). 507/507, tsc clean, 통합 74/74.
+
 - `src/utils/logger.ts`(작성 완료, 사용처 0곳 — dead code)를 22개 파일 215곳의 `console.*`에 배선. MCP stdio 오염 방지를 위해 stderr 출력 유지, 레벨/컨텍스트 필드 표준화. **앞 커밋들과의 diff 충돌을 피하기 위해 Phase 13 코드 변경의 마지막 커밋으로 수행.**
 
 **테스트**:
@@ -271,7 +273,7 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 - 커밋 C: 각 항목 단위 회귀 (Phase 12-6 커밋 A/B/C 테스트 패턴 재사용).
 - 커밋 D: logger 배선 후 기존 로그 어서션 테스트 갱신 + stdio 비오염 검증.
 
-**산출물**: 4개 커밋 (A/B/C/D). **리스크: 중간** (A-4/A-5는 스키마 마이그레이션 동반, D는 변경 파일 수가 많으나 기계적).
+**산출물**: 4개 커밋 (A/B/C/D). **리스크: 중간** (A-4/A-5는 스키마 마이그레이션 동반, D는 변경 파일 수가 많으나 기계적). **Phase 13-8 전체 [DONE]** — 커밋 A/B/C/D 모두 완료(507/507 테스트, tsc clean, 통합 74/74).
 
 ---
 

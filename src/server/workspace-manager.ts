@@ -23,7 +23,10 @@ import { GitService } from '../indexer/git-service';
 import { UpdatePipeline } from '../indexer/update-pipeline';
 import { SecurityProvider } from '../utils/security';
 import { Disposable } from '../types';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('Workspace');
 export interface EngineContext {
     projectPath: string;
     projectHash: string;
@@ -138,11 +141,11 @@ export class WorkspaceManager {
                         project: ctx.projectPath,
                         reason: `version mismatch: ${storedVersion} → ${currentVersion}`
                     });
-                    console.error(
-                        `[WorkspaceManager] Version mismatch for ${ctx.projectPath}: ` +
-                        `stored=${storedVersion}, current=${currentVersion}. ` +
-                        `Triggering full reindex.`
-                    );
+                    log.warn('Version mismatch — triggering full reindex', {
+                        project: ctx.projectPath,
+                        storedVersion,
+                        currentVersion
+                    });
                     // Purge existing index data
                     db.transaction(() => {
                         db.prepare('DELETE FROM edges').run();
@@ -158,7 +161,7 @@ export class WorkspaceManager {
             }
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
-            console.error(`[WorkspaceManager] Version check failed (non-fatal): ${msg}`);
+            log.error(`[WorkspaceManager] Version check failed (non-fatal): ${msg}`);
         }
 
         // Load optional custom architecture rules
@@ -168,7 +171,7 @@ export class WorkspaceManager {
                 ctx.archEngine.loadRules(archRulesPath);
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
-                console.error(`[WorkspaceManager] Warning: failed to load arch-rules.json: ${msg}`);
+                log.error(`[WorkspaceManager] Warning: failed to load arch-rules.json: ${msg}`);
             }
         }
 
@@ -207,7 +210,7 @@ export class WorkspaceManager {
             });
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
-            console.error(`[WorkspaceManager] onIndexComplete failed (non-fatal): ${msg}`);
+            log.error(`[WorkspaceManager] onIndexComplete failed (non-fatal): ${msg}`);
         }
     }
 
@@ -261,17 +264,17 @@ export class WorkspaceManager {
 
         // 1. Stop the file watcher (no further debounced flushes).
         try { ctx.watcher?.dispose(); } catch (err) {
-            console.error(`[WorkspaceManager] watcher dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+            log.error(`[WorkspaceManager] watcher dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
         }
 
         // 2. Terminate the worker pool (reject any in-flight/queued parse jobs).
         try { ctx.workerPool?.dispose(); } catch (err) {
-            console.error(`[WorkspaceManager] workerPool dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+            log.error(`[WorkspaceManager] workerPool dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
         }
 
         // 3. Close the DB connection LAST — after everything that might write.
         try { ctx.dbManager?.dispose(); } catch (err) {
-            console.error(`[WorkspaceManager] dbManager dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+            log.error(`[WorkspaceManager] dbManager dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
         }
 
         // 4. Null every field that wraps the closed connection / disposed

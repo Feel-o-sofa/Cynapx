@@ -9,7 +9,10 @@ import { NodeRepository } from '../db/node-repository';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import * as readline from 'readline';
 import * as path from 'path';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('Embedding');
 /**
  * C-1(3)/P13-1: probes whether a command is runnable (used to pick the
  * Python interpreter). Kept separate so tests can inject a fake probe.
@@ -95,7 +98,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
         this.fallbackMode = true;
         if (!this.fallbackWarned) {
             this.fallbackWarned = true;
-            console.error(`[Embedding] WARNING: ${reason}. Switching to FTS5 fallback mode. Semantic search disabled.`);
+            log.error(`[Embedding] WARNING: ${reason}. Switching to FTS5 fallback mode. Semantic search disabled.`);
         }
         const pending = this.pendingRequest;
         this.pendingRequest = null;
@@ -114,7 +117,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
             this.ready = true;
             this.restartAttempts = 0; // 정상 기동 시 재시도 카운터 초기화
             this.dimensions = data.dim;
-            console.error(`[Embedding] Python Sidecar Ready (${data.device}, Dim: ${this.dimensions})`);
+            log.error(`[Embedding] Python Sidecar Ready (${data.device}, Dim: ${this.dimensions})`);
         } else if (data.vectors || data.vector || data.error) {
             // A-7: a data-bearing response. Only deliver it to the pending
             // request if its id matches (or the sidecar omitted an id, for
@@ -127,7 +130,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
                 // No outstanding request — nothing legitimately expects
                 // this response. Discard.
             } else if (typeof data.id === 'number' && data.id !== pending.id) {
-                console.error(`[Embedding] Discarding stale sidecar response (id=${data.id}, expected=${pending.id}).`);
+                log.error(`[Embedding] Discarding stale sidecar response (id=${data.id}, expected=${pending.id}).`);
             } else {
                 this.pendingRequest = null;
                 if (data.error) {
@@ -163,7 +166,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
         // server is launched from another directory.
         const scriptPath = path.resolve(__dirname, '..', '..', 'scripts', 'cynapx_embedder.py');
 
-        console.error(`[Embedding] Starting Python ML Sidecar (${this.pythonCmd})...`);
+        log.error(`[Embedding] Starting Python ML Sidecar (${this.pythonCmd})...`);
         this.child = spawn(this.pythonCmd, [scriptPath]);
 
         // M-7: Close any existing readline interface before creating a new one
@@ -173,7 +176,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
         }
         this.rl = readline.createInterface({ input: this.child.stdout! });
         const reader = this.rl;
-        this.child.stderr!.on('data', (d) => console.error(`[Python-ML] ${d.toString().trim()}`));
+        this.child.stderr!.on('data', (d) => log.error(`[Python-ML] ${d.toString().trim()}`));
 
         reader.on('line', (line) => {
             try {
@@ -201,7 +204,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
             if (this.restartAttempts < PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS) {
                 const delay = Math.pow(2, this.restartAttempts) * 1000; // 1s, 2s, 4s
                 this.restartAttempts++;
-                console.error(`[Embedding] Restarting Python Sidecar (attempt ${this.restartAttempts}/${PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS}) in ${delay}ms...`);
+                log.error(`[Embedding] Restarting Python Sidecar (attempt ${this.restartAttempts}/${PythonEmbeddingProvider.MAX_RESTART_ATTEMPTS}) in ${delay}ms...`);
                 setTimeout(() => { this.start(); }, delay);
             } else {
                 // H-2(3): 재시도 소진 시 FTS5 폴백 모드 활성화
@@ -212,13 +215,13 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
         // C-2 (diagnostic-v10): without this listener a spawn failure crashes
         // the whole host process (uncaughtException). Mirror the exit handler.
         this.child.on('error', (err) => {
-            console.error(`[Embedding] Python Sidecar spawn error: ${err.message}`);
+            log.error(`[Embedding] Python Sidecar spawn error: ${err.message}`);
             handleChildGone();
         });
 
         this.child.on('exit', (code) => {
             if (code !== 0 && code !== null) {
-                console.error(`[Embedding] Python Sidecar crashed with code ${code}`);
+                log.error(`[Embedding] Python Sidecar crashed with code ${code}`);
             }
             handleChildGone();
         });
@@ -255,7 +258,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
                 return [];
             }
             if (waitCount > 0 && waitCount % 50 === 0) {
-                console.error(`[Embedding] Still waiting for ML Sidecar... (${waitCount/10}s)`);
+                log.error(`[Embedding] Still waiting for ML Sidecar... (${waitCount/10}s)`);
             }
             await new Promise(r => setTimeout(r, 100));
             if (++waitCount > maxWait) throw new Error("Python sidecar startup timed out.");
@@ -393,7 +396,7 @@ export class EmbeddingManager {
     public async refreshAll(): Promise<void> {
         // If provider entered fallback mode, switch to NullEmbeddingProvider
         if (this.provider instanceof PythonEmbeddingProvider && this.provider.fallbackMode) {
-            console.error('[EmbeddingManager] Primary provider in fallback mode — switching to NullEmbeddingProvider');
+            log.error('[EmbeddingManager] Primary provider in fallback mode — switching to NullEmbeddingProvider');
             this.provider = new NullEmbeddingProvider();
             this._available = false;
             this.onProviderFallback?.();
@@ -413,8 +416,7 @@ export class EmbeddingManager {
         try {
             const schema = this.db.prepare("SELECT sql FROM sqlite_master WHERE name = 'node_embeddings'").get() as { sql?: string } | undefined;
             if (schema?.sql && !schema.sql.includes(`float[${dim}]`)) {
-                console.error(`[EmbeddingManager] Dimension mismatch detected. Recreating node_embeddings table (Target: ${dim})...
-`);
+                log.warn(`[EmbeddingManager] Dimension mismatch detected. Recreating node_embeddings table (Target: ${dim}).`);
                 this.db.exec('DROP TABLE IF EXISTS node_embeddings');
                 this.db.exec(`CREATE VIRTUAL TABLE node_embeddings USING vec0(rowid INTEGER PRIMARY KEY, embedding float[${dim}])`);
                 this.db.exec('DELETE FROM embedding_metadata');
@@ -431,7 +433,7 @@ export class EmbeddingManager {
 
         if (nodesToProcess.length === 0) return;
 
-        console.error(`[EmbeddingManager] Refreshing embeddings for ${nodesToProcess.length} nodes...`);
+        log.error(`[EmbeddingManager] Refreshing embeddings for ${nodesToProcess.length} nodes...`);
 
         const batchSize = 50;
         for (let i = 0; i < nodesToProcess.length; i += batchSize) {
@@ -443,7 +445,7 @@ export class EmbeddingManager {
                 // L1: fallback mode now returns [] instead of null — treat
                 // both as "no embeddings produced" and skip the batch.
                 if (!vectors || vectors.length === 0) {
-                    console.error('[EmbeddingManager] Batch returned no vectors — skipping (fallback mode)');
+                    log.error('[EmbeddingManager] Batch returned no vectors — skipping (fallback mode)');
                     continue;
                 }
 
@@ -459,12 +461,12 @@ export class EmbeddingManager {
                     });
                 })();
 
-                console.error(`[EmbeddingManager] Progress: ${Math.min(i + batchSize, nodesToProcess.length)}/${nodesToProcess.length}`);
+                log.error(`[EmbeddingManager] Progress: ${Math.min(i + batchSize, nodesToProcess.length)}/${nodesToProcess.length}`);
             } catch (err) {
-                console.error(`[EmbeddingManager] Batch failed: ${err}`);
+                log.error(`[EmbeddingManager] Batch failed: ${err}`);
             }
         }
 
-        console.error(`[EmbeddingManager] Refresh complete.`);
+        log.error(`[EmbeddingManager] Refresh complete.`);
     }
 }

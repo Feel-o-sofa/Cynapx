@@ -8,7 +8,10 @@ import { Worker } from 'worker_threads';
 import * as path from 'path';
 import * as os from 'os';
 import { Disposable } from '../types';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('WorkerPool');
 /** How long (ms) a single task may run before it is forcibly cancelled. */
 const TASK_TIMEOUT_MS = 30_000;
 
@@ -85,7 +88,7 @@ export class WorkerPool implements Disposable {
         });
 
         worker.on('error', (err) => {
-            console.error('Worker error:', err);
+            log.error('Worker error:', { detail: err });
             const active: ActiveTask | null = this.taskMap.get(worker) ?? null;
             this.replaceWorker(worker, active, err);
         });

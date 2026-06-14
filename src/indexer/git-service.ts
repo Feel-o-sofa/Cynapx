@@ -4,7 +4,10 @@
  * See LICENSE in the project root for license information.
  */
 import { simpleGit, SimpleGit } from 'simple-git';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('GitService');
 /**
  * H-3: Thrown when a `git diff` command itself fails (e.g. the from-commit no
  * longer exists after a rebase/force-push/shallow fetch). This is distinct from
@@ -37,7 +40,7 @@ export class GitService {
             const log = await this.git.log({ file: filePath, maxCount: 1 });
             return log.latest?.hash || 'unknown';
         } catch (error) {
-            console.warn(`Could not get git log for ${filePath}:`, error);
+            log.warn(`Could not get git log for ${filePath}:`, { detail: error });
             return 'not-in-git';
         }
     }
@@ -86,7 +89,7 @@ export class GitService {
                 if (!latest.has(file)) latest.set(file, currentHash);
             }
         } catch (error) {
-            console.warn('Could not build latest-commit map via git log --name-only:', error);
+            log.warn('Could not build latest-commit map via git log --name-only:', { detail: error });
         }
         return latest;
     }
@@ -114,7 +117,7 @@ export class GitService {
             const rev = await this.git.revparse(['HEAD']);
             return rev.trim();
         } catch (error) {
-            console.error('Failed to get current Git HEAD:', error);
+            log.error('Failed to get current Git HEAD:', { detail: error });
             return 'unknown';
         }
     }
@@ -134,7 +137,7 @@ export class GitService {
         try {
             raw = await this.git.raw(['diff', '--name-status', '-z', `${from}..${to}`]);
         } catch (error) {
-            console.error(`Failed to get diff between ${from} and ${to}:`, error);
+            log.error(`Failed to get diff between ${from} and ${to}:`, { detail: error });
             throw new DiffFailedError(from, to, error);
         }
 
@@ -178,7 +181,7 @@ export class GitService {
             const raw = await this.git.raw(['ls-files']);
             return raw.split('\n').map(f => f.trim()).filter(f => f.length > 0);
         } catch (error) {
-            console.error('Failed to list tracked files:', error);
+            log.error('Failed to list tracked files:', { detail: error });
             return [];
         }
     }
@@ -196,7 +199,7 @@ export class GitService {
                 date: commit.date
             }));
         } catch (error) {
-            console.error(`Failed to get history for ${filePath}:`, error);
+            log.error(`Failed to get history for ${filePath}:`, { detail: error });
             return [];
         }
     }

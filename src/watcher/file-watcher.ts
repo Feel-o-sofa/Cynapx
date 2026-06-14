@@ -10,7 +10,10 @@ import { Disposable } from '../types';
 import { LanguageRegistry } from '../indexer/language-registry';
 import { FileFilter } from '../utils/file-filter';
 import { ProjectProfile } from '../utils/profile';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('FileWatcher');
 // H-2: Extensions handled by metadata parsers (CompositeParser) that are not
 // part of LanguageRegistry's tree-sitter providers, but should still trigger
 // re-indexing on change.
@@ -55,7 +58,7 @@ export class FileWatcher implements Disposable {
      * Starts watching the target directory.
      */
     public start(watchPath: string): void {
-        console.log(`Starting file watcher on: ${watchPath}`);
+        log.info(`Starting file watcher on: ${watchPath}`);
 
         // A-6: .gitignore-aware ignore predicate. chokidar invokes this for both
         // directories (during traversal — so gitignored trees like dist/ are
@@ -78,7 +81,7 @@ export class FileWatcher implements Disposable {
             .on('change', (path) => this.handleChange('MODIFY', path))
             .on('unlink', (path) => this.handleChange('DELETE', path));
 
-        console.log('File watcher is active.');
+        log.info('File watcher is active.');
     }
 
     private handleChange(event: ChangeType, filePath: string): void {
@@ -134,9 +137,9 @@ export class FileWatcher implements Disposable {
 
             if (currentQueue.length >= this.BATCH_THRESHOLD || this.syncFailedCount > 0) {
                 if (this.syncFailedCount > 0) {
-                    console.log(`Retrying failed Git sync (attempt after ${this.syncFailedCount} failure(s))...`);
+                    log.info(`Retrying failed Git sync (attempt after ${this.syncFailedCount} failure(s))...`);
                 } else {
-                    console.log(`Large change detected (${currentQueue.length} files). Triggering Git sync instead of individual processing.`);
+                    log.info(`Large change detected (${currentQueue.length} files). Triggering Git sync instead of individual processing.`);
                 }
                 try {
                     await this.pipeline.syncWithGit(this.projectPath);
@@ -144,13 +147,13 @@ export class FileWatcher implements Disposable {
                 } catch (error) {
                     this.syncFailedCount++;
                     if (this.syncFailedCount >= FileWatcher.MAX_SYNC_RETRIES) {
-                        console.error(`[ERROR] Git sync has failed ${this.syncFailedCount} consecutive time(s) — index may be inconsistent. Manual intervention may be required.`, error);
+                        log.error(`[ERROR] Git sync has failed ${this.syncFailedCount} consecutive time(s) — index may be inconsistent. Manual intervention may be required.`, { detail: error });
                     } else {
-                        console.error(`Error during Git-based catch-up from watcher (failure ${this.syncFailedCount}/${FileWatcher.MAX_SYNC_RETRIES}):`, error);
+                        log.error(`Error during Git-based catch-up from watcher (failure ${this.syncFailedCount}/${FileWatcher.MAX_SYNC_RETRIES}):`, { detail: error });
                     }
                 }
             } else {
-                console.log(`Processing ${currentQueue.length} buffered file changes...`);
+                log.info(`Processing ${currentQueue.length} buffered file changes...`);
                 try {
                     const events = currentQueue.map(q => ({
                         event: q.event,
@@ -159,7 +162,7 @@ export class FileWatcher implements Disposable {
                     }));
                     await this.pipeline.processBatch(events, Date.now());
                 } catch (error) {
-                    console.error(`Error processing buffered watcher events:`, error);
+                    log.error(`Error processing buffered watcher events:`, { detail: error });
                 }
             }
         } finally {

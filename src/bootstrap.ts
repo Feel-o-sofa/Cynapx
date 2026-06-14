@@ -31,6 +31,7 @@ import { SecurityProvider } from './utils/security';
 import { WorkerPool } from './indexer/worker-pool';
 import { resolveHttpsOptions } from './utils/https-options';
 import { getVersion } from './utils/version';
+import { Logger, LogLevel } from './utils/logger';
 
 process.on('unhandledRejection', (reason: unknown) => {
     console.error('[Process] Unhandled Promise rejection:', reason);
@@ -71,6 +72,16 @@ async function bootstrap() {
         console.info = console.error;
         console.warn = console.error;
     }
+
+    // Phase 13-8 commit D: the structured Logger writes JSON to stderr (never
+    // stdout — stdout is reserved for the MCP stdio protocol). Honour CYNAPX_LOG_LEVEL
+    // (debug|info|warn|error|silent) so operators can tune verbosity.
+    const lvl = (process.env.CYNAPX_LOG_LEVEL || '').toLowerCase();
+    const levelMap: Record<string, LogLevel> = {
+        debug: LogLevel.DEBUG, info: LogLevel.INFO, warn: LogLevel.WARN,
+        error: LogLevel.ERROR, silent: LogLevel.SILENT
+    };
+    if (lvl in levelMap) Logger.setGlobalLevel(levelMap[lvl]);
 
     console.error(`\x1b[36m
    ______                            __  __

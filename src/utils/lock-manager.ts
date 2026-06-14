@@ -8,7 +8,10 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import Database from 'better-sqlite3';
 import { getLocksDir, getProjectHash, getCentralStorageDir } from './paths';
+import { Logger } from './logger';
 
+
+const log = new Logger('LockManager');
 export interface LockInfo {
     pid: number;
     ipcPort: number;
@@ -135,7 +138,7 @@ export class LockManager {
                 return lock;
             } catch (e: any) {
                 // PID is dead — but re-read to guard against TOCTOU
-                console.error(`[*] Stale lock detected (PID ${lock.pid} is dead). Cleaning up residual files...`);
+                log.error(`[*] Stale lock detected (PID ${lock.pid} is dead). Cleaning up residual files...`);
 
                 try {
                     const recheck = JSON.parse(fs.readFileSync(this.lockPath, 'utf8')) as LockInfo;
@@ -169,14 +172,14 @@ export class LockManager {
                             db.close();
                         }
                     } catch (err) {
-                        console.error(`[!] Failed to checkpoint WAL for ${dbFile}: ${err}`);
+                        log.error(`[!] Failed to checkpoint WAL for ${dbFile}: ${err}`);
                     }
                 }
 
                 ['-wal', '-shm'].forEach(suffix => {
                     const file = `${dbFile}${suffix}`;
                     if (fs.existsSync(file)) {
-                        try { fs.unlinkSync(file); } catch(err) { console.error(`[!] Failed to delete ${file}: ${err}`); }
+                        try { fs.unlinkSync(file); } catch(err) { log.error(`[!] Failed to delete ${file}: ${err}`); }
                     }
                 });
 

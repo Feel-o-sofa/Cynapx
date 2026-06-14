@@ -11,16 +11,19 @@ import { CompositeParser } from './composite-parser';
 import { YamlParser } from './yaml-parser';
 import { MarkdownParser } from './markdown-parser';
 import { JsonConfigParser } from './json-config-parser';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('IndexWorker');
 // O-11: surface otherwise-silent crashes so the main thread's 'error'
 // listener (WorkerPool.replaceWorker) gets a clear diagnostic before the
 // worker is terminated/replaced.
 process.on('uncaughtException', (err) => {
-    console.error('[index-worker] Uncaught exception:', err);
+    log.error('[index-worker] Uncaught exception:', { detail: err });
     throw err;
 });
 process.on('unhandledRejection', (reason) => {
-    console.error('[index-worker] Unhandled rejection:', reason);
+    log.error('[index-worker] Unhandled rejection:', { detail: reason });
     throw reason instanceof Error ? reason : new Error(String(reason));
 });
 
@@ -40,7 +43,7 @@ if (parentPort) {
             const delta = await compositeParser.parse(filePath, commit, version);
             parentPort?.postMessage({ status: 'success', delta, filePath });
         } catch (error: any) {
-            console.error(`Worker error parsing ${filePath}:`, error);
+            log.error(`Worker error parsing ${filePath}:`, { detail: error });
             parentPort?.postMessage({ status: 'error', error: error.message, filePath });
         }
     });

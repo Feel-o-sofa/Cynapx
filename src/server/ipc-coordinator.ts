@@ -8,7 +8,10 @@ import * as readline from 'readline';
 import * as crypto from 'crypto';
 import { McpServer } from './mcp-server';
 import { EventEmitter } from 'events';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('IPC');
 export interface IpcRequest {
     id: string;
     method: 'executeTool';
@@ -113,7 +116,7 @@ export class IpcCoordinator extends EventEmitter {
             this.server = net.createServer((socket) => {
                 socket.on('error', (err) => {
                     // Ignore common disconnect errors
-                    console.error('[IPC Host] Socket error:', err.message);
+                    log.error('[IPC Host] Socket error:', { detail: err.message });
                 });
 
                 // SEC-H-3 / H-8 (diagnostic-v10): enforce the 1 MB limit per
@@ -171,7 +174,7 @@ export class IpcCoordinator extends EventEmitter {
 
                 const rl = readline.createInterface({ input: socket });
                 rl.on('error', (err) => {
-                    console.error('[IPC Host] Readline error:', err.message);
+                    log.error('[IPC Host] Readline error:', { detail: err.message });
                 });
                 rl.on('line', async (line) => {
                     try {
@@ -184,7 +187,7 @@ export class IpcCoordinator extends EventEmitter {
                             const valid = provided.length === expected.length
                                 && crypto.timingSafeEqual(provided, expected);
                             if (!valid) {
-                                console.error('[IPC Host] Authentication failed — closing socket.');
+                                log.error('[IPC Host] Authentication failed — closing socket.');
                                 socket.destroy();
                                 return;
                             }
@@ -203,7 +206,7 @@ export class IpcCoordinator extends EventEmitter {
                             }
                         }
                     } catch (err) {
-                        console.error('[IPC Host] Failed to process line:', err);
+                        log.error('[IPC Host] Failed to process line:', { detail: err });
                     }
                 });
             });
@@ -211,7 +214,7 @@ export class IpcCoordinator extends EventEmitter {
             this.server.on('error', reject);
             this.server.listen(0, '127.0.0.1', () => {
                 const port = (this.server!.address() as net.AddressInfo).port;
-                console.error(`[IPC Host] Server listening on port ${port}`);
+                log.error(`[IPC Host] Server listening on port ${port}`);
                 resolve(port);
             });
         });
@@ -227,12 +230,12 @@ export class IpcCoordinator extends EventEmitter {
             this.client = net.createConnection({ port, host: '127.0.0.1' });
 
             this.client.on('error', (err) => {
-                console.error('[IPC Terminal] Connection error:', err);
+                log.error('[IPC Terminal] Connection error:', { detail: err });
                 reject(err);
             });
 
             this.client.on('close', () => {
-                console.error('[IPC Terminal] Connection closed.');
+                log.error('[IPC Terminal] Connection closed.');
                 // A-9: reject any in-flight requests so callers don't hang forever.
                 for (const pending of this.pendingRequests.values()) {
                     pending.reject(new Error('IPC connection closed'));
@@ -244,7 +247,7 @@ export class IpcCoordinator extends EventEmitter {
             let authResolved = false;
             const rl = readline.createInterface({ input: this.client });
             rl.on('error', (err) => {
-                console.error('[IPC Terminal] Readline error:', err.message);
+                log.error('[IPC Terminal] Readline error:', { detail: err.message });
             });
             rl.on('line', (line) => {
                 try {
@@ -262,7 +265,7 @@ export class IpcCoordinator extends EventEmitter {
                         }
                         this.client!.write(JSON.stringify({ auth: computeAuthResponse(nonce, msg.challenge) }) + '\n');
                         authResolved = true;
-                        console.error(`[IPC Terminal] Connected to Host on port ${port}`);
+                        log.error(`[IPC Terminal] Connected to Host on port ${port}`);
                         resolve();
                         return;
                     }
@@ -281,7 +284,7 @@ export class IpcCoordinator extends EventEmitter {
                         this.pendingRequests.delete(res.id);
                     }
                 } catch (err) {
-                    console.error('[IPC Terminal] Failed to process line:', err);
+                    log.error('[IPC Terminal] Failed to process line:', { detail: err });
                 }
             });
         });

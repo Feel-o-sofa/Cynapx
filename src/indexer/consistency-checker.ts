@@ -16,7 +16,10 @@ import { SecurityProvider } from '../utils/security';
 import { FileChangeEvent } from './types';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('ConsistencyChecker');
 /**
  * ConsistencyChecker validates the integrity of the knowledge graph against the file system and Git.
  */
@@ -43,7 +46,7 @@ export class ConsistencyChecker {
         outdatedFiles: string[];
         orphanedNodes: string[];
     }> {
-        console.log(`Starting Consistency Check (Repair: ${repair}, Force: ${force})...`);
+        log.info(`Starting Consistency Check (Repair: ${repair}, Force: ${force})...`);
         
         const results = {
             totalFiles: 0,
@@ -114,10 +117,11 @@ export class ConsistencyChecker {
             }
         }
 
-        console.log(`Consistency Check Results:
-- Missing: ${results.missingFiles.length}
-- Outdated: ${results.outdatedFiles.length}
-- Orphaned: ${results.orphanedNodes.length}`);
+        log.info('Consistency check results', {
+            missing: results.missingFiles.length,
+            outdated: results.outdatedFiles.length,
+            orphaned: results.orphanedNodes.length
+        });
 
         if (repair) {
             await this.repair(results);
@@ -131,7 +135,7 @@ export class ConsistencyChecker {
         outdatedFiles: string[];
         orphanedNodes: string[];
     }): Promise<void> {
-        console.log('Repairing inconsistencies...');
+        log.info('Repairing inconsistencies...');
         const version = Date.now();
 
         // Fetch all latest commits in parallel
@@ -148,9 +152,9 @@ export class ConsistencyChecker {
 
         if (events.length > 0) {
             await this.pipeline.processBatch(events, version);
-            console.log(`Repair complete. Processed ${events.length} files.`);
+            log.info(`Repair complete. Processed ${events.length} files.`);
         } else {
-            console.log('Nothing to repair.');
+            log.info('Nothing to repair.');
         }
     }
 
@@ -162,8 +166,8 @@ export class ConsistencyChecker {
         
         const extensions = LanguageRegistry.getInstance().getAllExtensions();
         if (directory === this.projectPath) {
-            console.error(`Scanning directory: ${directory}`);
-            console.error(`Supported extensions: ${extensions.join(', ')}`);
+            log.error(`Scanning directory: ${directory}`);
+            log.error(`Supported extensions: ${extensions.join(', ')}`);
         }
         
         const files = fs.readdirSync(directory);

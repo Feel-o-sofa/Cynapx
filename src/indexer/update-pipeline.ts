@@ -18,7 +18,10 @@ import { EmbeddingManager } from './embedding-manager';
 import { CodeNode } from '../types';
 import { GraphEngine } from '../graph/graph-engine';
 import { FullScanStrategy, IncrementalSyncStrategy } from './sync-strategies';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('UpdatePipeline');
 /**
  * UpdatePipeline manages the incremental update process for the knowledge graph.
  */
@@ -104,7 +107,7 @@ export class UpdatePipeline {
                 let iterations = 0;
                 while (head < queue.length) {
                     if (++iterations > maxIterations) {
-                        console.error(`[UpdatePipeline] reTagAllNodes: worklist exceeded safety bound (${maxIterations}); stopping propagation early.`);
+                        log.error(`[UpdatePipeline] reTagAllNodes: worklist exceeded safety bound (${maxIterations}); stopping propagation early.`);
                         break;
                     }
                     const id = queue[head++];
@@ -162,7 +165,7 @@ export class UpdatePipeline {
         const filePaths = this.nodeRepo.getAllFilePaths();
         if (filePaths.length === 0) return;
 
-        console.error(`[UpdatePipeline] Fetching git history for ${filePaths.length} files...`);
+        log.error(`[UpdatePipeline] Fetching git history for ${filePaths.length} files...`);
 
         // Parallel fetch in chunks of 20 to avoid spawning too many git processes
         const CHUNK_SIZE = 20;
@@ -198,7 +201,7 @@ export class UpdatePipeline {
             resolveLock!();
         }
 
-        console.error(`[UpdatePipeline] History backfill complete.`);
+        log.error(`[UpdatePipeline] History backfill complete.`);
     }
 
     /**
@@ -239,7 +242,7 @@ export class UpdatePipeline {
         const { event: type, file_path, commit } = event;
 
         try {
-            console.error(`Processing ${type} for ${file_path}`);
+            log.error(`Processing ${type} for ${file_path}`);
 
             let delta: DeltaGraph;
             if (type === 'ADD' || type === 'MODIFY') {
@@ -257,13 +260,13 @@ export class UpdatePipeline {
                 this.metadataRepo.setLastIndexedCommit(commit);
             }
         } catch (error) {
-            console.error(`Failed to process ${file_path}:`, error);
+            log.error(`Failed to process ${file_path}:`, { detail: error });
             throw error;
         }
     }
 
     public async processBatch(events: FileChangeEvent[], version: number, targetCommit?: string): Promise<void> {
-        console.error(`Processing batch of ${events.length} files...`);
+        log.error(`Processing batch of ${events.length} files...`);
 
         type BatchResult =
             | { event: FileChangeEvent; delta: DeltaGraph; status: 'success' }
@@ -284,7 +287,7 @@ export class UpdatePipeline {
                         : await this.parser.parse(event.file_path, event.commit, version);
                     return { event, delta, status: 'success' as const };
                 } catch (error) {
-                    console.error(`Failed to parse ${event.file_path}:`, error);
+                    log.error(`Failed to parse ${event.file_path}:`, { detail: error });
                     return { event, status: 'error' as const, error: (error as Error).message ?? String(error) };
                 }
             }));
@@ -374,13 +377,13 @@ export class UpdatePipeline {
                 if (failedFiles.length === 0) {
                     this.metadataRepo.setLastIndexedCommit(targetCommit);
                 } else {
-                    console.error(`[UpdatePipeline] Skipping lastIndexedCommit advance to ${targetCommit}: ${failedFiles.length} file(s) failed and will be retried — ${failedFiles.map(f => f.event.file_path).join(', ')}`);
+                    log.error(`[UpdatePipeline] Skipping lastIndexedCommit advance to ${targetCommit}: ${failedFiles.length} file(s) failed and will be retried — ${failedFiles.map(f => f.event.file_path).join(', ')}`);
                 }
             }
 
             // Trigger embedding update in background
             this.embeddingManager.refreshAll().catch(err => {
-                console.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
+                log.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
             });
         } catch (error) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
@@ -443,7 +446,7 @@ export class UpdatePipeline {
 
             // Trigger embedding update in background
             this.embeddingManager.refreshAll().catch(err => {
-                console.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
+                log.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
             });
         } catch (e) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
@@ -490,7 +493,7 @@ export class UpdatePipeline {
         // up front and fall back to a full scan to recover the watermark.
         let useFullScan = !lastCommit;
         if (lastCommit && !(await this.gitService.commitExists(lastCommit))) {
-            console.error(`[UpdatePipeline] lastIndexedCommit ${lastCommit} is missing from the repo (rebase/force-push?); falling back to full scan to recover.`);
+            log.error(`[UpdatePipeline] lastIndexedCommit ${lastCommit} is missing from the repo (rebase/force-push?); falling back to full scan to recover.`);
             useFullScan = true;
         }
 
@@ -505,7 +508,7 @@ export class UpdatePipeline {
                     // Secondary safety net: the diff failed for a reason the
                     // up-front commitExists() check didn't catch. Recover via
                     // full scan rather than stalling.
-                    console.error(`[UpdatePipeline] Incremental diff failed (${err.message}); falling back to full scan.`);
+                    log.error(`[UpdatePipeline] Incremental diff failed (${err.message}); falling back to full scan.`);
                     result = await new FullScanStrategy(this.gitService).buildEvents(projectPath);
                 } else {
                     throw err;

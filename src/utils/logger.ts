@@ -57,7 +57,25 @@ export class Logger {
             ctx: this.context,
             msg
         };
-        if (data) entry.data = data;
+        if (data) entry.data = Logger.normalizeData(data);
+        // Always stderr — stdout is reserved for the MCP stdio protocol.
         console.error(JSON.stringify(entry));
+    }
+
+    /**
+     * Error values JSON-serialize to `{}` (their own enumerable props are
+     * empty), which loses the message. Replace any Error in the data object
+     * with a plain `{ message, stack? }` so diagnostics survive serialization.
+     */
+    private static normalizeData(data: Record<string, unknown>): Record<string, unknown> {
+        const out: Record<string, unknown> = {};
+        for (const [k, v] of Object.entries(data)) {
+            if (v instanceof Error) {
+                out[k] = { message: v.message, name: v.name };
+            } else {
+                out[k] = v;
+            }
+        }
+        return out;
     }
 }
