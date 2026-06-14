@@ -11,6 +11,16 @@ import * as crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { z, ZodSchema } from 'zod';
 import swaggerUi from 'swagger-ui-express';
+// P14-1 (N-1): the HTTP surface here is our own express@4 app (see `express`
+// import above) wired to the SDK's transport-agnostic Server via
+// StreamableHTTPServerTransport / Stdio. The SDK ALSO ships a hono + express@5
+// based reference server (`@hono/node-server`, hono, express@5) which carries
+// several MODERATE advisories — but Cynapx never imports or loads that server,
+// so those transitive packages are unreachable at runtime. They are pinned to
+// patched versions via package.json `overrides` (fast-uri/qs) where a fix
+// exists; hono is overridden to a patched line as well. Upstream tracking:
+// modelcontextprotocol/typescript-sdk#2042. Do not switch to the SDK's
+// hono/express@5 server without re-running the audit gate.
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { Server as SdkMcpServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { TraversalResult } from '../graph/graph-engine';

@@ -18,7 +18,7 @@
 
 ## 2. HIGH — 안정성/보안/정합성 결함
 
-### N-1. 공급망: `@modelcontextprotocol/sdk@1.29.0` 전이 의존에 fast-uri HIGH(CVE-2026-6321) 외 6건 — `npm audit` 게이트 부재 **[NEW]**
+### N-1. 공급망: `@modelcontextprotocol/sdk@1.29.0` 전이 의존에 fast-uri HIGH(CVE-2026-6321) 외 6건 — `npm audit` 게이트 부재 **[DONE — Phase 14-1]**
 **`package.json:23` (간접), 잠재 라우트: `src/server/api-server.ts:14-15`**
 
 `npm audit --omit=dev`(프로덕션 의존만)가 **7건**을 보고한다(진단 일자 직접 실행):
@@ -46,6 +46,14 @@
 3. SDK 업스트림 이슈(typescript-sdk#2042: "Transitive dependencies with known vulnerabilities in 1.29.0")를 추적 — SDK가 hono/ajv 정리하면 override 일부 제거 가능.
 4. **`npm audit --omit=dev --audit-level=high` CI 게이트** 도입(또는 `audit-ci`). override 적용 후 HIGH 0을 기준선으로 고정.
 5. **검증**: override 적용 후 `npm ls fast-uri`가 3.1.1+를 보이고 `npm audit --omit=dev`의 HIGH가 0인지, 네이티브 바인딩/transport가 정상 동작(기존 `tests/api-server-http.test.ts` 그린)하는지.
+
+**해소 결과 [DONE — Phase 14-1]**:
+- (1) **fast-uri** `[DONE]`: `overrides`에 `"fast-uri": "^3.1.1"` 추가 → `fast-uri@3.1.2` 강제(`npm ls fast-uri` = 3.1.2 overridden). HIGH 제거.
+- (2) **qs DoS** `[DONE]`: `overrides`에 `"qs": "^6.15.2"` 추가(advisory 범위가 `6.11.1 - 6.15.1`이라 6.15.2 이상이어야 해소) → express@4/express@5/superagent 경유 전부 `qs@6.15.2`로 dedupe.
+- (3) **ip-address XSS** `[DONE]`: `express-rate-limit` `^8.3.1 → ^8.5.2` 마이너 업그레이드 → 취약 `ip-address` 전이 제거. `keyGenerator`(`api-server.ts:118,123`, `req.socket.remoteAddress`)는 8.5.x에서 그대로 호환(테스트 그린).
+- (4) **hono / express@5** `[DONE — 도달 불가 문서화 + override]`: `overrides`에 `"hono": "^4.12.21"` 추가(advisory `<=4.12.20`). 다만 Cynapx 런타임은 SDK의 hono/express@5 참조 서버를 import/로드하지 않고 자체 express@4를 사용 → 미도달. 근거 주석을 `src/server/api-server.ts` SDK transport import 위에 명시. 업스트림 추적: `modelcontextprotocol/typescript-sdk#2042`(검증됨: "Security: Transitive dependencies with known vulnerabilities in @modelcontextprotocol/sdk@1.29.0").
+- (5) **CI audit 게이트** `[DONE]`: `.github/workflows/ci.yml` lint 잡에 `npm audit --omit=dev --audit-level=high` step 추가(기존 audit-ci 패턴 없음). **주의대로 `cynapx-autonomous.yml`은 미변경.**
+- **최종 검증**: `npm audit --omit=dev` = **0 vulnerabilities (HIGH 0 / MODERATE 0)**. 남은 1건 MODERATE(`postcss`)는 `vitest → vite` 경유 **dev-only**라 `--omit=dev`에서 제외(런타임 미도달). `npx tsc --noEmit` clean, `vitest run` 525/525, `npm run build && node scripts/integration-test.js` 76/76(75 pass + Docker skip).
 
 > 주의: CVE-2026-25536(SDK cross-client data leak via shared transport reuse, 1.26.0에서 수정)은 **해당 없음** — Cynapx는 세션마다 `{transport, sdkServer}` 페어를 1:1로 생성(`api-server.ts:126-131`)하므로 transport 재사용 패턴이 아니다. 1.29.0은 이미 1.26.0+이라 이중으로 안전.
 
