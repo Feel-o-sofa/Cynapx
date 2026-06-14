@@ -246,7 +246,7 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 - A-7: `src/indexer/embedding-manager.ts:77-89, 152-156, 251-267` — 임베딩 IPC에 요청 `id` 필드 추가, 응답 id 불일치 시 폐기(타임아웃 후 늦은 응답의 오배달 차단). 타임아웃 시 사이드카 재시작 검토.
 - O-4 **(v9 이월 — 채택)**: `src/indexer/typescript-parser.ts:30-42` — 파일마다 `ts.createProgram` + lib 재로딩을 LanguageService/incremental Program 재사용으로 교체.
 
-### 커밋 B — 워처/경로/IPC (A-6, A-8, A-12)
+### 커밋 B — 워처/경로/IPC (A-6, A-8, A-12) — **[DONE]**
 - A-6: `src/watcher/file-watcher.ts:48-52` — chokidar `ignored` 콜백에 `FileFilter`(.gitignore 해석) 적용. `src/utils/profile.ts` — `ProjectProfile`의 excludePatterns/maxFileSize를 파이프라인/워처/스캔 전략에 실제 배선(불가 판단 시 기능 제거 + 문서화 — 죽은 설정 방치 금지).
 - A-8: `src/utils/paths.ts:193-196` — `getProjectHash()`의 lowercase를 win32/darwin에만 적용(Linux 케이스 구분 FS에서 별개 프로젝트의 DB/락 공유 차단). 레지스트리 tmp 파일명에 pid 포함 + 재시도 기반 병합(lost-update 완화).
 - A-12: `src/server/ipc-coordinator.ts:196-199` — 30초 고정 타임아웃을 도구별 타임아웃 테이블로 교체(`backfill_history`/`re_tag_project`/`initialize_project`/`check_consistency`는 장기 허용) + Host의 진행 중 keepalive 응답. (장기 해법인 MCP 2025-11-25 task 워크플로는 SDK 1.29 기반 후속 Phase 후보로 기록.)

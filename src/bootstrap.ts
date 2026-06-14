@@ -166,7 +166,9 @@ async function bootstrap() {
         }
 
         if (!options.noWatch) {
-            const watcher = lifecycle.track(new FileWatcher(updatePipeline, ctx.projectPath));
+            // A-6: pass the project profile so the watcher's FileFilter honours
+            // excludePatterns / maxFileSize in addition to .gitignore.
+            const watcher = lifecycle.track(new FileWatcher(updatePipeline, ctx.projectPath, ctx.profile));
             watcher.start(ctx.projectPath);
             // H-6: hold the watcher on the context so unmountProject(hash) can
             // stop it before the DB is closed (otherwise a post-purge flush

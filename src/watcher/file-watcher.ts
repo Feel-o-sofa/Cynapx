@@ -8,6 +8,8 @@ import { UpdatePipeline } from '../indexer/update-pipeline';
 import { ChangeType } from '../indexer/types';
 import { Disposable } from '../types';
 import { LanguageRegistry } from '../indexer/language-registry';
+import { FileFilter } from '../utils/file-filter';
+import { ProjectProfile } from '../utils/profile';
 
 // H-2: Extensions handled by metadata parsers (CompositeParser) that are not
 // part of LanguageRegistry's tree-sitter providers, but should still trigger
@@ -28,15 +30,25 @@ export class FileWatcher implements Disposable {
     // H-3: guards against concurrent flush()/syncWithGit() runs.
     private flushing = false;
     private readonly watchedExtensions: Set<string>;
+    // A-6: .gitignore-aware (+ profile excludePatterns/maxFileSize) filter so the
+    // watcher ignores the same files the indexer's discovery (ConsistencyChecker)
+    // ignores — gitignored build output (dist/, build/) no longer leaks into the
+    // index via edits and desync git-based sync.
+    private readonly fileFilter: FileFilter;
 
     constructor(
         private pipeline: UpdatePipeline,
-        private projectPath: string
+        private projectPath: string,
+        profile?: ProjectProfile
     ) {
         this.watchedExtensions = new Set([
             ...LanguageRegistry.getInstance().getAllExtensions(),
             ...METADATA_EXTENSIONS,
         ]);
+        this.fileFilter = new FileFilter(this.projectPath, {
+            excludePatterns: profile?.excludePatterns,
+            maxFileSize: profile?.maxFileSize,
+        });
     }
 
     /**
@@ -45,8 +57,18 @@ export class FileWatcher implements Disposable {
     public start(watchPath: string): void {
         console.log(`Starting file watcher on: ${watchPath}`);
 
+        // A-6: .gitignore-aware ignore predicate. chokidar invokes this for both
+        // directories (during traversal — so gitignored trees like dist/ are
+        // pruned, not just filtered per-event) and files. Keep the dotfile rule
+        // as a cheap first check, then defer to FileFilter (pattern-level only —
+        // no fs.stat here; chokidar passes stats separately and unlink paths may
+        // not exist). Per-file size limits are enforced in handleChange().
+        const dotfileRe = /(^|[\/\\])\../;
         this.watcher = chokidar.watch(watchPath, {
-            ignored: /(^|[\/\\])\../, // ignore dotfiles
+            ignored: (testPath: string) => {
+                if (dotfileRe.test(testPath)) return true;
+                return this.fileFilter.isIgnored(testPath);
+            },
             persistent: true,
             ignoreInitial: true // Initial scan is handled separately in bootstrap
         });
@@ -62,6 +84,15 @@ export class FileWatcher implements Disposable {
     private handleChange(event: ChangeType, filePath: string): void {
         const ext = filePath.slice(filePath.lastIndexOf('.') + 1).toLowerCase();
         if (!this.watchedExtensions.has(ext)) return;
+
+        // A-6: defence-in-depth — chokidar's `ignored` predicate already prunes
+        // gitignored paths, but re-check (and enforce the profile's maxFileSize)
+        // here too. The size check is skipped for DELETE since the file is gone.
+        if (event === 'DELETE') {
+            if (this.fileFilter.isIgnored(filePath)) return;
+        } else if (this.fileFilter.shouldIgnoreFile(filePath)) {
+            return;
+        }
 
         this.queue.push({ event, path: filePath });
 

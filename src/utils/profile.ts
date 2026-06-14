@@ -5,6 +5,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { getCentralStorageDir, getProjectHash } from './paths';
 
 /**
@@ -75,9 +76,17 @@ export function loadProfile(projectPath: string): ProjectProfile {
  */
 export function saveProfile(projectPath: string, profile: ProjectProfile): void {
     const profilePath = getProfilePath(projectPath);
-    const tmpPath = profilePath + '.tmp';
+    // A-8: pid + random suffix so concurrent writers don't clobber a shared
+    // `*.tmp` file. The rename is atomic; last-writer-wins for the same profile
+    // is acceptable (single profile per project, no field-level merge needed).
+    const tmpPath = `${profilePath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     fs.writeFileSync(tmpPath, JSON.stringify(profile, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmpPath, profilePath);
+    try {
+        fs.renameSync(tmpPath, profilePath);
+    } catch (e) {
+        try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+        throw e;
+    }
 }
 
 /**

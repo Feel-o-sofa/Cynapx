@@ -27,6 +27,54 @@ export interface IpcResponse {
 const MAX_MSG_BYTES = 1 * 1024 * 1024; // 1 MB
 
 /**
+ * A-12: per-tool IPC timeouts. A single global 30s timeout is wrong for both
+ * ends of the latency spectrum: quick metadata reads should fail fast if the
+ * Host is wedged, while whole-project operations (initial index, re-tag,
+ * history backfill, consistency repair, clustering) legitimately run for
+ * minutes on a large repo and must not be aborted prematurely.
+ *
+ * Values are deliberately generous on the long-running side — the Host keepalive
+ * ping (below) keeps the connection alive across the gap, and the operations are
+ * bounded by their own internal limits. Tools not listed use DEFAULT_IPC_TIMEOUT_MS.
+ *
+ * NOTE (future direction): MCP 2025-11-25 introduces a task/progress workflow
+ * that would replace these coarse timeouts with streamed progress + cancellation.
+ * That is out of scope here (tracked for a later SDK-1.29-based phase).
+ */
+const DEFAULT_IPC_TIMEOUT_MS = 30_000;
+const IPC_TOOL_TIMEOUTS_MS: Record<string, number> = {
+    // Whole-project, potentially multi-minute operations.
+    initialize_project: 30 * 60_000, // full index of a fresh repo
+    re_tag_project: 15 * 60_000,
+    backfill_history: 30 * 60_000,   // walks git history
+    check_consistency: 15 * 60_000,  // full FS/DB/git reconciliation (+ repair)
+    purge_index: 5 * 60_000,
+    export_graph: 5 * 60_000,        // can serialise a large graph
+    // Embedding-heavy / analysis tools that may invoke the ML sidecar.
+    discover_latent_policies: 5 * 60_000,
+    propose_refactor: 3 * 60_000,
+    analyze_impact: 2 * 60_000,
+    // Everything else (quick metadata reads: search_symbols, get_callers, …)
+    // falls back to DEFAULT_IPC_TIMEOUT_MS.
+};
+
+/** A-12: resolves the IPC timeout for a tool name. */
+export function getIpcTimeoutMs(toolName: string): number {
+    return IPC_TOOL_TIMEOUTS_MS[toolName] ?? DEFAULT_IPC_TIMEOUT_MS;
+}
+
+/**
+ * A-12: Host -> Terminal keepalive ping interval. Sent on otherwise idle
+ * connections so a long-running tool call (which may produce no traffic for
+ * minutes) does not get reaped by an OS/intermediary idle timeout. The Terminal
+ * ignores ping lines (they carry no `id`). Overridable via env for tests.
+ */
+const IPC_KEEPALIVE_INTERVAL_MS = (() => {
+    const v = Number(process.env.CYNAPX_IPC_KEEPALIVE_MS);
+    return Number.isFinite(v) && v > 0 ? v : 15_000;
+})();
+
+/**
  * C-3 (diagnostic-v10): computes the authentication response for the IPC
  * challenge-response handshake. The shared secret (the lock-file nonce) is
  * never sent on the wire in either direction — the Host sends a random
@@ -104,6 +152,22 @@ export class IpcCoordinator extends EventEmitter {
                 socket.write(JSON.stringify({ challenge }) + '\n');
 
                 let authenticated = false;
+
+                // A-12: keepalive ping on idle connections. A long-running tool
+                // call can leave the socket silent for minutes; periodic pings
+                // keep it from being reaped. The interval is unref()'d so it
+                // never holds the process open, and cleared on close/error.
+                const keepalive = setInterval(() => {
+                    if (!authenticated) return;
+                    try {
+                        socket.write(JSON.stringify({ ping: true, ts: Date.now() }) + '\n');
+                    } catch {
+                        clearInterval(keepalive);
+                    }
+                }, IPC_KEEPALIVE_INTERVAL_MS);
+                if (typeof keepalive.unref === 'function') keepalive.unref();
+                socket.on('close', () => clearInterval(keepalive));
+                socket.on('error', () => clearInterval(keepalive));
 
                 const rl = readline.createInterface({ input: socket });
                 rl.on('error', (err) => {
@@ -203,7 +267,10 @@ export class IpcCoordinator extends EventEmitter {
                         return;
                     }
 
-                    const res: IpcResponse = JSON.parse(line);
+                    const parsed = JSON.parse(line);
+                    // A-12: keepalive pings from the Host carry no `id` — ignore.
+                    if (parsed && parsed.ping === true) return;
+                    const res: IpcResponse = parsed;
                     const pending = this.pendingRequests.get(res.id);
                     if (pending) {
                         if (res.error) {
@@ -233,11 +300,12 @@ export class IpcCoordinator extends EventEmitter {
             params: { name, args }
         };
 
+        const timeoutMs = getIpcTimeoutMs(name);
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 this.pendingRequests.delete(id);
-                reject(new Error(`IPC request '${name}' timed out after 30s`));
-            }, 30_000);
+                reject(new Error(`IPC request '${name}' timed out after ${Math.round(timeoutMs / 1000)}s`));
+            }, timeoutMs);
 
             this.pendingRequests.set(id, {
                 resolve: (v: any) => { clearTimeout(timeout); resolve(v); },

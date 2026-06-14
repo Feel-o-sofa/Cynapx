@@ -9,6 +9,7 @@ import { NodeRepository } from '../db/node-repository';
 import { GitService } from './git-service';
 import { UpdatePipeline } from './update-pipeline';
 import { FileFilter } from '../utils/file-filter';
+import { loadProfile } from '../utils/profile';
 import { calculateFileChecksum } from '../utils/checksum';
 import { LanguageRegistry } from './language-registry';
 import { SecurityProvider } from '../utils/security';
@@ -51,7 +52,13 @@ export class ConsistencyChecker {
             orphanedNodes: [] as string[]
         };
 
-        const fileFilter = new FileFilter(this.projectPath);
+        // A-6: honour the project profile's excludePatterns / maxFileSize here
+        // too, so file discovery and the watcher apply the same filter set.
+        const profile = loadProfile(this.projectPath);
+        const fileFilter = new FileFilter(this.projectPath, {
+            excludePatterns: profile.excludePatterns,
+            maxFileSize: profile.maxFileSize,
+        });
         const allPhysicalFiles = await this.getFiles(this.projectPath, true, fileFilter);
         results.totalFiles = allPhysicalFiles.length;
 
@@ -162,6 +169,7 @@ export class ConsistencyChecker {
         const files = fs.readdirSync(directory);
         for (const file of files) {
             const fullPath = path.resolve(directory, file);
+            // Pattern-level prune for both dirs and files (cheap, no stat).
             if (filter && filter.isIgnored(fullPath)) continue;
             const stat = fs.statSync(fullPath);
             if (stat.isDirectory()) {
@@ -172,6 +180,8 @@ export class ConsistencyChecker {
             } else {
                 const ext = file.split('.').pop()?.toLowerCase();
                 if (ext && LanguageRegistry.getInstance().getAllExtensions().includes(ext)) {
+                    // A-6: honour the profile's maxFileSize during discovery.
+                    if (filter && filter.shouldIgnoreFile(fullPath)) continue;
                     results.push(fullPath);
                 }
             }
