@@ -498,7 +498,10 @@ export class GraphEngine {
     ): void {
         interface BfsEntry { id: number; depth: number; parentIndex: number; edge?: CodeEdge; }
         const entries: BfsEntry[] = [];
+        // O-1: index-pointer queue (head++) instead of Array.shift() to avoid the
+        // O(n) re-index on every dequeue (matches the dfs/reTag pattern in this file).
         const queue: number[] = []; // indices into entries
+        let head = 0;
 
         entries.push({ id: startId, depth: 0, parentIndex: -1 });
         queue.push(0);
@@ -513,8 +516,8 @@ export class GraphEngine {
             return path;
         };
 
-        while (queue.length > 0) {
-            const entryIdx = queue.shift()!;
+        while (head < queue.length) {
+            const entryIdx = queue[head++];
             const entry = entries[entryIdx];
 
             const node = this.getNodeById(entry.id);

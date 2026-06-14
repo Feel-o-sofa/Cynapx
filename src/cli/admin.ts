@@ -36,6 +36,7 @@ import {
 } from '../utils/paths';
 import { AuditLogger, AuditEvent } from '../utils/audit-logger';
 import { LockManager } from '../utils/lock-manager';
+import { getVersion } from '../utils/version';
 
 // ─── ANSI colour helpers ──────────────────────────────────────────────────────
 const c = {
@@ -524,14 +525,12 @@ function cmdRestore(backupPath: string, opts: { yes?: boolean; force?: boolean }
 
 // ─── CLI setup ────────────────────────────────────────────────────────────────
 
-const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf-8')) as { version: string };
-
 const program = new Command();
 
 program
     .name('cynapx-admin')
     .description('Cynapx organisation management CLI — no server required')
-    .version(pkg.version);
+    .version(getVersion());
 
 // Default command — status dashboard
 program

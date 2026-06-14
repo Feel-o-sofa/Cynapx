@@ -9,13 +9,12 @@ import {
     ErrorCode,
     McpError
 } from "@modelcontextprotocol/sdk/types.js";
-import * as path from 'path';
-import * as fs from 'fs';
 import { RemediationEngine } from '../graph/remediation-engine';
 import { IpcCoordinator } from './ipc-coordinator';
 import { EmbeddingProvider, PythonEmbeddingProvider } from '../indexer/embedding-manager';
 import { WorkspaceManager, EngineContext } from './workspace-manager';
 import { readRegistry, isPathInside } from '../utils/paths';
+import { getVersion } from '../utils/version';
 import { registerResourceHandlers } from './resource-provider';
 import { registerPromptHandlers } from './prompt-provider';
 import { HealthMonitor } from './health-monitor';
@@ -48,11 +47,7 @@ export class McpServer {
     private toolDeps!: ToolDeps;
 
     constructor(workspaceManager?: WorkspaceManager) {
-        let version = "1.0.5";
-        try {
-            const pkgPath = path.join(__dirname, '..', '..', 'package.json');
-            if (fs.existsSync(pkgPath)) version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
-        } catch (e) {}
+        const version = getVersion();
 
         this.sdkServer = new SdkMcpServer({
             name: "cynapx",
@@ -158,11 +153,7 @@ export class McpServer {
      * handlers so each session behaves identically to the singleton stdio server.
      */
     public createSdkServerForSession(): SdkMcpServer {
-        let version = "1.0.5";
-        try {
-            const pkgPath = path.join(__dirname, '..', '..', 'package.json');
-            if (fs.existsSync(pkgPath)) version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
-        } catch (e) {}
+        const version = getVersion();
 
         const sessionServer = new SdkMcpServer({
             name: "cynapx",

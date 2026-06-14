@@ -18,6 +18,7 @@ import { EdgeRepository } from '../db/edge-repository';
 import { getDatabasePath, getProjectHash, updateRegistryStats } from '../utils/paths';
 import { loadProfile, ProjectProfile } from '../utils/profile';
 import { getAuditLogger } from '../utils/audit-logger';
+import { getVersion } from '../utils/version';
 import { GitService } from '../indexer/git-service';
 import { UpdatePipeline } from '../indexer/update-pipeline';
 import { SecurityProvider } from '../utils/security';
@@ -122,8 +123,7 @@ export class WorkspaceManager {
         // Version mismatch detection (Req-3)
         const audit = getAuditLogger();
         try {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const currentVersion: string = require('../../package.json').version as string;
+            const currentVersion: string = getVersion();
             const storedVersion = metadataRepo.getCynapxVersion();
             if (storedVersion && storedVersion !== '' && storedVersion !== currentVersion) {
                 const storedMajorMinor = storedVersion.split('.').slice(0, 2).join('.');
@@ -188,8 +188,7 @@ export class WorkspaceManager {
         if (!ctx || !ctx.metadataRepo) return;
 
         try {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const currentVersion: string = require('../../package.json').version as string;
+            const currentVersion: string = getVersion();
             const now = new Date().toISOString();
             ctx.metadataRepo.setCynapxVersion(currentVersion);
             ctx.metadataRepo.setIndexedAt(now);

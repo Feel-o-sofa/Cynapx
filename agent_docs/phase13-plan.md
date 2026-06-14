@@ -251,7 +251,8 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 - A-8: `src/utils/paths.ts:193-196` — `getProjectHash()`의 lowercase를 win32/darwin에만 적용(Linux 케이스 구분 FS에서 별개 프로젝트의 DB/락 공유 차단). 레지스트리 tmp 파일명에 pid 포함 + 재시도 기반 병합(lost-update 완화).
 - A-12: `src/server/ipc-coordinator.ts:196-199` — 30초 고정 타임아웃을 도구별 타임아웃 테이블로 교체(`backfill_history`/`re_tag_project`/`initialize_project`/`check_consistency`는 장기 허용) + Host의 진행 중 keepalive 응답. (장기 해법인 MCP 2025-11-25 task 워크플로는 SDK 1.29 기반 후속 Phase 후보로 기록.)
 
-### 커밋 C — LOW 일괄 (O-1, O-3, O-7~O-12) + A-10 잔존
+### 커밋 C — LOW 일괄 (O-1, O-3, O-7~O-12) + A-10 잔존 — **[DONE]**
+> **[DONE — Phase 13-8 커밋 C]** O-1 BFS `queue.shift()` → `head++` 인덱스 포인터. O-3+A-10 `src/utils/version.ts` 신설(walk-up package.json 탐색 + 1회 캐싱, `getVersion()`) — bootstrap/mcp-server x2/workspace-manager x2/admin/api-server `/healthz`의 5곳 중복 읽기 일괄 제거(불필요해진 `fs`/`path` import 정리). O-7 셸 도구 목록에서 미등록 `perform_clustering` 제거(테스트가 `_registry.ts`와 1:1 동기화 검증). O-8 `CertificateGenerator`가 0700 전용 디렉터리(`cynapx-tls-<id>/`) 생성 후 그 안에서 키 작업, 종료 시 디렉터리 통째 정리. O-9 `readRecent()`를 64KB 청크 후방 tail 읽기로(전체 파일 적재 제거, 멀티바이트 경계 안전: 버퍼 누적 후 1회 디코드, 손상 라인 skip). O-10 one-shot CLI가 `lifecycle.disposeAll()` + `lockManager.release()` 후 종료(WAL 체크포인트 보장, exitCode 보존). O-11 `FileFilter` 중첩 .gitignore 지원(경로별 조상 디렉터리 .gitignore 지연 로드 + 서브트리 스코프 prefix, 부정 `!` 처리). O-12 search_symbols가 컨텍스트는 있으나 전부 `EngineNotReadyError`면 빈 success 대신 `isError` 반환. 테스트: `tests/phase13-8-commit-c.test.ts`(17). 502/502, tsc clean.
 - O-1: `src/graph/graph-engine.ts:510-511` — BFS `queue.shift()`를 인덱스 포인터(head++)로 교체 (dfs/reTag 기적용 패턴).
 - O-3 + A-10(version 중복): `src/utils/version.ts` 신설(1회 읽기 + 캐싱) — `bootstrap.ts:48`, `mcp-server.ts:52-55,161-165`, `workspace-manager.ts:114,180`, `admin.ts:460`, `api-server.ts:207-212`의 5곳 중복 제거. `/healthz`의 매 요청 디스크 읽기 해소.
 - O-7: `src/server/interactive-shell.ts:21` — 미등록 도구 `perform_clustering` 표기 제거(`_registry.ts` 기준 동기화).

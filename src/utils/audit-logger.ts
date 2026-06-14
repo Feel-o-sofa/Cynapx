@@ -84,11 +84,50 @@ export class AuditLogger {
     public readRecent(limit = 100): AuditEvent[] {
         try {
             if (!fs.existsSync(this.logPath)) return [];
-            const lines = fs.readFileSync(this.logPath, 'utf8').split('\n').filter(l => l.trim() !== '');
-            const recent = lines.slice(-limit);
-            return recent.map(l => JSON.parse(l) as AuditEvent);
+            const lines = this.tailLines(limit);
+            return lines
+                .map(l => {
+                    try { return JSON.parse(l) as AuditEvent; } catch { return null; }
+                })
+                .filter((e): e is AuditEvent => e !== null);
         } catch {
             return [];
+        }
+    }
+
+    /**
+     * O-9: tail-based partial read. Previously readRecent() loaded the entire
+     * file (up to MAX_LOG_SIZE_BYTES = 100MB) just to take the last `limit`
+     * lines. Instead, read fixed-size chunks backwards from EOF until we have
+     * enough complete lines, so cost scales with `limit`, not file size.
+     */
+    private tailLines(limit: number): string[] {
+        const CHUNK = 64 * 1024;
+        const fd = fs.openSync(this.logPath, 'r');
+        try {
+            const size = fs.fstatSync(fd).size;
+            if (size === 0) return [];
+            let pos = size;
+            const chunks: Buffer[] = [];
+            let newlineCount = 0;
+            // Read backwards a chunk at a time until we have > limit newlines
+            // (one extra so a partial leading line is dropped) or hit BOF. Decode
+            // the assembled Buffer once at the end so no multibyte UTF-8 sequence
+            // is split across per-chunk toString() calls.
+            while (pos > 0) {
+                const readSize = Math.min(CHUNK, pos);
+                pos -= readSize;
+                const buf = Buffer.alloc(readSize);
+                fs.readSync(fd, buf, 0, readSize, pos);
+                chunks.unshift(buf);
+                for (const b of buf) { if (b === 0x0a) newlineCount++; }
+                if (newlineCount > limit) break;
+            }
+            const collected = Buffer.concat(chunks).toString('utf8');
+            const lines = collected.split('\n').filter(l => l.trim() !== '');
+            return lines.slice(-limit);
+        } finally {
+            fs.closeSync(fd);
         }
     }
 }

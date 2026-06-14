@@ -8,7 +8,6 @@ import { Command } from 'commander';
 import * as crypto from 'crypto';
 import * as path from 'path';
 import * as os from 'os';
-import * as fs from 'fs';
 import { McpServer } from './server/mcp-server';
 import { IpcCoordinator } from './server/ipc-coordinator';
 import { LockManager, LockHeldError, CONNECT_MAX_RETRIES, decideConnectFailureAction } from './utils/lock-manager';
@@ -31,6 +30,7 @@ import { LifecycleManager } from './utils/lifecycle-manager';
 import { SecurityProvider } from './utils/security';
 import { WorkerPool } from './indexer/worker-pool';
 import { resolveHttpsOptions } from './utils/https-options';
+import { getVersion } from './utils/version';
 
 process.on('unhandledRejection', (reason: unknown) => {
     console.error('[Process] Unhandled Promise rejection:', reason);
@@ -45,12 +45,11 @@ process.on('uncaughtException', (err: Error) => {
 });
 
 async function bootstrap() {
-    const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf-8'));
     const program = new Command();
     program
         .name('cynapx')
         .description('High-performance isolated code knowledge engine for AI agents')
-        .version(pkg.version)
+        .version(getVersion())
         .option('-p, --path <paths...>', 'Project paths to analyze', [process.cwd()])
         .option('--api-port <number>', 'Port for the REST API server', '3000')
         .option('--no-index', 'Disable initial indexing')
@@ -418,17 +417,31 @@ async function bootstrap() {
 
     if (command && !options.interactive && !options.api) {
         console.error(`[*] One-Shot CLI: ${command}`);
+        // O-10: a one-shot invocation must run the lifecycle dispose chain before
+        // exiting so the DB is WAL-checkpointed and the lock released, instead of
+        // bypassing cleanup with a bare process.exit() (which leaves the WAL
+        // un-checkpointed and relies on stale-lock recovery).
+        let exitCode = 0;
         try {
             const result = await mcpServer.executeTool(command, commandArgs);
             if (result.isError) {
                 console.error("❌ Failed:");
                 console.log(JSON.stringify(result.content, null, 2));
-                process.exit(1);
+                exitCode = 1;
             } else {
                 result.content.forEach((c: any) => console.log(c.text || JSON.stringify(c, null, 2)));
-                process.exit(0);
             }
-        } catch (e) { console.error(`[Error] ${e}`); process.exit(1); }
+        } catch (e) {
+            console.error(`[Error] ${e}`);
+            exitCode = 1;
+        }
+        try {
+            await lifecycle.disposeAll();
+            await lockManager.release();
+        } catch (e) {
+            console.error(`[!] Cleanup after one-shot command failed: ${e instanceof Error ? e.message : e}`);
+        }
+        process.exit(exitCode);
     }
 
     // Start Interfaces

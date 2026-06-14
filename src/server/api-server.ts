@@ -22,6 +22,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { getCentralStorageDir } from '../utils/paths';
+import { getVersion } from '../utils/version';
 
 // O-12: redact sensitive fields before logging request payloads.
 // L4: standalone `auth` keys (underscore-delimited, so `author` is NOT
@@ -283,12 +284,7 @@ export class ApiServer {
             // so orchestrators don't route traffic to a not-yet-ready instance.
             res.status(dbOk ? 200 : 503).json({
                 status: dbOk ? 'ok' : 'pending',
-                version: ((): string => {
-                    try {
-                        const pkgPath = path.join(__dirname, '..', '..', 'package.json');
-                        return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version ?? 'unknown';
-                    } catch { return 'unknown'; }
-                })(),
+                version: getVersion(),
                 indexed: dbOk,
                 project: ctx?.projectPath ?? null,
                 uptime: Math.floor(process.uptime()),
