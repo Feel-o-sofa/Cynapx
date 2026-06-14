@@ -75,7 +75,7 @@
 
 **판정**: **계속 보류**가 합리적 — 현실 규모에서 무해하고, 파티셔닝(파일/디렉터리 경계 기반 서브그래프 클러스터링)은 클러스터 품질 트레이드오프를 동반한다. 단 **방어선 하나는 저렴하게 추가 가치 있음**: 노드 수가 임계치(예: 200k)를 넘으면 경고 로그 + clustering 스킵/샘플링하는 가드. Phase 14에서 "가드만" 채택, 본격 파티셔닝은 계속 이연.
 
-### A-3(v11). CrossProjectResolver의 원격 DB 쿼리가 leading-wildcard LIKE 풀스캔 + 버전/신뢰 검사 부재 **[NEW — LOW-MEDIUM 경계]**
+### A-3(v11). CrossProjectResolver의 원격 DB 쿼리가 leading-wildcard LIKE 풀스캔 + 버전/신뢰 검사 부재 **[DONE — Phase 14-2]**
 **`src/indexer/cross-project-resolver.ts:99-102`**
 
 ```sql
@@ -86,6 +86,13 @@ SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LI
 미해석 에지 1건마다 **등록된 모든 외부 프로젝트 DB**에 대해 leading-`%` LIKE 풀스캔이 발생한다. v10 A-4에서 로컬 `findNodesBySymbolName`은 `symbol_name` 인덱스 컬럼으로 해소했지만 **원격 경로는 동일 패턴이 남아 있다**(원격 DB에는 `symbol_name` 컬럼/인덱스가 스키마 버전에 따라 없을 수 있음). 또한 원격 DB는 `readRegistry()`가 가리키는 파일을 신뢰 검사 없이 `new SQLiteDatabase(dbPath, {readonly:true})`로 연다 — better-sqlite3 12.10.0(SQLite 3.53.1)으로 CVE-2025-7709는 패치됐으나, 향후 SQLite CVE 재발 시 "crafted DB file" 표면이 남는다.
 
 **수정 권고**: (1) 원격 쿼리도 `symbol_name` indexed equality probe로 전환(원격 스키마에 컬럼 존재 시; 없으면 등가 LIKE 폴백 + 경고), (2) 원격 DB 오픈 직후 `sqlite_version()`/스키마 버전 sanity 체크 후 불일치 시 skip. **테스트**: 멀티 프로젝트 fixture에서 원격 심볼 해석 + 인덱스 사용(`EXPLAIN QUERY PLAN`에 SEARCH 확인).
+
+**해소 결과 [DONE — Phase 14-2]** (`src/indexer/cross-project-resolver.ts`):
+- **A-3(1) LIKE 풀스캔 → indexed probe** `[DONE]`: `openRemoteDb()` 직후 `isTrustedRemoteDb()`가 `PRAGMA table_info(nodes)`로 `symbol_name` 컬럼 + 스키마 버전(>= 3) 보유 여부를 1회 검사해 `symbolNameCapable`(connection 키 맵)에 캐싱. capable이면 로컬 `findNodesBySymbolName()`과 동일하게 `WHERE symbol_name = ? COLLATE NOCASE` 단일 indexed probe(`idx_nodes_symbol_name` NOCASE)를 사용 — `EXPLAIN QUERY PLAN`에 `SEARCH ... USING INDEX idx_nodes_symbol_name` 확인. (주의: `qualified_name = ? COLLATE NOCASE`를 OR로 묶으면 BINARY `qualified_name` 인덱스를 NOCASE 술어가 못 써 OR-by-union이 깨지고 풀스캔으로 강등 → 단일 술어로 probe하고 정확 canonical 매치는 JS에서 우선 선택.) `extractSymbolName()`로 `#` 접미부 추출, 글로벌 심볼(no `#`)은 `symbol_name == qualified_name`이라 동일 probe로 커버.
+- **A-3(1) 폴백 + 1회 경고** `[DONE]`: 구버전 원격 스키마(< v3, `symbol_name` 없음)는 기존 `LIKE '%#name'` 폴백을 유지하되, `warnedLegacySchema`(db_path Set)로 **원격 DB당 정확히 1회만** WARN 로그(재인덱싱 권고). 다회 `resolve()` 호출에도 스팸되지 않음(테스트로 검증).
+- **A-3(2) 원격 DB 신뢰 검사** `[DONE]`: `isTrustedRemoteDb()`가 오픈 직후 `PRAGMA user_version`이 정수·`[0, SCHEMA_VERSION+100]` 범위 내인지 + `nodes` 테이블이 `qualified_name` 컬럼과 함께 존재하는지 검사. 불일치(절대값 user_version / nodes 테이블 부재 = crafted file)면 connection을 닫고 해당 원격 DB만 skip(WARN) — 나머지 등록 프로젝트는 정상 해석. `symbolNameCapable` 맵은 `endBatch()`/per-call close/M1 broken-eviction 경로 모두에서 정리(핸들·맵 누수 방지).
+- **테스트** (`tests/phase14-2-cross-project.test.ts`, 5건): (1) modern(v3) 원격 심볼 해석 + `EXPLAIN QUERY PLAN`에 SEARCH/`idx_nodes_symbol_name` 확인 + `SCAN nodes` 부재, (2) 글로벌 심볼 probe, (3) corrupt DB(nodes 테이블 부재, user_version=3 스푸핑) skip + good DB 정상 해석, (4) 절대값 user_version(999999999) crafted DB skip, (5) 구버전 폴백 1회 경고. 기존 `phase12-6-commit-b.test.ts`(O-3 배치 캐싱) 회귀 그린.
+- **검증**: `npx tsc --noEmit` clean, `npx vitest run` **530/530**(525 → +5).
 
 ### A-4(v11). MCP 2025-11-25 task/progress 워크플로 미채택 — A-12 타임아웃은 keepalive로만 완화 **[이월: v10 A-12 후속, P13-8에서 후보 기록만]**
 **`src/server/ipc-coordinator.ts:43-67`, `src/server/api-server.ts`(MCP transport)**
@@ -107,7 +114,7 @@ SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LI
 
 | # | 위치 | 내용 |
 |---|------|------|
-| O-1(v11) | `src/indexer/cross-project-resolver.ts:100` | A-3(v11)의 LIKE 풀스캔 — indexed probe 전환(A-3에 흡수) |
+| O-1(v11) | `src/indexer/cross-project-resolver.ts:100` | A-3(v11)의 LIKE 풀스캔 — indexed probe 전환(A-3에 흡수) **[DONE — Phase 14-2]** |
 | O-2(v11) | `package.json` overrides | tree-sitter-* 일부가 여전히 `^0.23/0.24` (tree-sitter-typescript 0.23.2, rust 0.24.0) — 코어 0.25.0과 메이저 정렬 점검. override로 0.25 강제 중이나 grammar 패키지 자체 마이너 업그레이드 여지(기능 변화 없으면 LOW) |
 | O-3(v11) | `src/server/ipc-coordinator.ts` (전체) | IPC JSON 평문 직렬화 — MessagePack 미전환(v8→v10 이월). **성능 문제 미관측, verdict: 계속 보류.** 메시지가 작고(주로 메타데이터) round-trip이 빈번하지 않아 직렬화가 병목이 아님. 기록만 유지 |
 | O-4(v11) | `src/graph/graph-engine.ts:196` | 편향 셔플(`sort(()=>random-0.5)`) → Fisher-Yates (A-5에 흡수) |
