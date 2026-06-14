@@ -17,6 +17,18 @@ function makeDeps(overrides: Partial<ToolDeps> = {}): ToolDeps {
     const mockGraphEngine = {
         getNodeByQualifiedName: vi.fn().mockReturnValue(null),
         nodeRepo: { searchSymbols: vi.fn().mockReturnValue([]) },
+        // export_graph fixture: a tiny 2-node / 1-edge graph so json/graphml/dot
+        // branches all produce non-trivial output.
+        exportToMermaid: vi.fn().mockResolvedValue('```mermaid\ngraph TD\n  A-->B\n```'),
+        getGraphData: vi.fn().mockResolvedValue({
+            nodes: [
+                { id: 1, qualified_name: '/src/a.ts#A' },
+                { id: 2, qualified_name: '/src/b.ts#B' },
+            ],
+            edges: [
+                { from_id: 1, to_id: 2 },
+            ],
+        }),
     };
 
     const mockDb = {
@@ -289,5 +301,173 @@ describe('executeTool: get_setup_context', () => {
         expect(result.isError).toBeUndefined();
         const parsed = JSON.parse(result.content[0].text);
         expect(parsed).toHaveProperty('embeddings');
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 18-1 (M-1 v15): dispatcher-level coverage for the 6 tools that were
+// previously exercised only by scripts/integration-test.js (not run in CI).
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// export_graph — pure branching (no-context guard, json/graphml/dot formats,
+// unknown-format error). Priority 1 per the plan.
+// ---------------------------------------------------------------------------
+
+describe('executeTool: export_graph', () => {
+    it('returns isError when context is missing', async () => {
+        const deps = makeDeps({ getContext: vi.fn().mockReturnValue(null) });
+        const result = await executeTool('export_graph', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/No active project/i);
+    });
+
+    it('defaults to json format and emits the graph-export skeleton', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('export_graph', {}, deps);
+        expect(result.isError).toBeUndefined();
+        const text: string = result.content[0].text;
+        expect(text).toContain('### Graph Export');
+        expect(text).toContain('Nodes:');
+        expect(text).toContain('Edges:');
+        expect(text).toContain('```mermaid');
+    });
+
+    it('produces a GraphML document for format=graphml', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('export_graph', { format: 'graphml' }, deps);
+        expect(result.isError).toBeUndefined();
+        const text: string = result.content[0].text;
+        expect(text).toContain('<?xml');
+        expect(text).toContain('<graphml');
+        expect(text).toContain('<node');
+        expect(text).toContain('<edge');
+    });
+
+    it('produces a DOT digraph for format=dot', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('export_graph', { format: 'dot' }, deps);
+        expect(result.isError).toBeUndefined();
+        const text: string = result.content[0].text;
+        expect(text).toContain('digraph G {');
+        expect(text).toContain('->');
+        expect(text).toContain('}');
+    });
+
+    it('returns isError for an unsupported format', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('export_graph', { format: 'bogus' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/Supported: json, graphml, dot/);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// search_symbols — empty-result and EngineNotReadyError branches.
+// ---------------------------------------------------------------------------
+
+describe('executeTool: search_symbols', () => {
+    it('returns an empty JSON array when there are no contexts', async () => {
+        // Default makeDeps: workspaceManager.getAllContexts() -> []
+        const deps = makeDeps();
+        const result = await executeTool('search_symbols', { query: 'foo' }, deps);
+        expect(result.isError).toBeUndefined();
+        const parsed = JSON.parse(result.content[0].text);
+        expect(Array.isArray(parsed)).toBe(true);
+        expect(parsed).toHaveLength(0);
+    });
+
+    it('surfaces an error when every context is not ready (O-12)', async () => {
+        // A context whose graphEngine is absent -> requireEngine throws
+        // EngineNotReadyError, which search_symbols converts to isError.
+        const deps = makeDeps({
+            workspaceManager: {
+                getAllContexts: vi.fn().mockReturnValue([{ projectPath: '/mock/project' }]),
+            } as any,
+        });
+        const result = await executeTool('search_symbols', { query: 'foo' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/not ready|initializing/i);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// analyze_impact — arg validation and symbol-not-found branches.
+// ---------------------------------------------------------------------------
+
+describe('executeTool: analyze_impact', () => {
+    it('returns isError for a missing/non-string qualified_name', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('analyze_impact', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/qualified_name/i);
+    });
+
+    it('returns isError when the symbol is not found', async () => {
+        // Default mock: getNodeByQualifiedName -> null
+        const deps = makeDeps();
+        const result = await executeTool('analyze_impact', { qualified_name: '/src/a.ts#A' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/not found/i);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// get_callers — arg validation and symbol-not-found branches.
+// ---------------------------------------------------------------------------
+
+describe('executeTool: get_callers', () => {
+    it('returns isError for a missing/non-string qualified_name', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_callers', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/qualified_name/i);
+    });
+
+    it('returns isError when the symbol is not found', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_callers', { qualified_name: '/src/a.ts#A' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/not found/i);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// get_callees — arg validation and symbol-not-found branches.
+// ---------------------------------------------------------------------------
+
+describe('executeTool: get_callees', () => {
+    it('returns isError for a missing/non-string qualified_name', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_callees', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/qualified_name/i);
+    });
+
+    it('returns isError when the symbol is not found', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_callees', { qualified_name: '/src/a.ts#A' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/not found/i);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// get_remediation_strategy — required-argument guards.
+// ---------------------------------------------------------------------------
+
+describe('executeTool: get_remediation_strategy', () => {
+    it('returns isError when the violation argument is missing', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_remediation_strategy', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/violation/i);
+    });
+
+    it('returns isError when the violation object lacks source/target', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_remediation_strategy', { violation: {} }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/source.*target|required/i);
     });
 });
