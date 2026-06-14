@@ -74,12 +74,14 @@
 - **A-1(3) 범위 확장** `[DONE — Phase 14-3]`: `jobs.<id>.uses`(reusable workflow 참조)를 `calls` 에지(job 노드→대상 워크플로 경로)로 추가 — 기존 노드/에지 동등성은 그대로 유지(`uses` 없는 워크플로는 영향 없음).
 - **테스트**(`tests/metadata-parsers.test.ts`, +8건): 동등성 회귀(simple workflow 노드/에지 + 라인 번호 불변), 블록 스칼라, 플로우 jobs, 앵커/별칭, reusable `uses` 에지, 탭 들여쓰기 graceful 강등, malformed YAML 파일 노드만, 빈/비-매핑 문서. `npx tsc --noEmit` clean, `npx vitest run` **538/538**(530 → +8), `npm audit --omit=dev` 0 vulnerabilities.
 
-### A-2(v11). 클러스터링이 그래프 전체를 메모리에 적재 (O-5 승계) — 100k+ 노드 미보호 **[이월: v9 O-5 → v10 O-5, 계속 보류 판정]**
+### A-2(v11). 클러스터링이 그래프 전체를 메모리에 적재 (O-5 승계) — 100k+ 노드 미보호 **[DONE — Phase 14-4]** (가드 추가; 본격 파티셔닝 O-5 계속 이연)
 **`src/graph/graph-engine.ts:168-245`**
 
 `performClustering()`는 `getAllNodes()` + `getAllEdges()`를 통째로 로드하고 인접 리스트·라벨 맵을 전부 메모리에 만든다. LPA 자체는 O(V+E)지만 V·E 전량 상주라 초대형 모노레포(수십만 심볼)에서 RSS 급증·GC 압박이 가능하다. `persistClusters` 트랜잭션화(v10 A-5)는 이미 완료돼 정합성은 안전하다.
 
 **판정**: **계속 보류**가 합리적 — 현실 규모에서 무해하고, 파티셔닝(파일/디렉터리 경계 기반 서브그래프 클러스터링)은 클러스터 품질 트레이드오프를 동반한다. 단 **방어선 하나는 저렴하게 추가 가치 있음**: 노드 수가 임계치(예: 200k)를 넘으면 경고 로그 + clustering 스킵/샘플링하는 가드. Phase 14에서 "가드만" 채택, 본격 파티셔닝은 계속 이연.
+
+**해소 결과 [DONE — Phase 14-4]** (`src/graph/graph-engine.ts`): `performClustering()` 진입부에서 `getAllNodes()` 길이를 `CYNAPX_CLUSTER_MAX_NODES`(기본 200k, `parseClusterMaxNodes()`로 파싱·검증) 임계치와 비교. 초과 시 `log.warn`(노드 수·임계·"O-5 deferred" 메모) 후 `{ clusterCount: 0, nodesClustered: 0 }` 반환 — 인접 리스트/라벨 맵을 만들기 전에 short-circuit하여 RSS 폭증/OOM 방어. 본격 서브그래프 파티셔닝은 O-5로 계속 이연(코드 주석에 명시). **테스트**: 임계치를 3으로 낮추고 5노드 그래프 → skip + WARN 로그 캡처 + 모든 노드 `cluster_id == null` 확인, 임계치 이하(12)는 정상 진행.
 
 ### A-3(v11). CrossProjectResolver의 원격 DB 쿼리가 leading-wildcard LIKE 풀스캔 + 버전/신뢰 검사 부재 **[DONE — Phase 14-2]**
 **`src/indexer/cross-project-resolver.ts:99-102`**
@@ -107,12 +109,18 @@ SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LI
 
 **판정**: Phase 14에서 **단계적 채택 검토** — 전면 마이그레이션은 범위가 크므로, 우선 `notifications/progress`(progress token) 송신만 장기 도구에 배선하는 최소 변경을 1차로. 본격 task lifecycle은 그 다음. **테스트**: 장기 도구가 progress 통지를 emit하는지(mock transport).
 
-### A-5(v11). 클러스터링 라벨 전파가 `Math.random()` 비결정적 — 재현 불가·테스트 취약 **[NEW — LOW-MEDIUM]**
+### A-5(v11). 클러스터링 라벨 전파가 `Math.random()` 비결정적 — 재현 불가·테스트 취약 **[DONE — Phase 14-4]**
 **`src/graph/graph-engine.ts:192-196`**
 
 `const order = [...nodes].sort(() => Math.random() - 0.5)` — (1) `Array.sort`의 비교자로 `random()-0.5`를 쓰는 것은 **편향된 셔플**(Fisher-Yates 아님)이고, (2) 시드 없는 난수라 동일 그래프에 대해 매 실행 클러스터 결과가 달라진다. 주석에 "by design, acceptable for exploratory"라 명시돼 있어 의도적이지만, `get_hotspots`/`propose_refactor`가 클러스터를 참조하므로 **다운스트림 출력이 비결정적**이고 회귀 테스트가 스냅샷을 잡기 어렵다.
 
 **수정 권고**: 선택적 시드 PRNG(`CYNAPX_CLUSTER_SEED` env 또는 인자)를 받아 결정성을 옵션화하고, 셔플은 Fisher-Yates로 교체. 기본 동작은 유지(비결정). **테스트**: 시드 고정 시 동일 입력→동일 클러스터.
+
+**해소 결과 [DONE — Phase 14-4]** (`src/graph/graph-engine.ts`):
+- **A-5(1) 편향 셔플 → Fisher-Yates** `[DONE]`: `[...nodes].sort(() => Math.random() - 0.5)`(비교자 기반 비균등 셔플)를 `fisherYatesShuffle()`(export된 in-place Knuth 셔플, `rng` 주입)로 교체. 매 LPA iteration마다 균등 순열을 생성.
+- **A-5(2) 결정성 옵션** `[DONE]`: `CYNAPX_CLUSTER_SEED`(env, `parseClusterSeed()`로 유한 정수 파싱)가 설정되면 `mulberry32(seed)`(export된 무의존성 32-bit seeded PRNG)를 Fisher-Yates `rng`으로 사용 → 동일 입력 그래프가 매 실행 동일 클러스터 산출. 미설정 시 `Math.random`(기존 비결정 동작 유지).
+- **테스트** (`tests/clustering.test.ts`, +7건): (1) `fisherYatesShuffle` 원소 집합 보존(중복·누락 없음), (2) 시드 PRNG로 결정성, (3) 빈/단일 배열 처리, (4) 고정 `CYNAPX_CLUSTER_SEED` → 두 번 실행 `clusterCount`·노드별 `cluster_id` 동일, (5) 시드별 내부 재현성, (6) 대형 그래프 가드 skip+WARN, (7) 임계 이하 정상 진행.
+- **검증**: `npx tsc --noEmit` clean, `npx vitest run` **545/545**(538 → +7).
 
 ---
 
@@ -123,7 +131,7 @@ SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LI
 | O-1(v11) | `src/indexer/cross-project-resolver.ts:100` | A-3(v11)의 LIKE 풀스캔 — indexed probe 전환(A-3에 흡수) **[DONE — Phase 14-2]** |
 | O-2(v11) | `package.json` overrides | tree-sitter-* 일부가 여전히 `^0.23/0.24` (tree-sitter-typescript 0.23.2, rust 0.24.0) — 코어 0.25.0과 메이저 정렬 점검. override로 0.25 강제 중이나 grammar 패키지 자체 마이너 업그레이드 여지(기능 변화 없으면 LOW) |
 | O-3(v11) | `src/server/ipc-coordinator.ts` (전체) | IPC JSON 평문 직렬화 — MessagePack 미전환(v8→v10 이월). **성능 문제 미관측, verdict: 계속 보류.** 메시지가 작고(주로 메타데이터) round-trip이 빈번하지 않아 직렬화가 병목이 아님. 기록만 유지 |
-| O-4(v11) | `src/graph/graph-engine.ts:196` | 편향 셔플(`sort(()=>random-0.5)`) → Fisher-Yates (A-5에 흡수) |
+| O-4(v11) | `src/graph/graph-engine.ts:196` | 편향 셔플(`sort(()=>random-0.5)`) → Fisher-Yates (A-5에 흡수) **[DONE — Phase 14-4]** |
 | O-5(v11) | `src/indexer/yaml-parser.ts` | js-yaml 전환(A-1에 흡수) — LOW 우선순위지만 견고성 이득 **[DONE — Phase 14-3]** |
 | O-6(v11) | CI | `npm audit` 게이트 부재(N-1에 흡수) — 신규 취약점 조기 탐지 인프라 |
 

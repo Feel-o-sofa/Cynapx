@@ -6,11 +6,11 @@
  * Unit tests for GraphEngine.performClustering() — LPA community detection.
  * Uses an in-memory SQLite database (same pattern as graph-engine.test.ts).
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
-import { GraphEngine } from '../src/graph/graph-engine';
+import { GraphEngine, fisherYatesShuffle, mulberry32 } from '../src/graph/graph-engine';
 import { NodeRepository } from '../src/db/node-repository';
 import { EdgeRepository } from '../src/db/edge-repository';
 import { CodeNode, CodeEdge } from '../src/types';
@@ -131,5 +131,146 @@ describe('GraphEngine.performClustering() — LPA', () => {
 
         expect(first.nodesClustered).toBe(2);
         expect(second.nodesClustered).toBe(2);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Fisher-Yates shuffle helper (A-5/O-4, Phase 14-4)
+// ---------------------------------------------------------------------------
+
+describe('fisherYatesShuffle', () => {
+    it('preserves the full element set (no duplicates, no drops)', () => {
+        const original = Array.from({ length: 100 }, (_, i) => i);
+        const shuffled = fisherYatesShuffle([...original]);
+        expect(shuffled).toHaveLength(original.length);
+        expect([...shuffled].sort((a, b) => a - b)).toEqual(original);
+    });
+
+    it('is deterministic given a seeded PRNG', () => {
+        const original = Array.from({ length: 50 }, (_, i) => i);
+        const a = fisherYatesShuffle([...original], mulberry32(123));
+        const b = fisherYatesShuffle([...original], mulberry32(123));
+        expect(a).toEqual(b);
+    });
+
+    it('handles empty and single-element arrays', () => {
+        expect(fisherYatesShuffle([])).toEqual([]);
+        expect(fisherYatesShuffle([42])).toEqual([42]);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Deterministic seed + large-graph guard (A-5 / A-2, Phase 14-4)
+// ---------------------------------------------------------------------------
+
+describe('GraphEngine.performClustering() — seed + guard', () => {
+    const SEED_ENV = 'CYNAPX_CLUSTER_SEED';
+    const MAX_ENV = 'CYNAPX_CLUSTER_MAX_NODES';
+    let savedSeed: string | undefined;
+    let savedMax: string | undefined;
+
+    beforeEach(() => {
+        savedSeed = process.env[SEED_ENV];
+        savedMax = process.env[MAX_ENV];
+        delete process.env[SEED_ENV];
+        delete process.env[MAX_ENV];
+    });
+
+    afterEach(() => {
+        if (savedSeed === undefined) delete process.env[SEED_ENV]; else process.env[SEED_ENV] = savedSeed;
+        if (savedMax === undefined) delete process.env[MAX_ENV]; else process.env[MAX_ENV] = savedMax;
+    });
+
+    // Build a small graph with several overlapping communities so that LPA
+    // ordering actually influences the outcome.
+    function buildGraph(): { engine: GraphEngine; nodeRepo: NodeRepository } {
+        const { engine, nodeRepo, edgeRepo } = createInMemoryEngine();
+        const ids: number[] = [];
+        for (let i = 0; i < 12; i++) ids.push(makeNode(nodeRepo, `N${i}`));
+        // Two loosely connected triangles + a bridge to create ordering-sensitive ties.
+        const ring = [
+            [0, 1], [1, 2], [2, 0],
+            [3, 4], [4, 5], [5, 3],
+            [6, 7], [7, 8], [8, 6],
+            [9, 10], [10, 11], [11, 9],
+            [2, 3], [5, 6], [8, 9], [11, 0],
+        ];
+        for (const [a, b] of ring) {
+            makeEdge(edgeRepo, ids[a], ids[b]);
+            makeEdge(edgeRepo, ids[b], ids[a]);
+        }
+        return { engine, nodeRepo };
+    }
+
+    function snapshot(nodeRepo: NodeRepository): { count: number; assignments: Record<string, number | null> } {
+        const result: Record<string, number | null> = {};
+        for (const n of nodeRepo.getAllNodes()) {
+            result[n.qualified_name] = n.cluster_id ?? null;
+        }
+        const count = new Set(Object.values(result).filter(v => v !== null)).size;
+        return { count, assignments: result };
+    }
+
+    it('fixed CYNAPX_CLUSTER_SEED → identical clusterCount and per-node cluster_id across runs', async () => {
+        process.env[SEED_ENV] = '987654321';
+
+        const g1 = buildGraph();
+        const r1 = await g1.engine.performClustering();
+        const s1 = snapshot(g1.nodeRepo);
+
+        const g2 = buildGraph();
+        const r2 = await g2.engine.performClustering();
+        const s2 = snapshot(g2.nodeRepo);
+
+        expect(r2.clusterCount).toBe(r1.clusterCount);
+        expect(s2.assignments).toEqual(s1.assignments);
+    });
+
+    it('different seeds may differ, but each seed is internally reproducible', async () => {
+        process.env[SEED_ENV] = '1';
+        const g1 = buildGraph();
+        await g1.engine.performClustering();
+        const a1 = snapshot(g1.nodeRepo).assignments;
+
+        const g2 = buildGraph();
+        await g2.engine.performClustering();
+        const a2 = snapshot(g2.nodeRepo).assignments;
+
+        // Same seed → identical (reproducibility), regardless of cross-seed difference.
+        expect(a2).toEqual(a1);
+    });
+
+    it('large-graph guard: skips clustering with a warning when node count exceeds CYNAPX_CLUSTER_MAX_NODES', async () => {
+        process.env[MAX_ENV] = '3';
+        const { engine, nodeRepo, edgeRepo } = createInMemoryEngine();
+        const ids: number[] = [];
+        for (let i = 0; i < 5; i++) ids.push(makeNode(nodeRepo, `G${i}`));
+        makeEdge(edgeRepo, ids[0], ids[1]);
+        makeEdge(edgeRepo, ids[1], ids[0]);
+
+        const warnings: string[] = [];
+        const original = console.error;
+        console.error = (msg?: unknown) => { warnings.push(String(msg)); };
+        try {
+            const result = await engine.performClustering();
+            // Guard short-circuits — no clustering performed, no crash.
+            expect(result.clusterCount).toBe(0);
+            expect(result.nodesClustered).toBe(0);
+        } finally {
+            console.error = original;
+        }
+
+        expect(warnings.some(w => w.includes('Skipping clustering') && w.includes('CYNAPX_CLUSTER_MAX_NODES'))).toBe(true);
+        // No node should have been assigned a cluster.
+        for (const n of nodeRepo.getAllNodes()) {
+            expect(n.cluster_id ?? null).toBeNull();
+        }
+    });
+
+    it('node count at or below the guard threshold proceeds normally', async () => {
+        process.env[MAX_ENV] = '12';
+        const { engine, nodeRepo } = buildGraph();
+        const result = await engine.performClustering();
+        expect(result.nodesClustered).toBe(12);
     });
 });

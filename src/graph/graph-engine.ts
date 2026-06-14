@@ -6,8 +6,62 @@
 import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
 import { CodeNode, CodeEdge, EdgeType } from '../types';
+import { Logger } from '../utils/logger';
+
+const log = new Logger('GraphEngine');
 
 export type TraversalStrategy = 'DFS' | 'BFS';
+
+const DEFAULT_CLUSTER_MAX_NODES = 200_000;
+
+/** Parse CYNAPX_CLUSTER_SEED into a finite seed, or undefined when unset/invalid. */
+export function parseClusterSeed(raw: string | undefined): number | undefined {
+    if (raw === undefined || raw.trim() === '') return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return undefined;
+    // mulberry32 seeds on a uint32; truncate to an integer for stability.
+    return Math.trunc(n);
+}
+
+/** Parse CYNAPX_CLUSTER_MAX_NODES; falls back to the default for unset/invalid values. */
+export function parseClusterMaxNodes(raw: string | undefined): number {
+    if (raw === undefined || raw.trim() === '') return DEFAULT_CLUSTER_MAX_NODES;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return DEFAULT_CLUSTER_MAX_NODES;
+    return Math.trunc(n);
+}
+
+/**
+ * mulberry32 — a tiny, fast, well-distributed 32-bit seeded PRNG.
+ * Returns a function producing floats in [0, 1). Used to make clustering
+ * deterministic when CYNAPX_CLUSTER_SEED is set (A-5, Phase 14-4).
+ */
+export function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return function () {
+        a |= 0;
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+/**
+ * In-place Fisher-Yates (Knuth) shuffle — produces a uniform permutation.
+ * Replaces the biased `sort(() => Math.random() - 0.5)` (A-5/O-4, Phase 14-4).
+ * `rng` defaults to Math.random (non-deterministic); pass a seeded PRNG for
+ * reproducible ordering. Mutates and returns `arr`.
+ */
+export function fisherYatesShuffle<T>(arr: T[], rng: () => number = Math.random): T[] {
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        const tmp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = tmp;
+    }
+    return arr;
+}
 
 export interface TraversalPathStep {
     nodeId: number;
@@ -170,6 +224,29 @@ export class GraphEngine {
         const edges = this._edgeRepo.getAllEdges();
         if (nodes.length === 0) return { clusterCount: 0, nodesClustered: 0 };
 
+        // A-2 (Phase 14-4): large-graph guard. performClustering() loads the full
+        // node/edge set plus adjacency + label maps into memory; on very large
+        // monorepos (hundreds of thousands of symbols) this risks RSS blow-up / GC
+        // pressure. Until the proper subgraph-partitioning approach (O-5, deferred)
+        // lands, skip clustering above a threshold with a warning rather than risk
+        // an OOM. Threshold is configurable via CYNAPX_CLUSTER_MAX_NODES (default 200k).
+        const maxNodes = parseClusterMaxNodes(process.env.CYNAPX_CLUSTER_MAX_NODES);
+        if (nodes.length > maxNodes) {
+            log.warn('Skipping clustering: node count exceeds CYNAPX_CLUSTER_MAX_NODES guard', {
+                nodeCount: nodes.length,
+                maxNodes,
+                note: 'full subgraph partitioning is deferred (O-5)',
+            });
+            return { clusterCount: 0, nodesClustered: 0 };
+        }
+
+        // A-5 (Phase 14-4): optional deterministic clustering. When
+        // CYNAPX_CLUSTER_SEED is set to a finite number, use a seeded PRNG so the
+        // same input graph yields identical cluster assignments across runs.
+        // Unset → Math.random() (non-deterministic, original behavior).
+        const seed = parseClusterSeed(process.env.CYNAPX_CLUSTER_SEED);
+        const rng: () => number = seed === undefined ? Math.random : mulberry32(seed);
+
         // Build adjacency (undirected) — O(E)
         const adjacency = new Map<number, number[]>();
         for (const n of nodes) adjacency.set(n.id!, []);
@@ -190,10 +267,9 @@ export class GraphEngine {
             let changed = false;
 
             // Shuffle node order each iteration to avoid label propagation bias.
-            // Note: non-deterministic by design — results vary between runs, which
-            // is acceptable for exploratory clustering. Use a seeded PRNG if
-            // reproducibility is required.
-            const order = [...nodes].sort(() => Math.random() - 0.5);
+            // Uses an unbiased Fisher-Yates shuffle (A-5/O-4). `rng` is seeded when
+            // CYNAPX_CLUSTER_SEED is set (deterministic) and Math.random otherwise.
+            const order = fisherYatesShuffle([...nodes], rng);
 
             for (const node of order) {
                 const neighbors = adjacency.get(node.id!) || [];
