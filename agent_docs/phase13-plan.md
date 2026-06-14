@@ -277,7 +277,18 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 ---
 
-## 10. Phase 13-9: 테스트 공백 일괄 + 최종 통합 검증 (5장)
+## 10. Phase 13-9: 테스트 공백 일괄 + 최종 통합 검증 (5장) **[DONE]**
+
+> **[DONE — Phase 13-9]** 5장 테스트 공백을 일괄 마감하고 전 Phase 최종 검증 완료. 산출물:
+> - **REST API HTTP 레벨**: `tests/api-server-http.test.ts`(supertest, 12케이스) — 401+timing-safe Bearer, analyze 한정 rate-limit 429, `/mcp` 세션 생성·미지 sessionId GET 우회 거부(SEC-H-1)·known-sid 우회·idle sweep·cap 429, `/healthz` 503/200/error 상태. 검증 중 `/healthz`가 `getActiveContext` throw 시 500을 누출하던 잠재 결함을 발견·수정(try/catch로 503 강등 — 라이브니스 프로브는 절대 500이면 안 됨).
+> - **IPC 2-프로세스 e2e**: `scripts/ipc-e2e-test.js` 신설 — 실제 `fork`된 Host/echo-attacker OS 프로세스 + 실 127.0.0.1 TCP 소켓으로 (a) HMAC nonce 모르는 에코 클라이언트 거부(C-3), (b) 다수 소형 메시지로 누적 1.2MB 트래픽 유지+사후 정상 round-trip(H-8), (c) Host SIGKILL → Terminal `disconnected` 이벤트(failover 트리거, H-1) 검증. 통합 스크립트 Phase 26으로 배선.
+> - **Docker 빌드/기동**: `scripts/docker-smoke.sh`(P13-1)를 통합 스크립트 Phase 27로 배선 — Docker 데몬 부재 시 graceful SKIP(run 실패 아님).
+> - **lock 경합 스트레스**: `tests/lock-manager.test.ts`에 "Phase 13-9: lock contention stress" 추가(5케이스) — `Promise.all` 병렬 ~320 atomic write 무손상, 12개 매니저 동시 acquire 단일 승자(나머지 LockHeldError), PID 재사용+stale heartbeat→즉시 reclaim, fresh heartbeat→재시도 상한 후 reclaim(유계 루프), forceReclaim 후 재acquire.
+> - **크로스 플랫폼**: `resolvePythonCommand`(P13-2, embedding-queue.test.ts) / `getProjectHash` win32·darwin·posix 분기(P13-8B, phase13-8-commit-b.test.ts) / `isPathInside` 경계(P13-7, security.test.ts) — 이미 동반 작성됨을 재확인(신규 작업 불필요).
+> - **purge → 재초기화**: 통합 스크립트 정식 Phase 25(P13-6 편입분)로 이미 존재 — 정식 Phase임을 확인.
+> - 비-TS 메트릭(P13-5)/git 이력 재작성(P13-4)/임베딩 프로토콜(P13-8A)은 각 수정과 동반 작성 — 점검만.
+> - 의존성: `supertest`/`@types/supertest`를 devDependency로 추가(기존 audit 경고는 MCP SDK·express-rate-limit 전이 의존 — supertest가 신규 유발하지 않음).
+> - **최종 상태**: `npm test` 525/525, `npx tsc --noEmit` 그린, `node scripts/integration-test.js` 76/76 (Phase 0~27, Phase 27 Docker는 데몬 부재로 SKIP).
 
 **목표**: 각 Phase에서 수정 직후 동반 작성된 테스트 외에, 인프라가 필요해 이연된 공백을 일괄 구축. 전 단계 완료 후 최종 검증.
 
@@ -298,6 +309,16 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 ---
 
+## 10.5. Phase 13 전체 완료
+
+**Phase 13-1 ~ 13-9 전부 [DONE]** — diagnostic-v10의 CRITICAL 3건(C-1 Docker 배포 전손, C-2 사이드카 spawn 크래시, C-3 IPC 인증 무력화), HIGH 9건(H-1~H-9: lock 단일성·증분 동기화·비-TS 메트릭·purge 수명주기·경로 경계·IPC 한계·HTTPS 폴백), MEDIUM(A) 12건(A-1~A-12, O-5 흡수분 포함), LOW/최적화(O) 항목(O-5 계속 보류 외 전부), v9 이월 잔존 부채(A-10 표), CVE-2025-7709(better-sqlite3 12.10.0 업그레이드), 구조화 로깅 배선, 5장 테스트 공백 9건을 해소 완료.
+
+**최종 상태**: `npm test` **525/525**, `npx tsc --noEmit` 그린, 통합 스크립트 **76/76** (Phase 0~27 — Phase 26 IPC 2-프로세스 e2e 신규, Phase 27 Docker 스모크는 데몬 부재 시 graceful SKIP). 신규 e2e 인프라(`scripts/ipc-e2e-test.js`)와 supertest 기반 HTTP 레벨 테스트(`tests/api-server-http.test.ts`)로 그간 테스트가 닿지 않던 배포·멀티프로세스 보안·HTTP 인증/세션 경로를 커버.
+
+잔여 이연 항목(Phase 14 후보): O-5 클러스터링 파티셔닝(100k+ 노드 규모에서만 유효), IPC MessagePack 직렬화, YamlParser → js-yaml 전환, MCP 2025-11-25 task 기반 워크플로(A-12 장기 작업 타임아웃의 표준 해법). 상세는 12장.
+
+---
+
 ## 11. 전체 순서 요약
 
 | Phase | 핵심 항목 | 커밋 수 | 리스크 |
@@ -310,9 +331,9 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 | 13-6 **[DONE]** | H-6, A-9 (수명주기·운영 도구) | 1 | 중간 |
 | 13-7 | H-7, A-2, A-3 + CVE 의존성 업그레이드 | 2 | 중간 (native 메이저 업그레이드) |
 | 13-8 | A-4~A-8, A-10, A-12, O-1/O-3/O-4, O-7~O-12, 구조화 로깅 | 4 | 중간 (마이그레이션 포함) |
-| 13-9 | 테스트 공백 일괄 + 최종 통합 검증 | 1~2 | 낮음 |
+| 13-9 **[DONE]** | 테스트 공백 일괄 + 최종 통합 검증 | 1~2 | 낮음 |
 
-**총 16~22개 커밋**, P13-1부터 순차 진행 (P13-1 → P13-7 의존성 외에는 P13-5/P13-6의 순서 유연성 있음). 각 Phase 종료 시 `agent_docs/diagnostic-v10.md`에 [DONE] 마킹.
+**Phase 13-1 ~ 13-9 전부 [DONE]** (10.5장 참조 — 525/525 테스트, tsc 그린, 통합 76/76). **총 16~22개 커밋**, P13-1부터 순차 진행 (P13-1 → P13-7 의존성 외에는 P13-5/P13-6의 순서 유연성 있음). 각 Phase 종료 시 `agent_docs/diagnostic-v10.md`에 [DONE] 마킹.
 
 ---
 

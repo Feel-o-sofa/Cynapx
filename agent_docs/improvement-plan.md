@@ -1,7 +1,7 @@
 # Cynapx 프로젝트 개선 계획
 
-> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-04-18 (Phase 11 완료 — syncWithGit 전략 패턴, A-4/A-5 구현)
-> **대상 버전**: v1.0.6
+> **최초 작성**: 2026-03-28 / **최종 갱신**: 2026-06-14 (Phase 13 전체 완료 — 배포/멀티프로세스 보안/인덱싱 정합성/구조화 로깅/테스트 공백)
+> **대상 버전**: v2.0.0
 
 ---
 
@@ -534,4 +534,36 @@ Week 3-4
 | 벤치마크 | 없음 | 3 suite 8개 (parsing/DB/tagging) |
 | IPC 보안 | 인증 없음 | nonce 챌린지-응답, 1MB 메시지 크기 제한 |
 | 경로 보안 | 검증 없음 | initialize_project 홈/cwd 범위 검증, null securityProvider 차단 |
+
+---
+
+## 9. Phase 11 ~ 13 완료 요약 (2026-06-14)
+
+> 상세 진단/계획은 `diagnostic-v8~v10.md` 및 `phase11-plan.md`~`phase13-plan.md` 참조. 본 절은 개략 요약이다.
+
+### Phase 11 — syncWithGit 전략 패턴 + A-4/A-5 (PR, 2026-04-18)
+증분/풀스캔 동기화를 전략 패턴으로 분리, diagnostic-v8 A-4/A-5 구현 완료.
+
+### Phase 12 — 정상 경로 견고성 강화 (Phase 12-1 ~ 12-8, diagnostic-v9)
+CRITICAL 3 + HIGH 7 + MEDIUM/LOW(O-4·O-5 이연) + 테스트 공백 6건 해소. 최종 `npm test` 336/336, tsc 그린, 통합 스크립트 69/69 (Phase 0~24).
+
+### Phase 13 — 배포·멀티프로세스 보안·인덱싱 정합성 (Phase 13-1 ~ 13-9, diagnostic-v10) **[전체 완료]**
+
+diagnostic-v10이 정상 경로 외의 **배포(Docker), 멀티프로세스 보안(IPC), 비-TS 메트릭, 종료/재초기화 경로**에서 테스트가 닿지 않던 구조적 결함을 다수 발견 — 이를 9개 하위 Phase로 일괄 수정.
+
+| 하위 Phase | 핵심 항목 |
+|-----------|----------|
+| 13-1 | C-1 Docker 배포 경로 복구(schema/scripts 포함, prepare→prepack), Node 22 베이스, `engines`, `/healthz` 503/인증 면제, docker-smoke.sh |
+| 13-2 | C-2 사이드카 spawn 'error' 처리(크래시 차단), C-3 IPC 챌린지-응답 재설계(nonce 비노출 HMAC), H-8 라인 단위 크기 제한, H-9 HTTPS fail-fast |
+| 13-3 | H-1 heartbeat staleness + connect 재시도 상한, H-2 atomic 락 write, A-11 프로젝트 락 정체성 |
+| 13-4 | H-3 git from-커밋 소실 풀스캔 폴백, H-4 BEGIN 이전 히스토리 프리페치, A-1 UPSERT+recursive_triggers, O-2 |
+| 13-5 | H-5 비-TS 언어 cyclomatic complexity tree-sitter decisionPoints 배선 |
+| 13-6 | H-6 purge unmount(좀비 컨텍스트 제거)+재초기화, A-9 안전 admin 백업/VACUUM |
+| 13-7 | H-7 `isPathInside` 경로 경계, A-2 MCP 세션 TTL/cap+마스킹, A-3 timing-safe Bearer, CVE-2025-7709(better-sqlite3 12.10.0) |
+| 13-8 | A-4~A-8/A-10/A-12, O-1/O-3/O-4/O-7~O-12, 구조화 로깅 배선 (커밋 A/B/C/D) |
+| 13-9 | 테스트 공백 일괄(REST HTTP supertest, IPC 2-프로세스 e2e, Docker 스모크 배선, lock 경합 스트레스) + 최종 검증 |
+
+**최종 상태**: `npm test` **525/525**, `npx tsc --noEmit` 그린, `node scripts/integration-test.js` **76/76** (Phase 0~27 — Docker는 데몬 부재 시 graceful SKIP). 신규 e2e 인프라: `scripts/ipc-e2e-test.js`(실 fork 프로세스 + TCP), `tests/api-server-http.test.ts`(supertest). 13-9 검증 중 `/healthz`가 컨텍스트 조회 throw 시 500을 누출하던 잠재 결함을 추가 발견·수정(503 강등).
+
+**Phase 14 후보(이연)**: O-5 클러스터링 파티셔닝, IPC MessagePack, YamlParser→js-yaml, MCP 2025-11-25 task 워크플로.
 | `tests` 엣지 로컬 해소 | 항상 `[]` | resolveProductionFile() 도입 — 파일시스템 검색으로 로컬 노드 연결 (P9-H-1 핫픽스) |
