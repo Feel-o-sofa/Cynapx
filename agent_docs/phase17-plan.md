@@ -33,7 +33,7 @@ L-6 (Node 24 tree-sitter 빌드)     ──추적만──→  [node-tree-sitter
 
 ---
 
-## 2. Phase 17-1: 추적 상태 갱신 + 유지보수 모드 포스처 재선언 — docs-only·무위험 [예정]
+## 2. Phase 17-1: 추적 상태 갱신 + 유지보수 모드 포스처 재선언 — docs-only·무위험 [DONE]
 
 **목표**: diagnostic-v14가 확인한 steady state를 다음 사이클로 깔끔히 이월한다. 본 사이클에는 코드-변경 항목이 없으므로, Phase 17의 산출물은 (a) 추적/이연 항목의 현 상태를 진단 문서에 고정하고(다음 사이클 출발점 명확화), (b) 유지보수 모드 포스처를 재선언하는 것이다. **코드는 전혀 건드리지 않는다.**
 
@@ -78,7 +78,7 @@ L-6 (Node 24 tree-sitter 빌드)     ──추적만──→  [node-tree-sitter
 
 | Phase | 핵심 항목 | 커밋 수 | 리스크 |
 |-------|-----------|---------|--------|
-| 17-1 | L-2/L-3/L-6 추적 상태 갱신 + 유지보수 모드 포스처 재선언 (diagnostic-v14 + phase17-plan docs) | 1 | 없음 (docs-only, 코드·설치본·동작 전부 불변) |
+| 17-1 | L-2/L-3/L-6 추적 상태 갱신 + 유지보수 모드 포스처 재선언 (diagnostic-v14 + phase17-plan docs) [DONE] | 1 | 없음 (docs-only, 코드·설치본·동작 전부 불변) |
 
 **총 1개 커밋.** Phase 17 전체 완료 — 다음 사이클은 신규 진단(diagnostic-v15.md) + phase18-plan.md 수립. Phase 16 대비도 **더 작다** — Phase 16은 코드 한 글자(override floor) 변경이 있었으나 Phase 17은 코드 변경이 전혀 없다. **이번 사이클의 본질은 코드 결함 수정이 아니라 (1) steady state 정직한 확인 + (2) 추적 상태 고정 + (3) 유지보수 모드 포스처 이월**이다. Phase 17 종료 시 `agent_docs/diagnostic-v14.md`에 [DONE] 마킹.
 

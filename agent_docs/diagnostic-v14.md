@@ -1,5 +1,7 @@
 # Cynapx 정밀 진단 보고서 v14
 
+**[DONE — Phase 17-1]**: 본 보고서가 식별한 LOW 5건(L-2/L-3/L-4/L-5/L-6)은 전부 추적/이연이며, Phase 17-1에서 추적 상태를 재확인·고정했다(phase17-plan.md §2 참조). 코드 변경 항목 0건이므로 본 보고서 자체가 Phase 17-1의 산출물이다.
+
 - **기준 커밋**: `af196fe` (Phase 16-1 + Phase 16 완료, 브랜치 `claude/latest-commit-query-9askn1`)
 - **진단 일자**: 2026-06-14
 - **진단 범위**: src/ 전체 (server, db, indexer, graph, watcher, utils, cli, bootstrap), schema/, scripts/, tests/, src-native/, Dockerfile, `.github/workflows/ci.yml`, package.json/lockfile + 외부 컨텍스트(CVE/advisory, 공급망 캠페인, MCP 생태계, 경쟁 도구)
