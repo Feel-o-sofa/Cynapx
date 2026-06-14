@@ -220,25 +220,31 @@ export class GraphEngine {
      * Groups symbols into logical clusters and saves results to DB.
      */
     public async performClustering(): Promise<{ clusterCount: number, nodesClustered: number }> {
-        const nodes = this.nodeRepo.getAllNodes();
-        const edges = this._edgeRepo.getAllEdges();
-        if (nodes.length === 0) return { clusterCount: 0, nodesClustered: 0 };
-
         // A-2 (Phase 14-4): large-graph guard. performClustering() loads the full
         // node/edge set plus adjacency + label maps into memory; on very large
         // monorepos (hundreds of thousands of symbols) this risks RSS blow-up / GC
         // pressure. Until the proper subgraph-partitioning approach (O-5, deferred)
         // lands, skip clustering above a threshold with a warning rather than risk
         // an OOM. Threshold is configurable via CYNAPX_CLUSTER_MAX_NODES (default 200k).
+        //
+        // M-4 (Phase 15-1): count-first guard. Probe the node count with a single
+        // COUNT(*) BEFORE getAllNodes()/getAllEdges() materialize the full set, so
+        // the guard's OOM defense triggers without first loading hundreds of MB of
+        // node objects. Same return shape and warning as the P14-4 guard.
         const maxNodes = parseClusterMaxNodes(process.env.CYNAPX_CLUSTER_MAX_NODES);
-        if (nodes.length > maxNodes) {
+        const nodeCount = this.nodeRepo.countNodes();
+        if (nodeCount > maxNodes) {
             log.warn('Skipping clustering: node count exceeds CYNAPX_CLUSTER_MAX_NODES guard', {
-                nodeCount: nodes.length,
+                nodeCount,
                 maxNodes,
                 note: 'full subgraph partitioning is deferred (O-5)',
             });
             return { clusterCount: 0, nodesClustered: 0 };
         }
+
+        const nodes = this.nodeRepo.getAllNodes();
+        const edges = this._edgeRepo.getAllEdges();
+        if (nodes.length === 0) return { clusterCount: 0, nodesClustered: 0 };
 
         // A-5 (Phase 14-4): optional deterministic clustering. When
         // CYNAPX_CLUSTER_SEED is set to a finite number, use a seeded PRNG so the

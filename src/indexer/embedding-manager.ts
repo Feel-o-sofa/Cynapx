@@ -382,12 +382,26 @@ export class EmbeddingManager {
 
         this.queueTail = this.queueTail.then(() => {
             const batchPromise = this.provider.generateBatch(texts);
-            const timeoutPromise = new Promise<never>((_res, rej) =>
-                setTimeout(() => rej(new Error(`Batch timed out after ${timeoutMs}ms`)), timeoutMs)
-            );
-            resolve(Promise.race([batchPromise, timeoutPromise]));
+            // M-2 (Phase 15-1): capture the timeout handle so it can be cleared once
+            // the race settles. Previously the setTimeout was never cleared on success,
+            // leaving a live BATCH_TIMEOUT_MS timer per batch (hundreds during a large
+            // repo initial index). Mirrors the clear/unref discipline in
+            // worker-pool.ts:154-159 and ipc-coordinator.ts:184. Result semantics are
+            // unchanged: resolve on success, reject on timeout.
+            let timeoutHandle: ReturnType<typeof setTimeout>;
+            const timeoutPromise = new Promise<never>((_res, rej) => {
+                timeoutHandle = setTimeout(
+                    () => rej(new Error(`Batch timed out after ${timeoutMs}ms`)),
+                    timeoutMs
+                );
+            });
+            const raced = Promise.race([batchPromise, timeoutPromise]);
+            // Clear the timer whether the race settled via success or timeout, so no
+            // live timer outlives the resolved batch.
+            const settled = raced.finally(() => clearTimeout(timeoutHandle));
+            resolve(settled);
             // Wait for the batch (or timeout) before releasing the queue slot
-            return Promise.race([batchPromise, timeoutPromise]).then(() => {}, () => {});
+            return settled.then(() => {}, () => {});
         });
 
         return slot;

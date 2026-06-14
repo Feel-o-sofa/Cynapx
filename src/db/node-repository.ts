@@ -251,6 +251,16 @@ export class NodeRepository {
         return rows.map(row => this.mapRowToNode(row));
     }
 
+    /**
+     * Returns the total node count via a single COUNT(*) probe, without
+     * materializing the node array. Used by the count-first clustering guard
+     * (M-4, Phase 15-1) to short-circuit before getAllNodes() loads the full set.
+     */
+    public countNodes(): number {
+        const row = this.db.prepare('SELECT COUNT(*) AS n FROM nodes').get() as { n: number };
+        return row.n;
+    }
+
     public updateCluster(id: number, clusterId: number | null): void {
         // A-5: cached — persistClusters() calls this once per clustered node.
         if (!this._updateClusterStmt) this._updateClusterStmt = this.db.prepare('UPDATE nodes SET cluster_id = ? WHERE id = ?');

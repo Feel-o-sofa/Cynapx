@@ -6,7 +6,7 @@
  * Unit tests for GraphEngine.performClustering() — LPA community detection.
  * Uses an in-memory SQLite database (same pattern as graph-engine.test.ts).
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -272,5 +272,68 @@ describe('GraphEngine.performClustering() — seed + guard', () => {
         const { engine, nodeRepo } = buildGraph();
         const result = await engine.performClustering();
         expect(result.nodesClustered).toBe(12);
+    });
+
+    // M-4 (Phase 15-1): count-first guard. The guard now probes countNodes()
+    // BEFORE getAllNodes()/getAllEdges() load the full set, so an over-threshold
+    // graph short-circuits without materializing the node/edge arrays.
+    it('count-first guard: getAllNodes/getAllEdges are NOT called when over threshold', async () => {
+        process.env[MAX_ENV] = '3';
+        const { engine, nodeRepo, edgeRepo } = createInMemoryEngine();
+        const ids: number[] = [];
+        for (let i = 0; i < 5; i++) ids.push(makeNode(nodeRepo, `C${i}`));
+        makeEdge(edgeRepo, ids[0], ids[1]);
+
+        const nodesSpy = vi.spyOn(nodeRepo, 'getAllNodes');
+        const edgesSpy = vi.spyOn(edgeRepo, 'getAllEdges');
+        const countSpy = vi.spyOn(nodeRepo, 'countNodes');
+
+        const result = await engine.performClustering();
+
+        expect(result).toEqual({ clusterCount: 0, nodesClustered: 0 });
+        // countNodes() probe ran; the full loads did not.
+        expect(countSpy).toHaveBeenCalled();
+        expect(nodesSpy).not.toHaveBeenCalled();
+        expect(edgesSpy).not.toHaveBeenCalled();
+
+        nodesSpy.mockRestore();
+        edgesSpy.mockRestore();
+        countSpy.mockRestore();
+    });
+
+    it('count-first guard: in-bounds graph still loads nodes/edges and clusters identically', async () => {
+        process.env[SEED_ENV] = '987654321';
+        process.env[MAX_ENV] = '100';
+
+        // Baseline run without the spy harness.
+        const baseline = buildGraph();
+        const rBase = await baseline.engine.performClustering();
+        const sBase = snapshot(baseline.nodeRepo);
+
+        // Spied run — must call getAllNodes/getAllEdges and produce identical results.
+        const g = buildGraph();
+        const nodesSpy = vi.spyOn(g.nodeRepo, 'getAllNodes');
+        const r = await g.engine.performClustering();
+        const s = snapshot(g.nodeRepo);
+
+        expect(nodesSpy).toHaveBeenCalled();
+        expect(r.clusterCount).toBe(rBase.clusterCount);
+        expect(s.assignments).toEqual(sBase.assignments);
+
+        nodesSpy.mockRestore();
+    });
+});
+
+// ---------------------------------------------------------------------------
+// NodeRepository.countNodes() probe (M-4, Phase 15-1)
+// ---------------------------------------------------------------------------
+
+describe('NodeRepository.countNodes()', () => {
+    it('returns 0 for an empty table and the exact count otherwise', () => {
+        const { nodeRepo } = createInMemoryEngine();
+        expect(nodeRepo.countNodes()).toBe(0);
+        makeNode(nodeRepo, 'A');
+        makeNode(nodeRepo, 'B');
+        expect(nodeRepo.countNodes()).toBe(2);
     });
 });

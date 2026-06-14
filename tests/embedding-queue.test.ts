@@ -168,6 +168,67 @@ describe('EmbeddingManager — enqueuedBatch queue serialization', () => {
 });
 
 // ---------------------------------------------------------------------------
+// M-2 (Phase 15-1) — enqueuedBatch timeout timer hygiene
+// On success, the per-batch BATCH_TIMEOUT_MS setTimeout must be cleared so it
+// does not outlive the resolved batch. On timeout, the reject semantics must be
+// unchanged (regression).
+// ---------------------------------------------------------------------------
+
+describe('EmbeddingManager.enqueuedBatch — timeout timer hygiene (M-2)', () => {
+    afterEach(() => {
+        vi.useRealTimers();
+        vi.clearAllMocks();
+    });
+
+    it('clears the batch timeout timer after a successful batch (no dangling timer)', async () => {
+        vi.useFakeTimers();
+
+        const provider: EmbeddingProvider = {
+            generate: vi.fn().mockResolvedValue([1, 2, 3]),
+            // Resolve quickly, well before the 120s batch timeout.
+            generateBatch: vi.fn().mockResolvedValue([[1, 2, 3]]),
+            getDimensions: vi.fn().mockReturnValue(3),
+            getModelName: vi.fn().mockReturnValue('mock'),
+        };
+
+        const manager = new EmbeddingManager(makeMockDb(), makeMockNodeRepo(), provider);
+
+        const baseline = vi.getTimerCount();
+        const result = await (manager as any).enqueuedBatch(['hello']);
+        expect(result).toEqual([[1, 2, 3]]);
+
+        // After success, the timeout timer must be cleared — back to baseline.
+        expect(vi.getTimerCount()).toBe(baseline);
+    });
+
+    it('still rejects on timeout (reject semantics unchanged) and leaves no live timer', async () => {
+        vi.useFakeTimers();
+
+        const provider: EmbeddingProvider = {
+            generate: vi.fn().mockResolvedValue([1, 2, 3]),
+            // Never resolves — forces the timeout branch to win the race.
+            generateBatch: vi.fn().mockReturnValue(new Promise<number[][]>(() => {})),
+            getDimensions: vi.fn().mockReturnValue(3),
+            getModelName: vi.fn().mockReturnValue('mock'),
+        };
+
+        const manager = new EmbeddingManager(makeMockDb(), makeMockNodeRepo(), provider);
+
+        const baseline = vi.getTimerCount();
+        const promise = (manager as any).enqueuedBatch(['hello']) as Promise<number[][]>;
+        // Attach a catch synchronously to avoid an unhandled rejection warning.
+        const settled = promise.then(() => 'resolved', (e: Error) => e.message);
+
+        // Drive the timeout to fire.
+        await vi.advanceTimersByTimeAsync(120_000);
+
+        await expect(settled).resolves.toMatch(/Batch timed out after 120000ms/);
+        // The timeout timer has fired and the finally cleared it — no leftover.
+        expect(vi.getTimerCount()).toBe(baseline);
+    });
+});
+
+// ---------------------------------------------------------------------------
 // PythonEmbeddingProvider — L1 fallback return type / L6 post-dispose guard
 // ---------------------------------------------------------------------------
 
