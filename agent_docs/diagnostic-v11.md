@@ -61,12 +61,18 @@
 
 ## 3. MEDIUM — 아키텍처/정합성 개선 (A)
 
-### A-1(v11). YamlParser 수제 라인 파싱 — 멀티라인/플로우/앵커 구조 누락, js-yaml 미전환 **[이월: v8→v10 A-10 → 여전히 잔존]**
+### A-1(v11). YamlParser 수제 라인 파싱 — 멀티라인/플로우/앵커 구조 누락, js-yaml 미전환 **[DONE — Phase 14-3]**
 **`src/indexer/yaml-parser.ts:41-91`**
 
 `YamlParser`는 정규식 라인 스캔으로 top-level key와 `jobs:` 직하 항목만 추출한다. 다음을 정확히 처리하지 못한다: 플로우 스타일(`jobs: {build: ...}`), 멀티라인 스칼라(`|`/`>`), 앵커/별칭(`&`/`*`), 리스트 항목으로 정의된 키, 들여쓰기가 탭인 파일. **현 용도(CI 워크플로의 top-level key + job 이름 노드화)에는 충분**하나, GitHub Actions의 reusable workflow(`jobs.<id>.uses`)나 Kubernetes/compose 매니페스트로 범위가 넓어지면 침묵 누락이 된다.
 
 **판정**: diagnostic-v10 A-10 표의 "우선순위 낮음" 유지하되, **`js-yaml` 전환을 Phase 14에서 채택 후보로 승격** — 의존성은 가볍고(순수 JS, 알려진 취약점 없음 — 진단 시 확인 권고), 파서를 "라인 휴리스틱 → 실제 YAML 트리 순회"로 바꾸면 위 모든 케이스가 한 번에 해소되고 markdown/json-config 파서와 일관된 견고성을 얻는다. **테스트**: 멀티라인 스칼라/플로우 jobs/앵커 fixture에서 노드·에지 기대값.
+
+**해소 결과 [DONE — Phase 14-3]** (`src/indexer/yaml-parser.ts`, `package.json`, `tests/metadata-parsers.test.ts`):
+- **A-1(1) js-yaml 의존** `[DONE — Phase 14-3]`: `js-yaml`(prod dependency — 파서는 인덱싱 런타임에 동작) + `@types/js-yaml`(devDependency) 추가. 추가 직후 `npm audit --omit=dev` = **0 vulnerabilities**(P14-1 게이트 baseline 유지) — js-yaml은 순수 JS·전이 취약점 없음.
+- **A-1(2) 파서 재작성** `[DONE — Phase 14-3]`: 수제 정규식 라인 스캔 → `yaml.load()` 트리 파싱 + 트리 순회로 교체. top-level mapping key → `config_key` 노드, `jobs.<id>` → `function` 노드, `contains` 에지(file→각 노드). 플로우 스타일(`jobs: {build: ...}`)·블록 스칼라(`|`/`>`)·앵커/별칭(`&`/`*`/`<<`)·리스트 키를 모두 견고 처리. **Graceful 강등**: `yaml.load()`가 YAMLException(malformed/탭 들여쓰기)을 던지면 catch해서 파일 노드만 반환(throw 전파 없음). **라인 번호**: js-yaml `listener` 옵션으로 각 scalar `close` 이벤트의 `state.line`(0-based)을 캡처 — top-level key/job id는 워크플로 내 고유 문자열이라 string→line 맵(first-occurrence-wins)으로 충분하며 구 라인 파서 위치를 정확히 재현(simple fixture: name=1/on=2/jobs=3/build=4/test=6). 한계: 플로우 스타일/alias-공유 scalar는 첫 텍스트 출현 줄로 근사(주석에 명시).
+- **A-1(3) 범위 확장** `[DONE — Phase 14-3]`: `jobs.<id>.uses`(reusable workflow 참조)를 `calls` 에지(job 노드→대상 워크플로 경로)로 추가 — 기존 노드/에지 동등성은 그대로 유지(`uses` 없는 워크플로는 영향 없음).
+- **테스트**(`tests/metadata-parsers.test.ts`, +8건): 동등성 회귀(simple workflow 노드/에지 + 라인 번호 불변), 블록 스칼라, 플로우 jobs, 앵커/별칭, reusable `uses` 에지, 탭 들여쓰기 graceful 강등, malformed YAML 파일 노드만, 빈/비-매핑 문서. `npx tsc --noEmit` clean, `npx vitest run` **538/538**(530 → +8), `npm audit --omit=dev` 0 vulnerabilities.
 
 ### A-2(v11). 클러스터링이 그래프 전체를 메모리에 적재 (O-5 승계) — 100k+ 노드 미보호 **[이월: v9 O-5 → v10 O-5, 계속 보류 판정]**
 **`src/graph/graph-engine.ts:168-245`**
@@ -118,7 +124,7 @@ SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LI
 | O-2(v11) | `package.json` overrides | tree-sitter-* 일부가 여전히 `^0.23/0.24` (tree-sitter-typescript 0.23.2, rust 0.24.0) — 코어 0.25.0과 메이저 정렬 점검. override로 0.25 강제 중이나 grammar 패키지 자체 마이너 업그레이드 여지(기능 변화 없으면 LOW) |
 | O-3(v11) | `src/server/ipc-coordinator.ts` (전체) | IPC JSON 평문 직렬화 — MessagePack 미전환(v8→v10 이월). **성능 문제 미관측, verdict: 계속 보류.** 메시지가 작고(주로 메타데이터) round-trip이 빈번하지 않아 직렬화가 병목이 아님. 기록만 유지 |
 | O-4(v11) | `src/graph/graph-engine.ts:196` | 편향 셔플(`sort(()=>random-0.5)`) → Fisher-Yates (A-5에 흡수) |
-| O-5(v11) | `src/indexer/yaml-parser.ts` | js-yaml 전환(A-1에 흡수) — LOW 우선순위지만 견고성 이득 |
+| O-5(v11) | `src/indexer/yaml-parser.ts` | js-yaml 전환(A-1에 흡수) — LOW 우선순위지만 견고성 이득 **[DONE — Phase 14-3]** |
 | O-6(v11) | CI | `npm audit` 게이트 부재(N-1에 흡수) — 신규 취약점 조기 탐지 인프라 |
 
 ---
