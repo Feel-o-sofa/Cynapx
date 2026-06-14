@@ -55,7 +55,10 @@ O-5 (클러스터 파티셔닝)    ──계속 이연──
 
 ---
 
-## 3. Phase 15-2: tree-sitter grammar 마이너 정렬 + override 일관화 (M-3 v12)
+## 3. Phase 15-2: tree-sitter grammar 마이너 정렬 + override 일관화 (M-3 v12) `[DONE]`
+
+**처리 결과 요약**: (a) override를 **top-level 단일 `tree-sitter: ^0.25.0`로 일관화**(중첩 5개 제거 — `npm ls`로 12개 grammar 전부 0.25.0 dedupe 확인). (b) 코어는 npm 최신이 0.25.0이라(0.25.1 미존재) 변경 없음. (c) grammar 마이너 정렬은 대부분 이미 최신이고, 유일 신규 후보 `tree-sitter-c-sharp 0.23.5`가 ESM/TLA 바인딩 전환으로 `require()` 회귀를 일으켜 **`0.23.1`로 정확 핀 롤백**. 검증: 563/563 tests, tsc clean, audit 0 vulns, integration 76/76. 상세는 diagnostic-v12.md M-3 참조.
+
 
 **목표**: 코어 `tree-sitter@0.25.x`와 grammar 패키지의 메이저 비대칭을 줄인다. (a) 각 native grammar을 최신 마이너로 일괄 정렬, (b) `overrides`의 중첩 `tree-sitter: ^0.25.0` 강제를 현재 5개(c-sharp/cpp/java/kotlin/typescript)에서 **모든** native grammar(rust/php/go/python/c/javascript 포함)로 일관 적용, (c) 정렬 후 언어별 파서 스냅샷 회귀로 노드/에지/CC 동등성 확인. 침묵 파싱 회귀의 잠재 표면(미래 코어 업그레이드 시 노드 누락·CC 오계산)을 선제 차단한다.
 
