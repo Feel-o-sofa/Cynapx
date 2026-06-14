@@ -520,6 +520,129 @@ describe('LockManager', () => {
         });
     });
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 13-9 (diagnostic-v10 §5 "lock 경합 스트레스"): the integration-level
+    // counterpart of the H-1/H-2 unit checks above. Exercises heavily concurrent
+    // getValidLock()/heartbeat() interleavings for write atomicity, and a
+    // PID-reuse + retry-cap simulation for the connect-failure escalation policy.
+    // ─────────────────────────────────────────────────────────────────────────
+    describe('Phase 13-9: lock contention stress', () => {
+        it('survives many fully-parallel heartbeat + getValidLock calls without ever observing corruption', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            await manager.acquire(6300, 'stress-nonce');
+            const lockPath: string = (manager as any).lockPath;
+
+            // Unlike the serial H-2 interleave test, fire batches with Promise.all
+            // so heartbeat writes (tmp+rename) race in-flight reads. Atomic
+            // replace must guarantee every reader sees complete JSON for a live
+            // PID — never null from a parse failure or a missing file.
+            let nullObservations = 0;
+            for (let batch = 0; batch < 40; batch++) {
+                const ops: Promise<unknown>[] = [];
+                for (let i = 0; i < 8; i++) {
+                    ops.push(manager.heartbeat());
+                    ops.push(manager.getValidLock().then((l) => { if (l === null) nullObservations++; }));
+                }
+                await Promise.all(ops);
+            }
+            expect(nullObservations).toBe(0);
+
+            // The on-disk file is still valid JSON carrying our nonce, and no temp
+            // files leaked from the ~320 atomic writes.
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.nonce).toBe('stress-nonce');
+            const tmpFiles = fs.readdirSync(TEST_LOCKS_DIR).filter(f => f.includes('.tmp'));
+            expect(tmpFiles).toHaveLength(0);
+        });
+
+        it('concurrent acquire() from many managers yields exactly one winner (single host)', async () => {
+            // O_EXCL create must serialize racing acquirers onto one lock file.
+            const managers = Array.from({ length: 12 }, () => new LockManager(TEST_PROJECT_PATH));
+            const results = await Promise.allSettled(
+                managers.map((m, i) => m.acquire(7000 + i, `nonce-${i}`)),
+            );
+            const winners = results.filter(r => r.status === 'fulfilled');
+            const losers = results.filter(r => r.status === 'rejected');
+            expect(winners).toHaveLength(1);
+            // Every loser must see a LockHeldError (not some other failure).
+            expect(losers.length).toBe(11);
+            for (const l of losers) {
+                expect((l as PromiseRejectedResult).reason).toBeInstanceOf(LockHeldError);
+            }
+            // Release whichever manager won so afterEach cleans up.
+            const winnerIdx = results.findIndex(r => r.status === 'fulfilled');
+            await managers[winnerIdx].release();
+        });
+
+        it('PID-reuse simulation: a stale heartbeat + repeated connect failures escalates to reclaim within the retry cap', () => {
+            // Models bootstrap's acquireAndRun loop: a recorded Host whose PID was
+            // reused (alive) but whose heartbeat is ancient. The connect keeps
+            // failing; the decision policy must escalate to 'reclaim' — never loop
+            // forever — and must do so on the FIRST failure because the heartbeat
+            // is stale (the strongest dead-Host signal).
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const reusedPidLock = {
+                pid: process.pid, // PID reuse: alive
+                ipcPort: 7300,
+                lastHeartbeat: new Date(Date.now() - (HEARTBEAT_STALE_MS + 30_000)).toISOString(),
+                status: 'active' as const,
+                nonce: 'reused',
+            };
+            expect(manager.isHeartbeatStale(reusedPidLock)).toBe(true);
+
+            const actions: Array<'retry' | 'reclaim'> = [];
+            let retries = 0;
+            let action: 'retry' | 'reclaim' = 'retry';
+            while (action === 'retry' && retries < 1000) {
+                retries++;
+                action = decideConnectFailureAction(/* stale */ true, retries);
+                actions.push(action);
+            }
+            // Stale heartbeat ⇒ reclaim immediately, no retry spinning.
+            expect(actions).toEqual(['reclaim']);
+        });
+
+        it('fresh-heartbeat connect failures escalate to reclaim only after the retry cap (bounded loop)', () => {
+            // The other branch: heartbeat is fresh, so the Host might just be
+            // briefly unreachable. We retry up to the cap, then reclaim — proving
+            // the loop is bounded even without a staleness signal.
+            let retries = 0;
+            let action: 'retry' | 'reclaim' = 'retry';
+            let retryCount = 0;
+            while (action === 'retry' && retries < 1000) {
+                retries++;
+                action = decideConnectFailureAction(/* stale */ false, retries);
+                if (action === 'retry') retryCount++;
+            }
+            expect(action).toBe('reclaim');
+            expect(retries).toBe(CONNECT_MAX_RETRIES);
+            expect(retryCount).toBe(CONNECT_MAX_RETRIES - 1);
+        });
+
+        it('forceReclaim after escalation removes the stale lock so a fresh acquire succeeds', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+            // A reused-PID stale lock on disk.
+            fs.writeFileSync(lockPath, JSON.stringify({
+                pid: process.pid, ipcPort: 7400,
+                lastHeartbeat: new Date(Date.now() - (HEARTBEAT_STALE_MS + 60_000)).toISOString(),
+                status: 'active', nonce: 'doomed-stale',
+            }, null, 2), 'utf8');
+
+            // The escalation path: observe staleness, then forceReclaim with the
+            // observed nonce, then acquire cleanly.
+            const observed = await manager.getValidLock();
+            expect(observed).not.toBeNull();
+            expect(manager.isHeartbeatStale(observed!)).toBe(true);
+            expect(manager.forceReclaim('doomed-stale')).toBe(true);
+
+            await manager.acquire(7401, 'fresh-after-reclaim');
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.nonce).toBe('fresh-after-reclaim');
+            expect(data.ipcPort).toBe(7401);
+        });
+    });
+
     // H-1: connect-failure escalation policy used by acquireAndRun to cap the
     // unbounded 2s retry loop.
     describe('H-1: decideConnectFailureAction (retry cap)', () => {

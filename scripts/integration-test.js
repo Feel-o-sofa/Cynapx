@@ -77,6 +77,44 @@ function banner(text) {
     console.log(`\n${B}── ${text} ──${X}`);
 }
 
+// P13-9: run an external child command (script) as an integration phase.
+// Records PASS (exit 0), SKIP (exit 0 with a "SKIP" marker in output, e.g.
+// docker-smoke when no daemon), or FAIL (non-zero exit). Skips never fail the
+// run — they are expected when the host environment lacks Docker.
+function runChildPhase(label, command, args, opts = {}) {
+    return new Promise((resolve) => {
+        const { spawn } = require('child_process');
+        const t0 = Date.now();
+        const child = spawn(command, args, { cwd: ROOT, env: { ...process.env, ...(opts.env || {}) } });
+        let out = '';
+        child.stdout.on('data', d => { const s = d.toString(); out += s; process.stdout.write(s); });
+        child.stderr.on('data', d => { const s = d.toString(); out += s; process.stderr.write(s); });
+        const timer = opts.timeoutMs ? setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, opts.timeoutMs) : null;
+        child.on('error', (e) => {
+            if (timer) clearTimeout(timer);
+            results.push({ label, toolName: command, status: 'FAIL', error: e.message, ms: Date.now() - t0 });
+            console.log(fail(`${label}  [${command}]  spawn error: ${e.message}`));
+            resolve();
+        });
+        child.on('exit', (code) => {
+            if (timer) clearTimeout(timer);
+            const ms = Date.now() - t0;
+            const skipped = code === 0 && /\bSKIP\b/.test(out);
+            if (code === 0 && skipped) {
+                results.push({ label, toolName: command, status: 'WARN', ms });
+                console.log(`${Y}⏭️  SKIP${X}  ${label}  [${command}]  (environment unavailable) [${ms}ms]`);
+            } else if (code === 0) {
+                results.push({ label, toolName: command, status: 'PASS', ms });
+                console.log(ok(`${label}  [${command}]  exit 0 [${ms}ms]`));
+            } else {
+                results.push({ label, toolName: command, status: 'FAIL', error: `exit ${code}`, ms });
+                console.log(fail(`${label}  [${command}]  exit ${code} [${ms}ms]`));
+            }
+            resolve();
+        });
+    });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
     console.log(`\n${B}${C}╔════════════════════════════════════════════════╗${X}`);
@@ -625,6 +663,23 @@ async function main() {
 
         void purgeRes;
     }
+
+    // ══ Phase 26: IPC 2-process e2e (C-3 / H-8 / H-1) ═════════════════════════
+    // diagnostic-v10 §5 "IPC 2-프로세스 e2e" gap. Spawns real separate
+    // Host/Terminal/attacker OS processes over a real 127.0.0.1 socket:
+    //   - malicious echo client without the HMAC nonce is rejected (C-3)
+    //   - sustained > 1 MB traffic over many small messages stays connected (H-8)
+    //   - killing the Host process triggers Terminal disconnect/failover (H-1)
+    banner('Phase 26: IPC 2-process e2e (echo-auth reject / 1MB+ traffic / host-kill failover)');
+    await runChildPhase('IPC_E2E', process.execPath, [path.join(ROOT, 'scripts/ipc-e2e-test.js')], { timeoutMs: 90_000 });
+
+    // ══ Phase 27: Docker build/startup smoke (C-1) ════════════════════════════
+    // diagnostic-v10 §5 "Docker 빌드/기동" gap. Wired here so the full deploy
+    // path (image build + boot + /healthz 200) is exercised when a Docker daemon
+    // is present. Gracefully SKIPs (does NOT fail) when Docker is unavailable —
+    // docker-smoke.sh prints "SKIP" and exits 0 in that case.
+    banner('Phase 27: Docker build + startup smoke (skips gracefully without Docker)');
+    await runChildPhase('DOCKER_SMOKE', 'bash', [path.join(ROOT, 'scripts/docker-smoke.sh')], { timeoutMs: 600_000 });
 
     printSummary();
     if (_workerPool) _workerPool.dispose();

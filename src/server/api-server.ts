@@ -281,7 +281,16 @@ export class ApiServer {
     private setupRoutes(): void {
         // P10-L-4: Health check endpoint — no auth required, used by Docker/k8s probes
         this.app.get('/healthz', (req: Request, res: Response) => {
-            const ctx = this.mcpServer?.workspaceManager?.getActiveContext?.();
+            // P13-9: a liveness probe must never 500 — if the workspace lookup
+            // throws transiently (e.g. mid-failover), degrade to "pending" (503)
+            // rather than letting the error bubble to the 500 handler, which
+            // would make orchestrators flap the instance unnecessarily.
+            let ctx: EngineContext | null | undefined;
+            try {
+                ctx = this.mcpServer?.workspaceManager?.getActiveContext?.();
+            } catch {
+                ctx = undefined;
+            }
             const dbOk = !!(ctx?.dbManager);
             // v9 A-8 잔존 (P13-1): report 503 while the engine is still pending
             // so orchestrators don't route traffic to a not-yet-ready instance.
