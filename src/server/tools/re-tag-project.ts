@@ -6,9 +6,10 @@
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
 import { requireEngine } from './_utils.js';
+import { ProgressReporter, NOOP_PROGRESS } from './_progress.js';
 
 export const reTagProjectHandler: ToolHandler = {
-    async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
+    async execute(args: any, deps: ToolDeps, progress: ProgressReporter = NOOP_PROGRESS): Promise<ToolResult> {
         const ctx = deps.getContext();
         if (!ctx) {
             return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
@@ -18,7 +19,10 @@ export const reTagProjectHandler: ToolHandler = {
             return { content: [{ type: 'text', text: 'This operation is not available in Terminal mode.' }], isError: true };
         }
         const pipeline = requireEngine(ctx, 'updatePipeline');
+        // A-4 (Phase 14-5): coarse progress (no token => no-op).
+        await progress.report(0, 1, 'Re-tagging all nodes');
         await pipeline.reTagAllNodes();
+        await progress.report(1, 1, 'Re-tagging complete');
         return { content: [{ type: "text", text: "Successfully re-tagged all nodes." }] };
     }
 };

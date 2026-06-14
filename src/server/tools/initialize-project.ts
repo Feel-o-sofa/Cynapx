@@ -9,18 +9,23 @@ import * as os from 'os';
 import { addToRegistry, ANCHOR_FILE, getProjectHash, isPathInside } from '../../utils/paths.js';
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
+import { ProgressReporter, NOOP_PROGRESS } from './_progress.js';
 
 // H-6: Module-level mutex flag to prevent concurrent initialization across sessions
 let initializationInProgress = false;
 
 export const initializeProjectHandler: ToolHandler = {
-    async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
+    async execute(args: any, deps: ToolDeps, progress: ProgressReporter = NOOP_PROGRESS): Promise<ToolResult> {
         // H-6: Prevent concurrent initialization across multiple MCP sessions
         if (initializationInProgress) {
             return { content: [{ type: 'text', text: 'Initialization already in progress. Please wait and retry.' }], isError: true };
         }
         initializationInProgress = true;
         try {
+
+        // A-4 (Phase 14-5): coarse progress stages. total=4 (validate → register
+        // → index → ready). Only emitted when the caller supplied a progressToken.
+        await progress.report(0, 4, 'Validating project path');
 
         const mode = args.mode ?? 'current';
 
@@ -55,8 +60,11 @@ export const initializeProjectHandler: ToolHandler = {
             if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
             if (!args.zero_pollution) fs.writeFileSync(path.join(target, ANCHOR_FILE), JSON.stringify({ created_at: new Date().toISOString() }));
             addToRegistry(target);
+            await progress.report(1, 4, 'Registered project; indexing source');
             if (deps.onInitialize) await deps.onInitialize(target);
+            await progress.report(3, 4, 'Indexing complete; activating engine');
             deps.markReady(true);
+            await progress.report(4, 4, 'Project initialized');
             return { content: [{ type: "text", text: `Successfully initialized project at ${target}. Analysis engine is now active.` }] };
 
         } else if (mode === 'existing') {
@@ -83,8 +91,11 @@ export const initializeProjectHandler: ToolHandler = {
             if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
             if (!args.zero_pollution) fs.writeFileSync(path.join(target, ANCHOR_FILE), JSON.stringify({ created_at: new Date().toISOString() }));
             addToRegistry(target);
+            await progress.report(1, 4, 'Registered project; indexing source');
             if (deps.onInitialize) await deps.onInitialize(target);
+            await progress.report(3, 4, 'Indexing complete; activating engine');
             deps.markReady(true);
+            await progress.report(4, 4, 'Project initialized');
             return { content: [{ type: "text", text: `Successfully initialized project at ${target}. Analysis engine is now active.` }] };
 
         } else {
@@ -95,8 +106,11 @@ export const initializeProjectHandler: ToolHandler = {
             if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
             if (!args.zero_pollution) fs.writeFileSync(path.join(target, ANCHOR_FILE), JSON.stringify({ created_at: new Date().toISOString() }));
             addToRegistry(target);
+            await progress.report(1, 4, 'Registered project; indexing source');
             if (deps.onInitialize) await deps.onInitialize(target);
+            await progress.report(3, 4, 'Indexing complete; activating engine');
             deps.markReady(true);
+            await progress.report(4, 4, 'Project initialized');
             return { content: [{ type: "text", text: `Successfully initialized project at ${target}. Analysis engine is now active.` }] };
         }
 

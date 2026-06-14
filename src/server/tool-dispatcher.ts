@@ -16,6 +16,7 @@ import { RemediationEngine } from '../graph/remediation-engine.js';
 import { IpcCoordinator } from './ipc-coordinator.js';
 import { toolRegistry } from './tools/_registry.js';
 import { EngineNotReadyError } from './tools/_utils.js';
+import { ProgressReporter, NOOP_PROGRESS, createProgressReporter } from './tools/_progress.js';
 
 export interface ToolDeps {
     waitUntilReady: () => Promise<void>;
@@ -204,13 +205,30 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
         ]
     }));
 
-    sdkServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-        return executeTool(request.params.name, request.params.arguments, deps);
+    sdkServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+        // A-4 (Phase 14-5): emit notifications/progress only when the caller
+        // opted in via `_meta.progressToken` on the originating request. The
+        // SDK's request-scoped `extra.sendNotification` correlates the progress
+        // notification with this request. When no token is present we pass a
+        // no-op reporter so handlers can call report() unconditionally.
+        const progressToken = request.params?._meta?.progressToken;
+        const progress = createProgressReporter(
+            progressToken,
+            extra.sendNotification as Parameters<typeof createProgressReporter>[1]
+        );
+        return executeTool(request.params.name, request.params.arguments, deps, progress);
     });
 }
 
-export async function executeTool(name: string, args: any, deps: ToolDeps): Promise<any> {
+export async function executeTool(
+    name: string,
+    args: any,
+    deps: ToolDeps,
+    progress: ProgressReporter = NOOP_PROGRESS
+): Promise<any> {
     if (deps.isTerminal() && deps.getTerminalCoordinator()) {
+        // A-4(2): progress is not relayed across the Host↔Terminal IPC boundary
+        // (see ipc-coordinator.ts) — Terminal-forwarded tools report no progress.
         return deps.getTerminalCoordinator()!.forwardExecuteTool(name, args);
     }
     await deps.waitUntilReady();
@@ -218,7 +236,7 @@ export async function executeTool(name: string, args: any, deps: ToolDeps): Prom
     const handler = toolRegistry.get(name);
     if (!handler) throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     try {
-        return await handler.execute(args, deps);
+        return await handler.execute(args, deps, progress);
     } catch (err) {
         // H-1: the active project's engine context can briefly be incomplete
         // right after Host promotion, before startHostServices() finishes.

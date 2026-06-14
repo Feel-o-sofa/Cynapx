@@ -40,9 +40,22 @@ const MAX_MSG_BYTES = 1 * 1024 * 1024; // 1 MB
  * ping (below) keeps the connection alive across the gap, and the operations are
  * bounded by their own internal limits. Tools not listed use DEFAULT_IPC_TIMEOUT_MS.
  *
- * NOTE (future direction): MCP 2025-11-25 introduces a task/progress workflow
- * that would replace these coarse timeouts with streamed progress + cancellation.
- * That is out of scope here (tracked for a later SDK-1.29-based phase).
+ * NOTE (A-4 / Phase 14-5): minimal MCP `notifications/progress` emission is now
+ * wired for the long-running tools (initialize_project, backfill_history,
+ * re_tag_project, check_consistency) — see src/server/tools/_progress.ts. When a
+ * caller supplies a `_meta.progressToken`, the Host MCP session streams coarse
+ * progress at stage boundaries via the request-scoped sendNotification; without a
+ * token nothing is emitted (spec compliance).
+ *
+ * Relaying that progress across THIS Host↔Terminal IPC boundary is intentionally
+ * NOT done (A-4(2)): the framing here is strict request/response correlated by
+ * `id`, and interleaving out-of-band progress lines would require a demux +
+ * back-correlation into the Terminal's MCP request context — meaningful added
+ * complexity in a security-sensitive layer. The keepalive ping (above) already
+ * keeps Terminal-forwarded long calls connected, so Terminal-mode tools simply
+ * report no progress. Full task lifecycle (SEP-1686: streamed progress +
+ * cancellation/resumption) and IPC progress relay remain documented future
+ * directions for a later SDK-1.29-based phase.
  */
 const DEFAULT_IPC_TIMEOUT_MS = 30_000;
 const IPC_TOOL_TIMEOUTS_MS: Record<string, number> = {
