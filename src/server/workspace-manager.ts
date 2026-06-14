@@ -105,7 +105,10 @@ export class WorkspaceManager {
         // M3/A-11: if runMigrations() is ever invoked again on this connection
         // (after the constructor-time run), drop EdgeRepository's cached
         // prepared statements so they get re-prepared against the new schema.
-        dbManager.onMigration(() => edgeRepo.invalidateStatementCache());
+        dbManager.onMigration(() => {
+            edgeRepo.invalidateStatementCache();
+            nodeRepo.invalidateStatementCache();
+        });
         const metadataRepo = new MetadataRepository(db);
         const graphEngine = new GraphEngine(nodeRepo, edgeRepo);
         const vectorRepo = new VectorRepository(db);

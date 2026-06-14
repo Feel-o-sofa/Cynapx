@@ -15,6 +15,14 @@ CREATE TABLE IF NOT EXISTS nodes (
     last_updated_commit TEXT NOT NULL,
     version INTEGER NOT NULL,
     
+    -- A-4: the bare symbol name (the suffix after the final '#' in
+    -- qualified_name, or the whole qualified_name when there is no '#').
+    -- Indexed so reverse symbol-name lookups (resolveNodeId fallback) can use
+    -- an equality probe instead of a leading-wildcard `LIKE '%#name'` full scan.
+    -- Maintained by the application layer (createNode) and backfilled by
+    -- migration 2 → 3.
+    symbol_name TEXT,
+
     -- Symbol-specific attributes (logical_scheme_and_indexing_strat.md)
     checksum TEXT,       -- for symbol_type = 'file'
     modifiers TEXT,      -- for class/interface/method/function (JSON array of strings)
@@ -72,6 +80,11 @@ CREATE INDEX IF NOT EXISTS idx_nodes_qualified_name ON nodes (qualified_name);
 CREATE INDEX IF NOT EXISTS idx_nodes_file_path ON nodes (file_path);
 CREATE INDEX IF NOT EXISTS idx_nodes_version ON nodes (version);
 CREATE INDEX IF NOT EXISTS idx_nodes_cluster_id ON nodes (cluster_id);
+-- A-4: index for reverse symbol-name lookups (replaces `LIKE '%#name'` scans).
+-- COLLATE NOCASE so the case-insensitive equality probe in
+-- findNodesBySymbolName() (`symbol_name = ? COLLATE NOCASE`) resolves to an
+-- indexed SEARCH; a NOCASE query cannot use a BINARY-collation index.
+CREATE INDEX IF NOT EXISTS idx_nodes_symbol_name ON nodes (symbol_name COLLATE NOCASE);
 
 -- Optimization Indexes (logical_scheme_and_indexing_strat.md Section 5.2)
 CREATE INDEX IF NOT EXISTS idx_edges_from_id ON edges (from_id);

@@ -3,11 +3,22 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { Database } from 'better-sqlite3';
+import { Database, Statement } from 'better-sqlite3';
 import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
 
 /** Raw SQLite row from the nodes table (all columns, JSON fields as strings) */
 type NodeRow = Record<string, unknown>;
+
+/**
+ * A-4: extracts the bare symbol name from a qualified_name. qualified_name uses
+ * a single '#' separator (`${file}#${parts}`), so the bare name is everything
+ * after the first '#'. Names with no '#' (e.g. `package:foo`, file nodes) are
+ * returned unchanged. This mirrors the SQL backfill in migration 2 → 3.
+ */
+export function extractSymbolName(qualifiedName: string): string {
+    const idx = qualifiedName.indexOf('#');
+    return idx === -1 ? qualifiedName : qualifiedName.slice(idx + 1);
+}
 
 /**
  * Safely parses a JSON string, returning a fallback value on parse failure or empty input.
@@ -25,10 +36,35 @@ function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
  * NodeRepository handles CRUD operations for the 'nodes' table.
  */
 export class NodeRepository {
+    // A-5: cached prepared statements for hot paths. better-sqlite3 re-uses a
+    // compiled statement across calls, so caching avoids re-parsing SQL on every
+    // createNode()/replaceTags()/etc. Mirrors EdgeRepository's pattern.
+    private _upsertStmt?: Statement;
+    private _deleteTagsStmt?: Statement;
+    private _insertTagStmt?: Statement;
+    private _updateTagsStmt?: Statement;
+    private _bySymbolNameStmt?: Statement;
+    private _updateClusterStmt?: Statement;
+
     constructor(public db: Database) { }
 
     public getDb(): Database {
         return this.db;
+    }
+
+    /**
+     * A-5/A-11: drops all cached prepared statements so they get re-prepared
+     * against the current schema. Call after running migrations on a database
+     * whose NodeRepository was constructed beforehand (the symbol_name column
+     * added by migration 2 → 3 changes the createNode() statement shape).
+     */
+    public invalidateStatementCache(): void {
+        this._upsertStmt = undefined;
+        this._deleteTagsStmt = undefined;
+        this._insertTagStmt = undefined;
+        this._updateTagsStmt = undefined;
+        this._bySymbolNameStmt = undefined;
+        this._updateClusterStmt = undefined;
     }
 
     public createNode(node: CodeNode): number {
@@ -41,21 +77,24 @@ export class NodeRepository {
         // fts_symbols in sync), so cross-file edges and the FTS index survive a
         // re-index of the same symbol. RETURNING id works for both the INSERT
         // and the UPDATE branch (lastInsertRowid is not set on a pure UPDATE).
-        const stmt = this.db.prepare(`
+        // A-5: cache the upsert statement across calls.
+        if (!this._upsertStmt) {
+            this._upsertStmt = this.db.prepare(`
       INSERT INTO nodes (
-        qualified_name, symbol_type, language, file_path, start_line, end_line,
+        qualified_name, symbol_name, symbol_type, language, file_path, start_line, end_line,
         visibility, is_generated, last_updated_commit, version,
         checksum, modifiers, signature, return_type, field_type,
         loc, cyclomatic, fan_in, fan_out, fan_in_dynamic, fan_out_dynamic,
         cluster_id, remote_project_path, tags, history
       ) VALUES (
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?
       )
       ON CONFLICT(qualified_name) DO UPDATE SET
+        symbol_name = excluded.symbol_name,
         symbol_type = excluded.symbol_type,
         language = excluded.language,
         file_path = excluded.file_path,
@@ -82,9 +121,12 @@ export class NodeRepository {
         history = excluded.history
       RETURNING id
     `);
+        }
+        const stmt = this._upsertStmt;
 
         const row = stmt.get(
             node.qualified_name,
+            extractSymbolName(node.qualified_name),
             node.symbol_type,
             node.language,
             node.file_path,
@@ -117,11 +159,12 @@ export class NodeRepository {
         // DO UPDATE branch the node id is preserved, so stale tags from a prior
         // index of this symbol would otherwise remain — clear them first, then
         // re-insert the current tag set.
-        this.db.prepare('DELETE FROM node_tags WHERE node_id = ?').run(nodeId);
+        if (!this._deleteTagsStmt) this._deleteTagsStmt = this.db.prepare('DELETE FROM node_tags WHERE node_id = ?');
+        this._deleteTagsStmt.run(nodeId);
         if (node.tags && node.tags.length > 0) {
-            const insertTag = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
+            if (!this._insertTagStmt) this._insertTagStmt = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
             for (const tag of node.tags) {
-                insertTag.run(nodeId, tag);
+                this._insertTagStmt.run(nodeId, tag);
             }
         }
 
@@ -134,13 +177,14 @@ export class NodeRepository {
      * Callers performing bulk updates should wrap calls in a transaction.
      */
     public replaceTags(nodeId: number, tags: string[]): void {
-        this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?')
-            .run(JSON.stringify(tags), nodeId);
-        this.db.prepare('DELETE FROM node_tags WHERE node_id = ?').run(nodeId);
+        if (!this._updateTagsStmt) this._updateTagsStmt = this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?');
+        this._updateTagsStmt.run(JSON.stringify(tags), nodeId);
+        if (!this._deleteTagsStmt) this._deleteTagsStmt = this.db.prepare('DELETE FROM node_tags WHERE node_id = ?');
+        this._deleteTagsStmt.run(nodeId);
         if (tags.length > 0) {
-            const insertTag = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
+            if (!this._insertTagStmt) this._insertTagStmt = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
             for (const tag of tags) {
-                insertTag.run(nodeId, tag);
+                this._insertTagStmt.run(nodeId, tag);
             }
         }
     }
@@ -208,8 +252,9 @@ export class NodeRepository {
     }
 
     public updateCluster(id: number, clusterId: number | null): void {
-        const stmt = this.db.prepare('UPDATE nodes SET cluster_id = ? WHERE id = ?');
-        stmt.run(clusterId, id);
+        // A-5: cached — persistClusters() calls this once per clustered node.
+        if (!this._updateClusterStmt) this._updateClusterStmt = this.db.prepare('UPDATE nodes SET cluster_id = ? WHERE id = ?');
+        this._updateClusterStmt.run(clusterId, id);
     }
 
     public updateMetrics(id: number, metrics: { loc?: number, cyclomatic?: number, fan_in?: number, fan_out?: number, fan_in_dynamic?: number, fan_out_dynamic?: number }): void {
@@ -354,9 +399,23 @@ export class NodeRepository {
     }
 
     public findNodesBySymbolName(name: string): CodeNode[] {
-        const stmt = this.db.prepare("SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LIKE ? COLLATE NOCASE");
-        // Match exact name (if global) or suffixed name
-        const rows = stmt.all(name, `%#${name}`);
+        // A-4: probe the indexed symbol_name column (the bare name after '#'),
+        // replacing the unindexable `qualified_name LIKE '%#name'` full scan.
+        // createNode() sets symbol_name = extractSymbolName(qualified_name), so a
+        // GLOBAL symbol (no '#') has symbol_name == qualified_name — a single
+        // equality probe on symbol_name therefore covers both suffixed and
+        // global forms, and an OR on qualified_name would be redundant.
+        //
+        // idx_nodes_symbol_name is declared COLLATE NOCASE so this
+        // case-insensitive equality resolves to an indexed SEARCH rather than a
+        // full SCAN. A `... COLLATE NOCASE` query against a BINARY index cannot
+        // use the index, so the index collation MUST match the query collation.
+        if (!this._bySymbolNameStmt) {
+            this._bySymbolNameStmt = this.db.prepare(
+                'SELECT * FROM nodes WHERE symbol_name = ? COLLATE NOCASE'
+            );
+        }
+        const rows = this._bySymbolNameStmt.all(name);
         return rows.map(row => this.mapRowToNode(row));
     }
 

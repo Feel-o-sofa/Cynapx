@@ -16,29 +16,111 @@ import { MetricsCalculator } from './metrics-calculator';
 import { calculateChecksum } from '../utils/checksum';
 import { toCanonical } from '../utils/paths';
 
+/** Compiler options shared by every parse — identical to the former per-file ts.createProgram call. */
+const PARSER_COMPILER_OPTIONS: ts.CompilerOptions = {
+    target: ts.ScriptTarget.Latest,
+    module: ts.ModuleKind.CommonJS,
+    esModuleInterop: true,
+    allowJs: true,
+    skipLibCheck: true,
+    noEmit: true,
+    types: [],
+    lib: ['lib.esnext.d.ts']
+};
+
 export class TypeScriptParser implements CodeParser {
     private program: ts.Program | null = null;
     private typeChecker: ts.TypeChecker | null = null;
+
+    // O-4: a single persistent LanguageService reused across every parse() in an
+    // indexing run. Previously refreshProgram() called ts.createProgram() fresh
+    // per file, which re-read and re-parsed the lib.*.d.ts files (the dominant
+    // cost) every time. The LanguageService caches those between calls and only
+    // rebuilds the program incrementally when a script version changes. The host
+    // exposes exactly the file currently being parsed as the single root script,
+    // so getProgram() yields a program with the same source-file set as the old
+    // single-root createProgram() — parse/type-check output is unchanged.
+    private languageService: ts.LanguageService | null = null;
+    // Current root file (the one being parsed); the only entry in getScriptFileNames().
+    private currentFile: string | null = null;
+    // Per-file script version, bumped whenever a file's on-disk content changes so
+    // the LanguageService invalidates and re-parses that file's SourceFile.
+    private scriptVersions: Map<string, string> = new Map();
+    // Snapshot/content cache keyed by file path for the current root file.
+    private scriptSnapshots: Map<string, ts.IScriptSnapshot> = new Map();
 
     public supports(filePath: string): boolean {
         return filePath.endsWith('.ts') || filePath.endsWith('.js');
     }
 
+    private ensureLanguageService(): ts.LanguageService {
+        if (this.languageService) return this.languageService;
+
+        const host: ts.LanguageServiceHost = {
+            getScriptFileNames: () => (this.currentFile ? [this.currentFile] : []),
+            getScriptVersion: (fileName) => this.scriptVersions.get(fileName) ?? '0',
+            getScriptSnapshot: (fileName) => {
+                const cached = this.scriptSnapshots.get(fileName);
+                if (cached) return cached;
+                if (!fs.existsSync(fileName)) return undefined;
+                try {
+                    const snapshot = ts.ScriptSnapshot.fromString(fs.readFileSync(fileName, 'utf8'));
+                    this.scriptSnapshots.set(fileName, snapshot);
+                    return snapshot;
+                } catch {
+                    return undefined;
+                }
+            },
+            getCurrentDirectory: () => process.cwd(),
+            getCompilationSettings: () => PARSER_COMPILER_OPTIONS,
+            getDefaultLibFileName: (options) => ts.getDefaultLibFilePath(options),
+            fileExists: ts.sys.fileExists,
+            readFile: ts.sys.readFile,
+            readDirectory: ts.sys.readDirectory,
+            directoryExists: ts.sys.directoryExists,
+            getDirectories: ts.sys.getDirectories,
+        };
+
+        this.languageService = ts.createLanguageService(host, ts.createDocumentRegistry());
+        return this.languageService;
+    }
+
     /**
-     * Initializes a TypeScript program for the given file to enable semantic analysis.
+     * O-4: points the persistent LanguageService at `filePath` as its single root
+     * script and refreshes the cached Program/TypeChecker. The script version is
+     * bumped when the file's content changes (or it is first seen) so the
+     * incremental program re-parses only what actually changed.
      */
     private refreshProgram(filePath: string): void {
-        this.program = ts.createProgram([filePath], {
-            target: ts.ScriptTarget.Latest,
-            module: ts.ModuleKind.CommonJS,
-            esModuleInterop: true,
-            allowJs: true,
-            skipLibCheck: true,
-            noEmit: true,
-            types: [],
-            lib: ['lib.esnext.d.ts']
-        });
-        this.typeChecker = this.program.getTypeChecker();
+        const ls = this.ensureLanguageService();
+        this.currentFile = filePath;
+
+        // Drop any cached snapshot for this file and re-read it, bumping the
+        // version iff the content differs from what the service last parsed.
+        this.scriptSnapshots.delete(filePath);
+        let content = '';
+        try {
+            content = fs.readFileSync(filePath, 'utf8');
+        } catch {
+            content = '';
+        }
+        this.scriptSnapshots.set(filePath, ts.ScriptSnapshot.fromString(content));
+        const versionKey = `len:${content.length}:hash:${this.cheapHash(content)}`;
+        if (this.scriptVersions.get(filePath) !== versionKey) {
+            this.scriptVersions.set(filePath, versionKey);
+        }
+
+        this.program = ls.getProgram() ?? null;
+        this.typeChecker = this.program ? this.program.getTypeChecker() : null;
+    }
+
+    /** Small non-cryptographic content hash used only to detect script-version changes. */
+    private cheapHash(s: string): string {
+        let h = 5381;
+        for (let i = 0; i < s.length; i++) {
+            h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+        }
+        return (h >>> 0).toString(36);
     }
 
     public async parse(filePath: string, commit: string, version: number): Promise<DeltaGraph> {

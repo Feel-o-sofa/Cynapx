@@ -74,7 +74,7 @@ export class DatabaseManager implements Disposable {
     /**
      * Current schema version. Increment this when adding new migrations.
      */
-    public static readonly SCHEMA_VERSION = 2;
+    public static readonly SCHEMA_VERSION = 3;
 
     /**
      * M3/A-11: Registers a callback invoked at the end of runMigrations()
@@ -134,6 +134,40 @@ export class DatabaseManager implements Disposable {
                 }
 
                 this.db.pragma(`user_version = 2`);
+            }
+
+            if (current < 3) {
+                // Migration 2 → 3 (A-4): add a `symbol_name` column holding the
+                // bare symbol name (suffix after the final '#' in qualified_name,
+                // or the whole qualified_name if there is no '#') plus an index,
+                // so resolveNodeId()'s reverse lookup can probe an indexed
+                // equality instead of the unindexable `LIKE '%#name'` full scan.
+                // ALTER TABLE ADD COLUMN is idempotent-safe behind a column check.
+                const cols = this.db.prepare("PRAGMA table_info(nodes)").all() as { name: string }[];
+                if (!cols.some(c => c.name === 'symbol_name')) {
+                    this.db.exec('ALTER TABLE nodes ADD COLUMN symbol_name TEXT');
+                }
+                // COLLATE NOCASE so findNodesBySymbolName()'s case-insensitive
+                // equality probe resolves to an indexed SEARCH (a NOCASE query
+                // cannot use a BINARY index). Drop any pre-existing BINARY index
+                // first so an upgraded DB gets the NOCASE one.
+                this.db.exec('DROP INDEX IF EXISTS idx_nodes_symbol_name');
+                this.db.exec('CREATE INDEX IF NOT EXISTS idx_nodes_symbol_name ON nodes (symbol_name COLLATE NOCASE)');
+
+                // Backfill existing rows. qualified_name uses a single '#'
+                // separator (TypeScriptParser.getName() emits `${file}#${parts}`),
+                // so the bare name is everything after the first '#'. The SUBSTR
+                // mirrors the application-layer extraction in extractSymbolName().
+                this.db.exec(`
+                    UPDATE nodes
+                    SET symbol_name = CASE
+                        WHEN instr(qualified_name, '#') = 0 THEN qualified_name
+                        ELSE substr(qualified_name, instr(qualified_name, '#') + 1)
+                    END
+                    WHERE symbol_name IS NULL
+                `);
+
+                this.db.pragma(`user_version = 3`);
             }
         });
         migrate();

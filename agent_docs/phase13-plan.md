@@ -240,7 +240,7 @@ P13-9 (테스트 공백 일괄)       전 단계 수정 완료 후 최종 검증
 
 **목표**: 리스크 낮은~중간의 정리 항목을 영역별 커밋으로 일괄 처리. Phase 12-6과 같은 "정리" 성격.
 
-### 커밋 A — DB/인덱서 성능 (A-4, A-5, A-7, O-4)
+### 커밋 A — DB/인덱서 성능 (A-4, A-5, A-7, O-4) — **[DONE]**
 - A-4: `src/indexer/update-pipeline.ts:435-441` — `recomputeFanMetrics()`를 배치에서 변경된 노드 집합으로 한정(스키마 트리거가 증분 유지 중이므로 사실상 이중 작업 제거). `src/db/node-repository.ts:320-325` — `LIKE '%#name'` 폴백 제거: `symbol_name` 컬럼 + 인덱스 추가(스키마 마이그레이션)로 역조회 인덱스화.
 - A-5: `src/db/node-repository.ts:35, 86, 101-108` — statement 캐싱(+ Phase 12-6 `invalidateStatementCache()` 패턴 재사용). `src/graph/graph-engine.ts:247-303` — `persistClusters()` 전체(클러스터 INSERT + `updateCluster()` 루프)를 단일 트랜잭션으로.
 - A-7: `src/indexer/embedding-manager.ts:77-89, 152-156, 251-267` — 임베딩 IPC에 요청 `id` 필드 추가, 응답 id 불일치 시 폐기(타임아웃 후 늦은 응답의 오배달 차단). 타임아웃 시 사이드카 재시작 검토.

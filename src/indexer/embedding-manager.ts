@@ -57,6 +57,7 @@ export interface EmbeddingProvider {
  * EmbeddingManager serializes calls via its own queue.
  */
 type PendingRequest = {
+    id: number;
     resolve: (v: number[][]) => void;
     reject: (e: Error) => void;
 } | null;
@@ -66,6 +67,12 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
     private rl: readline.Interface | null = null;
     private ready: boolean = false;
     private pendingRequest: PendingRequest = null;
+    // A-7: monotonic request id. Each generateBatch() request carries a unique
+    // id echoed back by the sidecar. A response whose id does not match the
+    // current pending request is a stale/late reply (e.g. for a batch the
+    // EmbeddingManager already timed out) and is discarded instead of being
+    // mis-delivered to a subsequent batch's pending slot.
+    private nextRequestId: number = 1;
     private dimensions: number = 896;
     // H-2(3): FTS5 폴백 모드 플래그 및 경고 출력 여부
     public fallbackMode: boolean = false;
@@ -94,6 +101,43 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
         this.pendingRequest = null;
         if (pending) {
             pending.reject(new Error(`${reason}; fallback mode active`));
+        }
+    }
+
+    /**
+     * Handles one parsed JSON message line from the Python sidecar. Extracted
+     * from the readline 'line' handler so the A-7 request-id discipline is unit
+     * testable without spawning a real sidecar.
+     */
+    private handleSidecarMessage(data: any): void {
+        if (data.status === 'ready') {
+            this.ready = true;
+            this.restartAttempts = 0; // 정상 기동 시 재시도 카운터 초기화
+            this.dimensions = data.dim;
+            console.error(`[Embedding] Python Sidecar Ready (${data.device}, Dim: ${this.dimensions})`);
+        } else if (data.vectors || data.vector || data.error) {
+            // A-7: a data-bearing response. Only deliver it to the pending
+            // request if its id matches (or the sidecar omitted an id, for
+            // backward compatibility with an embedder that doesn't echo
+            // it). A response whose id mismatches the current pending
+            // request is a stale/late reply for an already-resolved batch
+            // and is discarded so it can't be mis-mapped onto a later one.
+            const pending = this.pendingRequest;
+            if (!pending) {
+                // No outstanding request — nothing legitimately expects
+                // this response. Discard.
+            } else if (typeof data.id === 'number' && data.id !== pending.id) {
+                console.error(`[Embedding] Discarding stale sidecar response (id=${data.id}, expected=${pending.id}).`);
+            } else {
+                this.pendingRequest = null;
+                if (data.error) {
+                    pending.reject(new Error(data.error));
+                } else if (data.vectors) {
+                    pending.resolve(data.vectors);
+                } else {
+                    pending.resolve([data.vector]);
+                }
+            }
         }
     }
 
@@ -133,25 +177,7 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
 
         reader.on('line', (line) => {
             try {
-                const data = JSON.parse(line);
-                if (data.status === 'ready') {
-                    this.ready = true;
-                    this.restartAttempts = 0; // 정상 기동 시 재시도 카운터 초기화
-                    this.dimensions = data.dim;
-                    console.error(`[Embedding] Python Sidecar Ready (${data.device}, Dim: ${this.dimensions})`);
-                } else if (data.vectors && this.pendingRequest) {
-                    const pending = this.pendingRequest;
-                    this.pendingRequest = null;
-                    pending.resolve(data.vectors);
-                } else if (data.vector && this.pendingRequest) {
-                    const pending = this.pendingRequest;
-                    this.pendingRequest = null;
-                    pending.resolve([data.vector]);
-                } else if (data.error && this.pendingRequest) {
-                    const pending = this.pendingRequest;
-                    this.pendingRequest = null;
-                    pending.reject(new Error(data.error));
-                }
+                this.handleSidecarMessage(JSON.parse(line));
             } catch (e) {}
         });
 
@@ -237,8 +263,20 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
 
         // Send one request and await one response — EmbeddingManager serializes calls
         return new Promise((resolve, reject) => {
-            this.pendingRequest = { resolve, reject };
-            this.child?.stdin?.write(JSON.stringify({ texts }) + '\n');
+            // A-7: if a previous request is somehow still pending (e.g. the
+            // EmbeddingManager-level batch timeout fired but the sidecar never
+            // replied), reject it before taking over the single slot so a late
+            // reply for it cannot resolve this new request with the wrong
+            // vectors. The id check on the response is the second line of
+            // defence against mis-delivery.
+            if (this.pendingRequest) {
+                const stale = this.pendingRequest;
+                this.pendingRequest = null;
+                stale.reject(new Error('Embedding request superseded before response'));
+            }
+            const id = this.nextRequestId++;
+            this.pendingRequest = { id, resolve, reject };
+            this.child?.stdin?.write(JSON.stringify({ id, texts }) + '\n');
         });
     }
 

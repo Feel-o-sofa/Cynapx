@@ -307,6 +307,9 @@ export class UpdatePipeline {
         await previousLock;
 
         const symbolCache = new Map<string, number>();
+        // A-4: node ids touched by this batch (created/replaced nodes + endpoints
+        // of edges created here) so fan-metric reconciliation is scoped to them.
+        const changedNodeIds = new Set<number>();
         // O-3: keep remote DB connections open for the duration of this batch
         // instead of opening/closing one per cross-project symbol resolution.
         this.crossProjectResolver?.beginBatch();
@@ -330,6 +333,7 @@ export class UpdatePipeline {
                             if (history) node.history = history;
                             const nodeId = this.nodeRepo.createNode(node);
                             symbolCache.set(toCanonical(node.qualified_name), nodeId);
+                            changedNodeIds.add(nodeId);
                         }
                     }
                 }
@@ -344,13 +348,19 @@ export class UpdatePipeline {
 
                         if (fromId !== undefined && toId !== undefined) {
                             this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
+                            // A-4: the edge's endpoints may live in files outside
+                            // this batch (cross-file calls) but their fan metrics
+                            // still change, so include them in the reconcile set.
+                            changedNodeIds.add(fromId);
+                            changedNodeIds.add(toId);
                         }
                     }
                 }
             }
 
-            // Recompute fan_in / fan_out for all nodes based on actual edge counts
-            this.recomputeFanMetrics();
+            // A-4: reconcile fan_in / fan_out for the batch's changed nodes only
+            // (the triggers already maintained them incrementally).
+            this.recomputeFanMetrics(changedNodeIds);
 
             this.db.prepare('COMMIT').run();
             this.graphEngine?.invalidateCache();
@@ -405,11 +415,13 @@ export class UpdatePipeline {
             }
 
             const symbolCache = new Map<string, number>();
+            const changedNodeIds = new Set<number>();
             for (const node of delta.nodes) {
                 node.tags = StructuralTagger.tagNode(node);
                 if (history) node.history = history;
                 const nodeId = this.nodeRepo.createNode(node);
                 symbolCache.set(toCanonical(node.qualified_name), nodeId);
+                changedNodeIds.add(nodeId);
             }
 
             for (const edge of delta.edges) {
@@ -417,11 +429,14 @@ export class UpdatePipeline {
                 const toId = this.resolveNodeId(edge, 'to', symbolCache);
                 if (fromId !== undefined && toId !== undefined) {
                     this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
+                    changedNodeIds.add(fromId);
+                    changedNodeIds.add(toId);
                 }
             }
 
-            // Recompute fan_in / fan_out for all nodes based on actual edge counts
-            this.recomputeFanMetrics();
+            // A-4: reconcile fan_in / fan_out for the changed nodes only
+            // (the triggers already maintained them incrementally).
+            this.recomputeFanMetrics(changedNodeIds);
 
             this.db.prepare('COMMIT').run();
             this.graphEngine?.invalidateCache();
@@ -502,12 +517,39 @@ export class UpdatePipeline {
         await this.processBatch(result.events, Date.now(), result.head);
     }
 
-    private recomputeFanMetrics(): void {
-        this.db.prepare(
+    /**
+     * A-4: reconciles fan_in / fan_out for the nodes touched by this batch only.
+     *
+     * The schema's edges_ai/ad/au_metrics triggers already maintain fan_in /
+     * fan_out incrementally on every edge insert/delete/update, so the previous
+     * full-table correlated-subquery UPDATE (over EVERY node, on every watcher
+     * flush) was duplicate work that scaled with graph size rather than batch
+     * size. We keep a bounded reconciliation pass as a safety net against any
+     * drift, but scope it to the changed node set (the nodes created/replaced in
+     * this batch plus the endpoints of edges created in this batch). When the
+     * set is empty there is nothing to reconcile.
+     */
+    private recomputeFanMetrics(changedNodeIds?: Iterable<number>): void {
+        if (changedNodeIds === undefined) {
+            // Backward-compatible full reconciliation (used outside batch paths).
+            this.db.prepare(
+                'UPDATE nodes SET ' +
+                'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = ?), ' +
+                'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = ?)'
+            ).run('calls', 'calls');
+            return;
+        }
+
+        const ids = Array.from(new Set(changedNodeIds));
+        if (ids.length === 0) return;
+
+        const stmt = this.db.prepare(
             'UPDATE nodes SET ' +
-            'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = ?), ' +
-            'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = ?)'
-        ).run('calls', 'calls');
+            'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = \'calls\'), ' +
+            'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = \'calls\') ' +
+            'WHERE nodes.id = ?'
+        );
+        for (const id of ids) stmt.run(id);
     }
 
     private resolveNodeId(edge: any, side: 'from' | 'to', internalMap: Map<string, number>): number | undefined {

@@ -246,60 +246,66 @@ export class GraphEngine {
 
     private async persistClusters(clusters: number[][], nodeMap: Map<number, CodeNode>): Promise<void> {
         const db = this.nodeRepo.getDb();
+        // A-5: wrap the FULL persist (reset + cluster INSERTs + per-node
+        // updateCluster() calls) in a single transaction. Previously only the
+        // DELETE/reset was transactional and the thousands of INSERT/UPDATE
+        // statements ran in auto-commit mode — one WAL fsync per node and a
+        // half-written cluster assignment surviving a mid-run crash.
         db.transaction(() => {
             db.prepare('DELETE FROM logical_clusters').run();
             db.prepare('UPDATE nodes SET cluster_id = NULL').run();
-        })();
 
-        for (let i = 0; i < clusters.length; i++) {
-            const clusterNodes = clusters[i];
-            if (clusterNodes.length < 2) {
-                const node = nodeMap.get(clusterNodes[0]);
-                if (node?.symbol_type !== 'file') continue;
-            }
+            const insertCluster = db.prepare('INSERT INTO logical_clusters (name, cluster_type, avg_complexity, central_symbol_qname) VALUES (?, ?, ?, ?)');
 
-            // Semantic Classification
-            let totalComplexity = 0;
-            let totalFanIn = 0;
-            let totalFanOut = 0;
-            let maxCoreness = -1;
-            let centralSymbol = '';
+            for (let i = 0; i < clusters.length; i++) {
+                const clusterNodes = clusters[i];
+                if (clusterNodes.length < 2) {
+                    const node = nodeMap.get(clusterNodes[0]);
+                    if (node?.symbol_type !== 'file') continue;
+                }
 
-            for (const id of clusterNodes) {
-                const node = nodeMap.get(id);
-                if (node) {
-                    const complexity = node.cyclomatic || 1;
-                    const fanIn = node.fan_in || 0;
-                    const fanOut = node.fan_out || 0;
+                // Semantic Classification
+                let totalComplexity = 0;
+                let totalFanIn = 0;
+                let totalFanOut = 0;
+                let maxCoreness = -1;
+                let centralSymbol = '';
 
-                    totalComplexity += complexity;
-                    totalFanIn += fanIn;
-                    totalFanOut += fanOut;
+                for (const id of clusterNodes) {
+                    const node = nodeMap.get(id);
+                    if (node) {
+                        const complexity = node.cyclomatic || 1;
+                        const fanIn = node.fan_in || 0;
+                        const fanOut = node.fan_out || 0;
 
-                    const coreness = fanOut * complexity;
-                    if (coreness > maxCoreness) {
-                        maxCoreness = coreness;
-                        centralSymbol = node.qualified_name;
+                        totalComplexity += complexity;
+                        totalFanIn += fanIn;
+                        totalFanOut += fanOut;
+
+                        const coreness = fanOut * complexity;
+                        if (coreness > maxCoreness) {
+                            maxCoreness = coreness;
+                            centralSymbol = node.qualified_name;
+                        }
                     }
                 }
+
+                const avgComplexity = clusterNodes.length > 0 ? totalComplexity / clusterNodes.length : 0;
+
+                // Classification heuristic
+                let type: 'core' | 'utility' | 'domain' = 'domain';
+                if (totalFanIn > totalFanOut * 2) type = 'utility';
+                else if (totalFanOut > 5 && avgComplexity > 5) type = 'core';
+
+                const name = `cluster_${i + 1}_${type}`;
+                const result = insertCluster.run(name, type, avgComplexity, centralSymbol);
+                const clusterId = result.lastInsertRowid as number;
+
+                for (const nodeId of clusterNodes) {
+                    this.nodeRepo.updateCluster(nodeId, clusterId);
+                }
             }
-
-            const avgComplexity = clusterNodes.length > 0 ? totalComplexity / clusterNodes.length : 0;
-            
-            // Classification heuristic
-            let type: 'core' | 'utility' | 'domain' = 'domain';
-            if (totalFanIn > totalFanOut * 2) type = 'utility';
-            else if (totalFanOut > 5 && avgComplexity > 5) type = 'core';
-
-            const name = `cluster_${i + 1}_${type}`;
-            const stmt = db.prepare('INSERT INTO logical_clusters (name, cluster_type, avg_complexity, central_symbol_qname) VALUES (?, ?, ?, ?)');
-            const result = stmt.run(name, type, avgComplexity, centralSymbol);
-            const clusterId = result.lastInsertRowid as number;
-
-            for (const nodeId of clusterNodes) {
-                this.nodeRepo.updateCluster(nodeId, clusterId);
-            }
-        }
+        })();
     }
 
     /**
