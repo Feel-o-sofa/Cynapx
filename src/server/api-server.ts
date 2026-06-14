@@ -339,6 +339,32 @@ export class ApiServer {
         });
     }
 
+    // M-1 (Phase 15-3) — session-id vs. stateless transport design memo.
+    //
+    // handleMcp() below is built on the MCP 2025-11-25 session model: it derives a
+    // `sessionId` from `?sessionId=` / the `mcp-session-id` header (else mints a
+    // UUID), keys a per-session `mcpSessions` map (SEC-H-1: one fresh
+    // SdkMcpServer + StreamableHTTPServerTransport pair per session), and supports
+    // reconnection by re-resolving the same `sessionId`. The TTL/cap/sweep
+    // hardening from earlier phases (A-2) all hangs off this session key.
+    //
+    // The 2026-07-28 spec RC moves toward a STATELESS transport: it removes the
+    // `initialize`/`initialized` handshake and the `Mcp-Session-Id` header, so any
+    // request can land on any server instance (client identity travels in each
+    // request's `_meta` instead of a sticky session). That directly conflicts with
+    // the session-keyed map, reconnection logic, and the `mcp-session-id`/sessionId
+    // plumbing here — under a stateless transport there is no session id to key on,
+    // and the per-session transport pairing / idle-sweep machinery would need to be
+    // redesigned (or removed) at the transport layer.
+    //
+    // NO code change now: the CURRENT SDK (`latest` is 1.x) is still session-id
+    // based and the stateless RC is NOT yet reflected in it, so this session model
+    // remains correct. This memo flags handleMcp() as the transport-layer redesign
+    // point for the SDK v2 upgrade. Verdict: DEFERRED until SDK v2 stable.
+    // Refs:
+    //   - 2026-07-28 RC: https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/
+    //   - SEP-1686 (Tasks): https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1686
+    //   - typescript-sdk#2042: https://github.com/modelcontextprotocol/typescript-sdk/issues/2042
     private async handleMcp(req: Request, res: Response) {
         if (!this.mcpServer) return res.status(503).json({ error: "MCP Server not initialized" });
 

@@ -8,11 +8,33 @@
  * A-4 (Phase 14-5): minimal MCP `notifications/progress` wiring for long-running
  * tools (initialize_project, backfill_history, re_tag_project, check_consistency).
  *
- * This is the first, scoped-down step toward the MCP 2025-11-25 task workflow
- * (SEP-1686): we only emit out-of-band progress notifications when the caller
- * opts in via a `_meta.progressToken` on the originating request. Full task
- * lifecycle (streamed progress + cancellation/resumption) remains a documented
- * future direction.
+ * We only emit out-of-band progress notifications when the caller opts in via a
+ * `_meta.progressToken` on the originating request; without a token nothing is
+ * emitted (spec compliance — never push unsolicited progress).
+ *
+ * M-1 (Phase 15-3) — spec-tracking note. The original 2025-11-25 stable spec
+ * shipped Tasks (SEP-1686) as an experimental core primitive. The 2026-07-28
+ * spec RC redesigns this: Tasks is DEMOTED from the core specification to an
+ * extension, with a server-directed model — the server returns a task handle
+ * from the `tools/call` response and the client drives execution via
+ * `tasks/get` / `tasks/update` / `tasks/cancel`. `tasks/list` is removed (there
+ * is no session to enumerate against under the stateless transport). Anyone who
+ * shipped against the 2025-11-25 experimental Tasks API must migrate to this new
+ * lifecycle.
+ *
+ * Cynapx never adopted the experimental Tasks lifecycle — it only emits
+ * progress-token notifications — so NOTHING here breaks under the RC. Crucially,
+ * the progress-token opt-in adopted in P14-5 is RETAINED in the 2026-07-28 RC and
+ * is NOT deprecated: this minimal model stays compatible. A full task-lifecycle
+ * adoption (if ever pursued) must target the 2026-07-28 extension model, not the
+ * 2025-11-25 core API.
+ *
+ * Verdict: tracking only — full task-lifecycle migration is DEFERRED until the
+ * SDK v2 stable release (current `latest` is 1.x, still the session-id model).
+ * Refs:
+ *   - 2026-07-28 RC: https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/
+ *   - SEP-1686 (Tasks): https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1686
+ *   - typescript-sdk#2042: https://github.com/modelcontextprotocol/typescript-sdk/issues/2042
  */
 
 /** Matches the MCP ProgressToken (`string | number`). */

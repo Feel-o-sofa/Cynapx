@@ -78,7 +78,15 @@ O-5 (클러스터 파티셔닝)    ──계속 이연──
 
 ---
 
-## 4. Phase 15-3: MCP 2026-07-28 스펙 추적 메모 + 주석 표적 갱신 (M-1 v12) — 문서/주석 only
+## 4. Phase 15-3: MCP 2026-07-28 스펙 추적 메모 + 주석 표적 갱신 (M-1 v12) — 문서/주석 only `[DONE]`
+
+**처리 결과 요약** (문서/주석 only, 코드 동작 무변경):
+- **M-1(1) [DONE]**: `_progress.ts`·`tool-dispatcher.ts`·`ipc-coordinator.ts`의 "future direction"/SEP-1686 주석을 2026-07-28 RC extension 모델(server-directed task handle via `tools/call` 응답, `tasks/get`/`update`/`cancel`, `tasks/list` 제거)로 갱신. progress-token opt-in(P14-5)은 RC에서도 유지·**폐기 대상 아님**을 명시.
+- **M-1(2) [DONE]**: `api-server.ts`의 `handleMcp()` 위에 session-id 기반 세션 맵·재접속(SEC-H-1/A-2)이 stateless RC(`initialize`/`Mcp-Session-Id` 제거, `_meta` 라우팅)와 충돌하는 지점을 설계 메모로 명시 — 현재 SDK 1.x는 session-id 모델이라 **코드 변경 불필요**, SDK v2 transport 재설계 지점으로 플래그.
+- **M-1(3) [DONE]**: 2026-07-28 RC 블로그·SEP-1686 이슈·typescript-sdk#2042 링크를 주석에 인용(WebFetch로 3건 전부 실존 확인). 판정: **SDK v2 stable까지 이연**.
+- **검증**: `npx tsc --noEmit` clean, `npx vitest run` **563/563**(불변).
+
+
 
 **목표**: MCP **2026-07-28 RC**가 확정한 두 방향 전환(Tasks core→extension 강등, stateless transport)을 코드 주석·설계 메모로 반영해 SDK v2 업그레이드 시 회귀 표면을 미리 잡아둔다. **코드 동작은 변경하지 않는다** — 전면 task lifecycle 마이그레이션과 stateless transport 전환은 SDK v2 stable(Q3 2026 예고, 현재 `latest`=1.29.0이라 미반영)까지 이연한다. 현재 착수 시 RC 변동으로 재작업 위험이 크기 때문이다.
 
@@ -113,10 +121,23 @@ O-5 (클러스터 파티셔닝)    ──계속 이연──
 | Phase | 핵심 항목 | 커밋 수 | 리스크 |
 |-------|-----------|---------|--------|
 | 15-1 `[DONE]` | M-2 임베딩 배치 타이머 위생 + M-4 클러스터 count-first 가드 | 1 | 낮음 (핫패스 자원 위생, 결과 불변) |
-| 15-2 | M-3 tree-sitter grammar 마이너 정렬 + override 일관화 | 1 | 낮음-중간 (의존 변경 + 파서 동등성 회귀) |
-| 15-3 | M-1 MCP 2026-07-28 추적 메모 + 주석 표적 갱신 (문서/주석 only) | 1 | 매우 낮음 (코드 동작 무변경) |
+| 15-2 `[DONE]` | M-3 tree-sitter grammar 마이너 정렬 + override 일관화 | 1 | 낮음-중간 (의존 변경 + 파서 동등성 회귀) |
+| 15-3 `[DONE]` | M-1 MCP 2026-07-28 추적 메모 + 주석 표적 갱신 (문서/주석 only) | 1 | 매우 낮음 (코드 동작 무변경) |
 
 **총 3~5개 커밋**, P15-1·P15-2는 순서 유연, P15-3은 마지막(문서/주석). Phase 14 대비 **CRITICAL/HIGH 코드·공급망 결함 0**이라 전체 리스크·작업량 모두 더 낮다 — 이번 사이클의 본질은 **인덱싱 핫패스 자원 위생 마감 + 의존성 정렬 + MCP 2026-07-28 생태계 추적**이다. 각 Phase 종료 시 `agent_docs/diagnostic-v12.md`에 [DONE] 마킹.
+
+---
+
+## 6.5. Phase 15 전체 완료
+
+**Phase 15-1 ~ 15-3 전부 [DONE]** — diagnostic-v12의 MEDIUM(M-1~M-4) 항목을 전부 해소 완료했다:
+- **P15-1 (M-2 임베딩 배치 타이머 + M-4 클러스터 count-first 가드)**: `EmbeddingManager`의 배치 timeout 타이머를 race 종료 시 `clearTimeout`/`unref`로 정리(배치당 2분 dangling 제거), 클러스터링 가드를 `nodeRepo.countNodes()` probe 기반 count-first로 보강해 `getAllNodes()` 풀 로드 **이전**에 임계 판정(OOM 1차 방어선 강화). 결과 시맨틱 불변.
+- **P15-2 (M-3 tree-sitter grammar 정렬)**: override를 top-level 단일 `tree-sitter: ^0.25.0`로 일관화(중첩 5개 제거, 12개 grammar 전부 0.25.0 dedupe 확인). 코어는 npm 최신 0.25.0이라 변경 없음. `tree-sitter-c-sharp 0.23.5`는 ESM/TLA 바인딩 회귀로 `0.23.1` 정확 핀 롤백. 파서 출력 동등성 회귀 그린.
+- **P15-3 (M-1 MCP 2026-07-28 추적 메모)**: progress/task "future direction"·session-id↔stateless 주석을 2026-07-28 RC(Tasks core→extension 강등, stateless transport)로 갱신 + 외부 추적 링크(RC 블로그·SEP-1686·typescript-sdk#2042, 실존 확인). progress-token opt-in(P14-5)은 RC에서도 유지·폐기 대상 아님 명시. **문서/주석 only, 코드 동작 무변경.** 전면 task lifecycle 마이그레이션 + stateless transport 전환은 SDK v2 stable까지 이연.
+
+**최종 상태**: `npx vitest run` **563/563**(43 파일), `npx tsc --noEmit` 그린, `npm audit --omit=dev` **0 취약점**, `node scripts/integration-test.js` **76/76**(Docker 데몬 부재 시 graceful SKIP).
+
+**잔여 이연 항목 (향후 후보, 7장 상세)**: MCP transport v2 전면 마이그레이션(SDK v2 stable + 2026-07-28 final 후), O-3 IPC MessagePack(계속 보류), O-5 클러스터링 본격 서브그래프 파티셔닝(100k+ 노드 실측 시), SCIP export(전략 추적), Node 24 LTS 전환(tree-sitter prebuild 가용성 추적).
 
 ---
 

@@ -53,9 +53,18 @@ const MAX_MSG_BYTES = 1 * 1024 * 1024; // 1 MB
  * back-correlation into the Terminal's MCP request context — meaningful added
  * complexity in a security-sensitive layer. The keepalive ping (above) already
  * keeps Terminal-forwarded long calls connected, so Terminal-mode tools simply
- * report no progress. Full task lifecycle (SEP-1686: streamed progress +
- * cancellation/resumption) and IPC progress relay remain documented future
- * directions for a later SDK-1.29-based phase.
+ * report no progress.
+ *
+ * M-1 (Phase 15-3) — spec tracking. The 2026-07-28 spec RC demotes Tasks
+ * (SEP-1686) from the core spec to an extension with a server-directed lifecycle:
+ * the server returns a task handle from the `tools/call` response and the client
+ * drives it via `tasks/get`/`tasks/update`/`tasks/cancel` (`tasks/list` is
+ * removed). The progress-token opt-in wired in P14-5 is RETAINED in the RC and is
+ * NOT deprecated. IPC progress relay across this Host↔Terminal boundary remains a
+ * documented future direction; if/when a full task lifecycle is adopted it must
+ * target the 2026-07-28 extension model (not the 2025-11-25 core API). Verdict:
+ * DEFERRED until SDK v2 stable (current SDK `latest` is 1.x, session-id model).
+ * Refs: see src/server/tools/_progress.ts (RC blog, SEP-1686, sdk#2042).
  */
 const DEFAULT_IPC_TIMEOUT_MS = 30_000;
 const IPC_TOOL_TIMEOUTS_MS: Record<string, number> = {

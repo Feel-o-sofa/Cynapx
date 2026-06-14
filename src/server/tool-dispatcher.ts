@@ -211,6 +211,14 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
         // SDK's request-scoped `extra.sendNotification` correlates the progress
         // notification with this request. When no token is present we pass a
         // no-op reporter so handlers can call report() unconditionally.
+        //
+        // M-1 (Phase 15-3) — spec tracking. The 2026-07-28 spec RC demotes Tasks
+        // (SEP-1686) from core to an extension (server-directed handle returned
+        // from this `tools/call` response, then `tasks/get`/`update`/`cancel`;
+        // `tasks/list` removed). The progress-token opt-in used here is RETAINED
+        // in the RC and is NOT deprecated, so this wiring stays compatible. Full
+        // task-lifecycle adoption is DEFERRED until SDK v2 stable. See
+        // src/server/tools/_progress.ts for refs (RC blog, SEP-1686, sdk#2042).
         const progressToken = request.params?._meta?.progressToken;
         const progress = createProgressReporter(
             progressToken,

@@ -26,8 +26,14 @@
 
 ## 3. MEDIUM — 아키텍처/정합성 개선 (M)
 
-### M-1(v12). MCP 2026-07-28 RC가 task/progress를 extension으로 강등 + stateless transport 전환 — P14-5 배선과 session-id 구조에 마이그레이션 함의
+### M-1(v12). MCP 2026-07-28 RC가 task/progress를 extension으로 강등 + stateless transport 전환 — P14-5 배선과 session-id 구조에 마이그레이션 함의 `[DONE — Phase 15-3]`
 **`src/server/tool-dispatcher.ts:208-220`, `src/server/tools/_progress.ts`, `src/server/api-server.ts:342-384`(session-id 기반 StreamableHTTP)**
+
+**Phase 15-3 처리 결과** (문서/주석 only, 코드 동작 무변경):
+- **M-1(1) progress/task 주석 표적 갱신 `[DONE]`**: `_progress.ts`·`tool-dispatcher.ts`·`ipc-coordinator.ts`의 "future direction"/SEP-1686 주석을 **2026-07-28 RC extension 모델**(server-directed task handle via `tools/call` 응답, `tasks/get`/`update`/`cancel`, `tasks/list` 제거)로 갱신. progress-token opt-in(P14-5)은 RC에서도 **유지되며 폐기 대상 아님**을 명시.
+- **M-1(2) session-id↔stateless 설계 메모 `[DONE]`**: `api-server.ts`의 `handleMcp()` 위에 session-id 기반 세션 맵·재접속(SEC-H-1/A-2)이 stateless RC(`initialize`/`Mcp-Session-Id` 제거, `_meta` 라우팅)와 충돌하는 지점을 명시 — **현재 SDK 1.x는 session-id 모델이라 코드 변경 불필요**, SDK v2 업그레이드 시 transport 계층 재설계 지점으로 플래그.
+- **M-1(3) 외부 추적 링크 `[DONE]`**: 2026-07-28 RC 블로그, SEP-1686 이슈, typescript-sdk#2042를 주석에 인용(WebFetch로 3건 전부 실존 확인). 판정: **SDK v2 stable release까지 이연**.
+- **검증**: `npx tsc --noEmit` clean, `npx vitest run` 563/563(불변) — 주석/문서 only라 회귀 없음.
 
 P14-5에서 Cynapx는 MCP 2025-11-25 stable의 흐름에 맞춰 `notifications/progress`(progress token opt-in)를 4개 장기 도구에 배선했다. 그런데 **2026-07-28 스펙 RC(2026-05-21 lock, 2026-07-28 최종 예정)**가 두 가지 방향 전환을 확정했다:
 
@@ -79,10 +85,10 @@ P14-4의 A-2 가드는 `nodes.length > maxNodes`를 검사해 인접 리스트·
 
 | # | 위치 | 내용 |
 |---|------|------|
-| O-1(v12) | `src/server/api-server.ts` | session-id 기반 StreamableHTTP가 stateless RC(M-1)와 충돌 — SDK v2 업그레이드 시 회귀 표면. **추적만**(M-1에 포함), SDK 1.x 동안 변경 불필요 |
+| O-1(v12) | `src/server/api-server.ts` | session-id 기반 StreamableHTTP가 stateless RC(M-1)와 충돌 — SDK v2 업그레이드 시 회귀 표면. **추적만**(M-1에 포함), SDK 1.x 동안 변경 불필요 `[DONE — Phase 15-3: handleMcp() 설계 메모로 충돌 지점 문서화]` |
 | O-2(v12) | `package.json` overrides | tree-sitter grammar 메이저 드리프트(M-3에 흡수) — override 일관 적용 + 마이너 정렬 `[DONE — Phase 15-2: top-level 단일 override로 일관화, c-sharp 0.23.5는 ESM/TLA 회귀로 롤백]` |
 | O-3(v12) | `src/server/ipc-coordinator.ts` (전체) | IPC JSON 평문 직렬화 — MessagePack 미전환(v8→v11 이월). **성능 문제 미관측, verdict: 계속 보류.** 메시지가 작고(주로 메타데이터) round-trip이 드물어 직렬화가 병목 아님. 기록만 유지 |
-| O-4(v12) | `src/server/_progress.ts`·`tool-dispatcher.ts`·`ipc-coordinator.ts:43-58` | progress/task "future direction" 주석이 2025-11-25판 SEP-1686을 가리킴 — 2026-07-28 extension 모델로 갱신(M-1(a)에 포함, 문서/주석 only) |
+| O-4(v12) | `src/server/_progress.ts`·`tool-dispatcher.ts`·`ipc-coordinator.ts:43-58` | progress/task "future direction" 주석이 2025-11-25판 SEP-1686을 가리킴 — 2026-07-28 extension 모델로 갱신(M-1(a)에 포함, 문서/주석 only) `[DONE — Phase 15-3]` |
 | O-5(v12) | `src/graph/graph-engine.ts` | 클러스터링 본격 서브그래프 파티셔닝 — 100k+ 노드 실측 시 재검토(**verdict: 계속 이연**). M-4의 count-first 가드는 별개로 채택 |
 | O-6(v12) | CI / Dockerfile | Node 24 + tree-sitter 0.25.x 빌드 취약성(C++20/prebuild 부재) — CI `build-and-test`가 Node 24 매트릭스에서 `npm test`를 돌리고 현재 그린이나(prebuild 해소 중), 상류 이슈(node-tree-sitter#268)가 미해결. Node 24 LTS 전환 전 prebuild 가용성 재확인 필요. **추적만** |
 
