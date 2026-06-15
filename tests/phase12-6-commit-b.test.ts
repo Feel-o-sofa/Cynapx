@@ -39,6 +39,55 @@ describe('O-2: toCanonical idempotency (resolveNodeId canonical-key lookup)', ()
     });
 });
 
+// P28-1 (M-1 v25): gate the ACTUAL transform output of toCanonical() — the
+// qualified-name key-normalization primitive used across all parsers,
+// cross-project-resolver, get-related-tests and update-pipeline. The O-2 tests
+// above only assert idempotency + symbolCache round-trip; these assert that a
+// given input normalizes to a SPECIFIC canonical string, so backslash/case/
+// trailing-slash variants provably converge on one key. Outputs verified
+// empirically (POSIX, cwd root '/'). Test-only, no prod changes.
+describe('P28-1: toCanonical transform behavior (key normalization)', () => {
+    it('converts Windows-style backslashes to forward slashes', () => {
+        expect(toCanonical('src\\windows\\path.ts')).toBe('src/windows/path.ts');
+    });
+
+    it('early-returns the empty string for empty input', () => {
+        expect(toCanonical('')).toBe('');
+    });
+
+    it('detects a drive-letter prefix and skips cwd prepend (backslash + lowercase)', () => {
+        // /^[a-zA-Z]:/ branch: treated as absolute, so no cwd root is prepended;
+        // backslashes are still normalized and the whole string is lowercased.
+        expect(toCanonical('C:\\Foo\\Bar')).toBe('c:/foo/bar');
+    });
+
+    it('prepends the cwd root for a leading-slash path (no-op on POSIX) and lowercases', () => {
+        // res.startsWith('/') && !startsWith('//') → path.join(root, res); on POSIX
+        // the root is '/', so the prepend is idempotent. Lowercasing still applies.
+        expect(toCanonical('/Abs/Path/File.TS')).toBe('/abs/path/file.ts');
+    });
+
+    it('guards a // (UNC-like) prefix from cwd prepend and collapses to a single leading slash', () => {
+        // The !startsWith('//') guard skips the prepend; multi-slash collapse then
+        // turns the leading '//' into '/'.
+        expect(toCanonical('//unc/share')).toBe('/unc/share');
+    });
+
+    it('does NOT prepend for a relative path (no leading slash)', () => {
+        // Neither the drive-letter nor the leading-slash branch fires, so the
+        // relative path is returned verbatim (modulo lowercase/slash normalization).
+        expect(toCanonical('rel/path/x.ts')).toBe('rel/path/x.ts');
+    });
+
+    it('lowercases and strips a trailing slash', () => {
+        expect(toCanonical('Already/Lower/')).toBe('already/lower');
+    });
+
+    it('collapses runs of multiple slashes into one and strips the trailing slash', () => {
+        expect(toCanonical('a//b///c/')).toBe('a/b/c');
+    });
+});
+
 function createRemoteDb(dbPath: string, qualifiedName: string): void {
     const db = new Database(dbPath);
     db.exec(`

@@ -52,7 +52,7 @@ L-16 (express lockfile)                   ──해소-승격 → M-2 v25 (P28-2
 
 ---
 
-## 2. Phase 28-1: toCanonical 변환 동작 게이트 (M-1 v25) [예정]
+## 2. Phase 28-1: toCanonical 변환 동작 게이트 (M-1 v25) [DONE]
 
 **목표**: `src/utils/paths.ts`의 `toCanonical(s)`(285-295줄)는 *전 파서·cross-project-resolver·get-related-tests·update-pipeline*의 qualified-name *키 정규화 프리미티브*이나 *변환 동작 자체에 대한 단위 테스트가 0건*이다(`tests/phase12-6-commit-b.test.ts`의 유일한 O-2 테스트는 `toCanonical(toCanonical(x))===toCanonical(x)` 멱등성·symbolCache 키 round-trip만 단언하고, *어떤 입력이 무엇으로 정규화되는지*는 단언하지 않음). O-2 describe 옆에 결정적 변환-동작 게이트를 추가한다. **prod 코드 무변경**(테스트-only).
 
@@ -85,7 +85,7 @@ L-16 (express lockfile)                   ──해소-승격 → M-2 v25 (P28-2
 
 ---
 
-## 3. Phase 28-2: express lockfile 4.22.1 → 4.22.2 정렬 (M-2 v25) [예정]
+## 3. Phase 28-2: express lockfile 4.22.1 → 4.22.2 정렬 (M-2 v25) [DONE]
 
 **목표**: `express` lockfile이 `4.22.1`인데 `npm outdated` Wanted가 `4.22.2`로 드리프트(patch). 4.22.2는 clean한 patch bump(4.22.0의 erroneous extended-query-parser breaking change를 완전 revert, 직접 CVE 0건 — CVE-2024-51999 rejected)이고 `package.json` 핀이 `^4.19.2`(semver-호환)라 *lockfile만* 갱신하면 정렬된다. M-2 v24(better-sqlite3 12.10.0→12.11.1 lockfile 정렬)와 동형의 lockfile-only 의존성 위생 항목이다. **긴급도 낮음**: 직접 express는 이미 4.22.1로 4.22.0 breakage를 회피한 상태라 4.22.2는 순수 유지보수 정렬(동작 변화·보안 결함 무관).
 
@@ -143,8 +143,8 @@ L-16 (express lockfile)                   ──해소-승격 → M-2 v25 (P28-2
 | Phase | 핵심 항목 | 커밋 수 | 리스크 |
 |-------|-----------|---------|--------|
 | 28-(docs) | diagnostic-v25 + phase28-plan 신규 docs | 1 | 없음 (docs-only) |
-| 28-1 [예정] | M-1 v25: `tests/phase12-6-commit-b.test.ts`에 `toCanonical` 변환 동작 게이트(의존 0 순수 함수, 테스트-only) — 역슬래시→슬래시·빈-문자열·drive-letter·상대→절대 prepend(+`//` 가드)·소문자·다중-슬래시 축약·trailing-slash 제거 (신규 >=7 케이스, vitest 649→656~) | 1 | 매우 낮음 |
-| 28-2 [예정] | M-2 v25: express lockfile 4.22.1→4.22.2 정렬(lockfile-only, `package.json` 무변경) + 649 그린(api-server supertest)·audit 0/0 재확인 | 1 (28-1과 합본 가능, 또는 deferral) | 매우 낮음 |
+| 28-1 [DONE] | M-1 v25: `tests/phase12-6-commit-b.test.ts`에 `toCanonical` 변환 동작 게이트(의존 0 순수 함수, 테스트-only) — 역슬래시→슬래시·빈-문자열·drive-letter·상대→절대 prepend(+`//` 가드)·소문자·다중-슬래시 축약·trailing-slash 제거 (신규 8 케이스, vitest 649→657) | 1 | 매우 낮음 |
+| 28-2 [DONE] | M-2 v25: express lockfile 4.22.1→4.22.2 정렬(lockfile-only, `package.json` 무변경) + 657 그린(api-server supertest)·audit 0/0 재확인 | 1 (28-1과 합본 가능) | 매우 낮음 |
 
 **총 2~3개 커밋(P28-1·P28-2 분리/합본).** 두 항목은 서로 독립(다른 부류 — 테스트 게이트 vs 의존성 위생)이라 순서 무관·합본 무방(둘 다 작고 리스크 낮음 — 1~2항목 제한 원칙 부합). **M-2 v25는 긴급도가 낮아 deferral(L-16 추적)도 합리적 선택** — 그 경우 Phase 28은 P28-1 단독의 경량 유지보수 사이클.
 
