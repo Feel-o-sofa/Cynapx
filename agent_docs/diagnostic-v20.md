@@ -63,7 +63,7 @@ v19까지의 3-way 대조는 디스패처/REST/FileWatcher 분기를 훑었고 P
 | `architecture-engine.ts` | `architecture-engine.test.ts` | `check_architecture_violations` | custom-rule + (P22-1로) circular 분기 | 커버 — P22-1 |
 | `optimization-engine.ts` | `optimization-engine.test.ts` | `find_dead_code` | dead-code 티어 분류는 커버, **빈-그래프 `optimizationPotential` 경계 미커버 → `"NaN%"`** | **M-2 v20 [DONE — Phase 23-2]** (가드 ~2줄 + 빈-그래프 경계 테스트) |
 | `remediation-engine.ts` | `remediation-engine.test.ts` | `get_remediation_strategy` | **7 분기 0% — 디스패처 테스트는 `{} as any` stub로 인자 가드만** | **M-1 v20 [DONE — Phase 23-1]** (`tests/remediation-engine.test.ts` 신규, 7분기 게이트) |
-| `refactoring-engine.ts` | **없음** | `get_risk_profile`/`propose_refactor` | risk 임계·가중·reasons/steps 0% | L-10 추적 |
+| `refactoring-engine.ts` | `refactoring-engine.test.ts` | `get_risk_profile`/`propose_refactor` | `getRiskProfile()` 임계·가중 게이트 완료 (Phase 23-3); `proposeRefactor()` reasons/steps는 잔여 | **L-10 부분 해소 — Phase 23-3** (`getRiskProfile()` gated; `proposeRefactor()`/PolicyDiscoverer는 다음 사이클) |
 | `policy-discoverer.ts` | **없음** | `discover_policies` | DB-heavy 집계 0% | L-10 추적(픽스처 무거움) |
 
 핵심: 과거 3-way 대조는 "도구가 등록됐는가·디스패처가 라우팅/인자검증을 하는가"까지만 게이트화했고, *엔진 비즈니스 로직 자체*는 architecture/optimization 외엔 게이트 밖이었다. M-1(remediation 순수 7분기)·M-2(optimization 경계)는 P22-1과 동형의 "라이브 도구 뒤 미커버 순수/경계 분기"이며, 순수/경계라 (b) 잣대를 깨끗이 넘는다.

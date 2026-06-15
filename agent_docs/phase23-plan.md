@@ -113,7 +113,7 @@ L-11 (better-sqlite3 12.10.0→12.10.1 lockfile 정렬)  ──다음 정기 갱
 
 ---
 
-## 4. Phase 23-3 (선택): RefactoringEngine.getRiskProfile() 게이트 (L-10 부분 해소) — 테스트-only [예정]
+## 4. Phase 23-3 (선택): RefactoringEngine.getRiskProfile() 게이트 (L-10 부분 해소) — 테스트-only [DONE]
 
 **목표**: L-10이 식별한 두 엔진(RefactoringEngine, PolicyDiscoverer) 중 `RefactoringEngine.getRiskProfile()`만 우선 게이트화한다. `getRiskProfile()`은 `graphEngine.getNodeByQualifiedName()` 1회 룩업 + churn(0.4)/complexity(0.3)/coupling(0.3) 가중합 → `CRITICAL(>0.8)/HIGH(>0.5)/MEDIUM(>0.2)/LOW` 임계 분류로, stub 1개로 테스트 가능하다. `proposeRefactor()`(BFS traverse, `graphEngine.traverse()` 호출)은 그래프 픽스처가 더 무거우므로 **본 사이클에서는 범위 제외**, 다음 사이클(또는 PolicyDiscoverer와 함께) 처리.
 
@@ -164,7 +164,7 @@ L-11 (better-sqlite3 12.10.0→12.10.1 lockfile 정렬)  ──다음 정기 갱
 | 23-(docs) | diagnostic-v20 + phase23-plan 신규 docs | 1 | 없음 (docs-only) |
 | 23-1 [DONE] (vitest 603) | M-1 v20: `tests/remediation-engine.test.ts` 신규 — `getRemediationStrategy()` 7분기 테이블-드리븐 게이트(테스트-only) | 1 (23-2와 합본) | 없음 |
 | 23-2 [DONE] (vitest 603) | M-2 v20: `optimization-engine.ts` 빈-그래프 `NaN%` → `'0.00%'` 가드(~2줄) + 경계 테스트 | 1 (23-1과 합본) | 매우 낮음 |
-| 23-3 (선택) [예정] | L-10 부분: `tests/refactoring-engine.test.ts` 신규 — `getRiskProfile()` 임계/가중 게이트(테스트-only) | 1 | 낮음 |
+| 23-3 (선택) [DONE] (vitest 608) | L-10 부분: `tests/refactoring-engine.test.ts` 신규 — `getRiskProfile()` 임계/가중 게이트(테스트-only) | 1 | 낮음 |
 
 **총 3~4개 커밋(P23-3 포함 시).** P23-1·P23-2는 둘 다 작고 독립적이며 같은 "라이브 도구 뒤 미커버 순수/경계 분기 게이트" 패턴이므로 한 구현 사이클에서 함께 처리하는 것을 권장한다(1~2항목 제한 원칙에 부합). P23-3은 선택이며 다음 사이클로 넘겨도 무방.
 
