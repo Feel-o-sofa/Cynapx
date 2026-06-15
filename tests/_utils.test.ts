@@ -8,9 +8,17 @@
  * keyword and vector result lists used by the semantic search_symbols tool.
  * It is a dependency-free pure function (array in -> array out, no DB/async/
  * side-effects) so these are deterministic, prod-code-free gates.
+ *
+ * P27-1: Unit tests for escapeXml()/escapeDot() in src/server/tools/_utils.ts.
+ * These pure string-in/string-out functions back the export_graph tool's
+ * graphml/dot formatters (escaping node/edge identifiers). escapeXml applies
+ * `&`->`&amp;` FIRST so subsequently-emitted `&lt;`/`&gt;`/`&quot;` entities are
+ * not double-escaped; escapeDot escapes `\`->`\\` then `"`->`\"`. Both use the
+ * global `/g` flag. Like mergeResultsRRF these are dependency-free, so the
+ * gates below are deterministic and require zero prod-code changes.
  */
 import { describe, it, expect } from 'vitest';
-import { mergeResultsRRF } from '../src/server/tools/_utils.js';
+import { mergeResultsRRF, escapeXml, escapeDot } from '../src/server/tools/_utils.js';
 
 describe('mergeResultsRRF', () => {
     it('orders nodes by RRF rank: earlier (lower rank) scores higher (single list)', () => {
@@ -85,5 +93,54 @@ describe('mergeResultsRRF', () => {
         expect(result).toContain(nodeA);
         expect(result).toContain(nodeB);
         expect(result.find(n => n.id === 1)).toBe(nodeA);
+    });
+});
+
+describe('escapeXml', () => {
+    it('escapes each XML special character individually', () => {
+        expect(escapeXml('&')).toBe('&amp;');
+        expect(escapeXml('<')).toBe('&lt;');
+        expect(escapeXml('>')).toBe('&gt;');
+        expect(escapeXml('"')).toBe('&quot;');
+    });
+
+    it('escapes every occurrence (global /g flag)', () => {
+        expect(escapeXml('a<b<c')).toBe('a&lt;b&lt;c');
+        expect(escapeXml('<<>>')).toBe('&lt;&lt;&gt;&gt;');
+    });
+
+    it('applies `&`-first ordering so entities are NOT double-escaped', () => {
+        // `&`->`&amp;` runs first; the `&` it emits must not be re-escaped by a
+        // later pass. If `<` were escaped before `&`, the `&` in `&lt;` would
+        // become `&amp;lt;`. Assert the single-escape result.
+        expect(escapeXml('<&>')).toBe('&lt;&amp;&gt;');
+        expect(escapeXml('a&b<c')).toBe('a&amp;b&lt;c');
+        // All four together: the literal `&` is escaped once; entities from
+        // `<`/`>`/`"` retain their bare `&` prefix (no `&amp;lt;` artifacts).
+        expect(escapeXml('&<>"')).toBe('&amp;&lt;&gt;&quot;');
+    });
+
+    it('returns a string with no special characters unchanged', () => {
+        expect(escapeXml('foo.bar.baz')).toBe('foo.bar.baz');
+        expect(escapeXml('')).toBe('');
+    });
+});
+
+describe('escapeDot', () => {
+    it('escapes backslash and double-quote, including a string with both', () => {
+        expect(escapeDot('\\')).toBe('\\\\');
+        expect(escapeDot('"')).toBe('\\"');
+        // Input  C:\path\"quoted\"  -> backslashes doubled, quotes prefixed.
+        expect(escapeDot('C:\\path\\"quoted\\"')).toBe('C:\\\\path\\\\\\"quoted\\\\\\"');
+    });
+
+    it('escapes every occurrence (global /g flag)', () => {
+        expect(escapeDot('""')).toBe('\\"\\"');
+        expect(escapeDot('\\\\')).toBe('\\\\\\\\');
+    });
+
+    it('returns a string with no special characters unchanged', () => {
+        expect(escapeDot('foo.bar.baz')).toBe('foo.bar.baz');
+        expect(escapeDot('')).toBe('');
     });
 });
