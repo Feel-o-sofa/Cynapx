@@ -48,7 +48,7 @@ L-14 (CVE-2026-25727 time 크레이트, 미도달)──추적만(비-actionable
 
 ---
 
-## 2. Phase 26-1: mergeResultsRRF() RRF 융합 로직 게이트 (M-1 v23) [예정]
+## 2. Phase 26-1: mergeResultsRRF() RRF 융합 로직 게이트 (M-1 v23) [DONE]
 
 **목표**: `src/server/tools/_utils.ts`의 `mergeResultsRRF(keywordNodes, vectorNodes, limit)`(35-49줄)는 라이브 MCP 도구 `search_symbols`의 semantic 모드(`search-symbols.ts:30`: `mergeResultsRRF(keywordNodes, vectorNodes, limit)`) 뒤에서 RRF(Reciprocal Rank Fusion) 융합을 수행하나 *직접 단위 테스트가 0건*(`tests/` 전수 `grep` 결과 `mergeResultsRRF`/`tools/_utils` import 0건). 의존 0의 순수 함수(배열 in → 배열 out)에 결정적 게이트를 추가한다. **prod 코드 무변경**(테스트-only).
 
@@ -82,7 +82,7 @@ L-14 (CVE-2026-25727 time 크레이트, 미도달)──추적만(비-actionable
 
 ---
 
-## 3. Phase 26-2: get-related-tests.ts qualified_name strict 가드 정렬 (M-2 v23) [예정]
+## 3. Phase 26-2: get-related-tests.ts qualified_name strict 가드 정렬 (M-2 v23) [DONE]
 
 **목표**: `src/server/tools/get-related-tests.ts:17`은 스키마-required `qualified_name`(`tool-dispatcher.ts`에서 `required:["qualified_name"]`+`type:"string"`)을 *약한 truthy 가드*(`if (!args.qualified_name)`)로만 검증한다. 형제 핸들러 9종(`analyze-impact:12`·`get-callers:12`·`get-callees:12`·`get-symbol-details:13`·`get-risk-profile:12`·`propose-refactor:12` 등)은 전부 `typeof args.qualified_name !== 'string' || args.qualified_name.trim() === ''` strict 가드를 쓰나 — `get-related-tests`만 truthy 가드다. 결과: `qualified_name: 123`(비-문자열 truthy)이 가드를 통과해 `getNodeByQualifiedName(123)`(line 21)로 흘러가고, `node-repository.ts`의 `WHERE qualified_name = ?`는 숫자 바인딩에 매치 0행 → misleading "Symbol not found"를 반환(형제 핸들러의 "Invalid argument: qualified_name must be a non-empty string."와 메시지·동작 불일치). 또한 falsy 경로(`{}`/`''`)는 "Error: qualified_name is required."를 반환해 형제와 다른 메시지다. 형제와 동형의 strict 가드 + 통일된 메시지로 정렬한다.
 
@@ -138,8 +138,8 @@ L-14 (CVE-2026-25727 time 크레이트, 미도달)──추적만(비-actionable
 | Phase | 핵심 항목 | 커밋 수 | 리스크 |
 |-------|-----------|---------|--------|
 | 26-(docs) | diagnostic-v23 + phase26-plan 신규 docs | 1 | 없음 (docs-only) |
-| 26-1 [예정] | M-1 v23: `tests/_utils.test.ts`(신규) 또는 `tests/tool-dispatcher.test.ts`에 `mergeResultsRRF()` 게이트(의존 0 순수 함수, 테스트-only) — RRF 점수 공식·dedup boost·정렬·limit slice·빈 입력 (목표: 신규 >=5 케이스, vitest 634→639+) | 1 | 매우 낮음 |
-| 26-2 [예정] | M-2 v23: `get-related-tests.ts` `qualified_name` strict 가드 정렬(~3줄, 형제 핸들러 동형) + 디스패처 케이스 갱신/추가 (목표: 신규 >=3 케이스, vitest 639+→642+) | 1 (26-1과 합본 가능) | 매우 낮음 |
+| 26-1 [DONE] | M-1 v23: `tests/_utils.test.ts`(신규)에 `mergeResultsRRF()` 게이트(의존 0 순수 함수, 테스트-only) — RRF 점수 공식·dedup boost·정렬·limit slice·빈 입력·nodeMap 복원 (신규 6 케이스, vitest 634→640) | 1 | 매우 낮음 |
+| 26-2 [DONE] | M-2 v23: `get-related-tests.ts` `qualified_name` strict 가드 정렬(~3줄, 형제 핸들러 동형) + 디스패처 케이스 갱신/추가 (신규 2 케이스 + 기존 메시지 갱신, vitest 640→642) | 1 (26-1과 합본) | 매우 낮음 |
 
 **총 2~3개 커밋(P26-1·P26-2 분리/합본).** 두 항목은 서로 독립(다른 파일·다른 부류)이라 순서 무관·합본 무방(둘 다 작고 리스크 낮음 — 1~2항목 제한 원칙 부합).
 

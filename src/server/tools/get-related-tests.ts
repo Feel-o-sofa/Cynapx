@@ -14,8 +14,8 @@ export const getRelatedTestsHandler: ToolHandler = {
         if (!ctx) {
             return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
         }
-        if (!args.qualified_name) {
-            return { content: [{ type: 'text', text: 'Error: qualified_name is required.' }], isError: true };
+        if (typeof args.qualified_name !== 'string' || args.qualified_name.trim() === '') {
+            return { isError: true, content: [{ type: 'text', text: 'Invalid argument: qualified_name must be a non-empty string.' }] };
         }
         const graphEngine = requireEngine(ctx, 'graphEngine');
         const node = graphEngine.getNodeByQualifiedName(args.qualified_name);

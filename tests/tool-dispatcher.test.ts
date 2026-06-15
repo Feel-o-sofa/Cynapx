@@ -158,7 +158,21 @@ describe('executeTool: get_related_tests', () => {
         const deps = makeDeps();
         const result = await executeTool('get_related_tests', {}, deps);
         expect(result.isError).toBe(true);
-        expect(result.content[0].text).toMatch(/qualified_name/i);
+        expect(result.content[0].text).toMatch(/Invalid argument: qualified_name must be a non-empty string/i);
+    });
+
+    it('returns isError for a non-string qualified_name', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_related_tests', { qualified_name: 123 }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/non-empty string/i);
+    });
+
+    it('returns isError for an empty-string qualified_name', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('get_related_tests', { qualified_name: '' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/non-empty string/i);
     });
 
     it('returns [] (not error) for a valid symbol with no tests edges', async () => {
