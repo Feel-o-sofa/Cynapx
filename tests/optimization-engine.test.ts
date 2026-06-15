@@ -69,6 +69,14 @@ describe('OptimizationEngine.findDeadCode() — A-2/A-3 node_tags JOIN', () => {
         expect(report.summary.highConfidenceDead).toBe(1);
     });
 
+    it('M-2 v20: empty graph yields 0.00% optimizationPotential (not NaN%)', async () => {
+        // Fresh engine from beforeEach with zero nodes created.
+        const result = await optEngine.findDeadCode();
+        expect(result.summary.totalSymbols).toBe(0);
+        expect(result.summary.deadSymbols).toBe(0);
+        expect(result.summary.optimizationPotential).toBe('0.00%');
+    });
+
     it('excludes nodes tagged trait:entrypoint via node_tags', async () => {
         makeNode(nodeRepo, { qualified_name: 'a.ts#main', visibility: 'private', tags: ['trait:entrypoint'] });
 

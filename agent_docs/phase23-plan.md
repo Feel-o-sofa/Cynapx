@@ -53,7 +53,7 @@ L-11 (better-sqlite3 12.10.0→12.10.1 lockfile 정렬)  ──다음 정기 갱
 
 ---
 
-## 2. Phase 23-1: RemediationEngine.getRemediationStrategy() 7분기 회귀 게이트 (M-1 v20) — 테스트-only [예정]
+## 2. Phase 23-1: RemediationEngine.getRemediationStrategy() 7분기 회귀 게이트 (M-1 v20) — 테스트-only [DONE]
 
 **목표**: `src/graph/remediation-engine.ts`의 `getRemediationStrategy(violation: ArchitectureViolation): RemediationRecipe`는 순수 함수이며 7개 분기(아래 표)를 갖는다. 현재 `tests/`에 remediation-engine 전용 테스트 파일이 없고, `tests/tool-dispatcher.test.ts`는 엔진을 `remediationEngine: {} as any`로 stub해 인자 가드(`{}` → "Missing required argument", `{violation:{}}` → "Invalid violation object")만 검증한다 — 엔진 자체의 분기 로직은 0% 커버. **prod 코드는 무변경**(테스트-only).
 
@@ -92,7 +92,7 @@ L-11 (better-sqlite3 12.10.0→12.10.1 lockfile 정렬)  ──다음 정기 갱
 
 ---
 
-## 3. Phase 23-2: OptimizationEngine.findDeadCode() 빈-그래프 NaN% 가드 (M-2 v20) — ~2줄 + 경계 테스트 [예정]
+## 3. Phase 23-2: OptimizationEngine.findDeadCode() 빈-그래프 NaN% 가드 (M-2 v20) — ~2줄 + 경계 테스트 [DONE]
 
 **목표**: `src/graph/optimization-engine.ts:53`의 `optimizationPotential` 계산은 `((highRows.length + mediumRows.length + lowRows.length) / totalSymbols) * 100`이며, `totalSymbols`(line 40, `SELECT COUNT(*) FROM nodes`)가 0인 빈 그래프에서 `0/0 = NaN` → `optimizationPotential: "NaN%"`가 `find_dead_code` 도구 응답에 그대로 노출된다. 픽스는 `totalSymbols === 0`일 때 `'0.00%'`를 반환하는 ~2줄 가드이며, 비-빈 그래프의 기존 산술 결과는 완전 동일(가드는 0-분기에만 적용).
 
@@ -162,8 +162,8 @@ L-11 (better-sqlite3 12.10.0→12.10.1 lockfile 정렬)  ──다음 정기 갱
 | Phase | 핵심 항목 | 커밋 수 | 리스크 |
 |-------|-----------|---------|--------|
 | 23-(docs) | diagnostic-v20 + phase23-plan 신규 docs | 1 | 없음 (docs-only) |
-| 23-1 [예정] | M-1 v20: `tests/remediation-engine.test.ts` 신규 — `getRemediationStrategy()` 7분기 테이블-드리븐 게이트(테스트-only) | 1 (23-2와 합본 가능) | 없음 |
-| 23-2 [예정] | M-2 v20: `optimization-engine.ts:53` 빈-그래프 `NaN%` → `'0.00%'` 가드(~2줄) + 경계 테스트 | 1 (23-1과 합본 가능) | 매우 낮음 |
+| 23-1 [DONE] (vitest 603) | M-1 v20: `tests/remediation-engine.test.ts` 신규 — `getRemediationStrategy()` 7분기 테이블-드리븐 게이트(테스트-only) | 1 (23-2와 합본) | 없음 |
+| 23-2 [DONE] (vitest 603) | M-2 v20: `optimization-engine.ts` 빈-그래프 `NaN%` → `'0.00%'` 가드(~2줄) + 경계 테스트 | 1 (23-1과 합본) | 매우 낮음 |
 | 23-3 (선택) [예정] | L-10 부분: `tests/refactoring-engine.test.ts` 신규 — `getRiskProfile()` 임계/가중 게이트(테스트-only) | 1 | 낮음 |
 
 **총 3~4개 커밋(P23-3 포함 시).** P23-1·P23-2는 둘 다 작고 독립적이며 같은 "라이브 도구 뒤 미커버 순수/경계 분기 게이트" 패턴이므로 한 구현 사이클에서 함께 처리하는 것을 권장한다(1~2항목 제한 원칙에 부합). P23-3은 선택이며 다음 사이클로 넘겨도 무방.

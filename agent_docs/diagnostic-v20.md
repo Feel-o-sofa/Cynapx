@@ -61,8 +61,8 @@ v19까지의 3-way 대조는 디스패처/REST/FileWatcher 분기를 훑었고 P
 | 엔진 | 테스트 파일 | 라이브 도구 | 로직 커버 | 판정 |
 |------|-------------|------------|-----------|------|
 | `architecture-engine.ts` | `architecture-engine.test.ts` | `check_architecture_violations` | custom-rule + (P22-1로) circular 분기 | 커버 — P22-1 |
-| `optimization-engine.ts` | `optimization-engine.test.ts` | `find_dead_code` | dead-code 티어 분류는 커버, **빈-그래프 `optimizationPotential` 경계 미커버 → `"NaN%"`** | **M-2 v20 (Phase 23-2)** |
-| `remediation-engine.ts` | **없음** | `get_remediation_strategy` | **7 분기 0% — 디스패처 테스트는 `{} as any` stub로 인자 가드만** | **M-1 v20 (Phase 23-1)** |
+| `optimization-engine.ts` | `optimization-engine.test.ts` | `find_dead_code` | dead-code 티어 분류는 커버, **빈-그래프 `optimizationPotential` 경계 미커버 → `"NaN%"`** | **M-2 v20 [DONE — Phase 23-2]** (가드 ~2줄 + 빈-그래프 경계 테스트) |
+| `remediation-engine.ts` | `remediation-engine.test.ts` | `get_remediation_strategy` | **7 분기 0% — 디스패처 테스트는 `{} as any` stub로 인자 가드만** | **M-1 v20 [DONE — Phase 23-1]** (`tests/remediation-engine.test.ts` 신규, 7분기 게이트) |
 | `refactoring-engine.ts` | **없음** | `get_risk_profile`/`propose_refactor` | risk 임계·가중·reasons/steps 0% | L-10 추적 |
 | `policy-discoverer.ts` | **없음** | `discover_policies` | DB-heavy 집계 0% | L-10 추적(픽스처 무거움) |
 
@@ -148,8 +148,8 @@ v19까지의 3-way 대조는 디스패처/REST/FileWatcher 분기를 훑었고 P
 
 **22 페이즈 이후 prod 코드는 steady-state(CRITICAL/HIGH 0, prod·dev audit 0/0, TODO 0, god-module 0, 핫패스 quadratic 0)이고 신규 prod-도달 CVE도 0건이나, v20은 과거 3-way 대조의 사각을 새 각도로 짚어 — graph/ 엔진 비즈니스 로직 5종을 *실제로 읽고* 테스트 파일과 대조해 — P22-1(architecture-engine circular 분기)과 동형의 "라이브 MCP 도구 뒤 미커버 순수/경계 분기" 2건을 발굴했다.** CRITICAL/HIGH 0, MEDIUM 2(M-1 v20 remediation 7 순수 분기 게이트 — 작고·테스트 동반·저위험; M-2 v20 dead-code NaN% 경계 + 게이트 — ~2줄 가드+경계 테스트), LOW 10(L-2~L-9 v19 승계 + L-10 엔진 게이트 잔여 + L-11 better-sqlite3 patch 정렬). 따라서 Phase 23은 **엔진-로직 게이트 2 서브 페이즈(P23-1·P23-2) + 선택적 P23-3(L-10 RefactoringEngine) + 추적 갱신**이 합리적이다.
 
-1. **P23-1**: M-1 v20 해소 — `tests/remediation-engine.test.ts` 신규로 `getRemediationStrategy()`의 7 순수 분기(insufficient-data/circular/bottom-up/utility/repo-repo/god-object/default)를 테이블-드리븐으로 게이트화. **prod 코드 무변경(테스트-only), 순수 함수라 모킹·픽스처 0.**
-2. **P23-2**: M-2 v20 해소 — `optimization-engine.ts:53`의 빈-그래프 division-by-zero를 `totalSymbols === 0 ? '0.00%'` 가드로 픽스(~2줄, 비-빈 그래프 동작 동일) + `tests/optimization-engine.test.ts`에 빈-그래프 경계 케이스 추가(`createInMemoryEngine()`만으로 노드 0개 → `optimizationPotential === '0.00%'` 단언).
+1. **P23-1 [DONE]**: M-1 v20 해소 — `tests/remediation-engine.test.ts` 신규로 `getRemediationStrategy()`의 7 순수 분기(insufficient-data/circular/bottom-up/utility/repo-repo/god-object/default)를 테이블-드리븐으로 게이트화. **prod 코드 무변경(테스트-only), 순수 함수라 모킹·픽스처 0.** (vitest 603 그린)
+2. **P23-2 [DONE]**: M-2 v20 해소 — `optimization-engine.ts`의 빈-그래프 division-by-zero를 `totalSymbols === 0 ? '0.00%'` 가드로 픽스(~2줄, 비-빈 그래프 동작 동일) + `tests/optimization-engine.test.ts`에 빈-그래프 경계 케이스 추가(`createInMemoryEngine()`만으로 노드 0개 → `optimizationPotential === '0.00%'` 단언).
 3. **(선택) P23-3**: L-10 부분 해소 — `tests/refactoring-engine.test.ts` 신규로 `getRiskProfile()`의 risk 임계·가중(churn/complexity/coupling → CRITICAL/HIGH/MEDIUM/LOW)을 게이트화(stub `getNodeByQualifiedName` 1회 룩업이라 픽스처 가벼움). `proposeRefactor`(BFS traverse)는 무거우니 다음 사이클.
 4. **추적 상태 갱신**: L-2(Miasma 도달 0 불변), L-3(SDK v2 2026-07-28 RC 잠금·npm 미배포 — Q3 stable까지 이연), L-6(node-tree-sitter#268 open), L-7/L-8(게이트 공백 비-actionable), L-9 잔여 클린업, L-10(엔진 게이트 잔여), L-11(better-sqlite3 12.10.1 정렬) 현 상태를 다음 사이클 출발점으로 고정.
 

@@ -39,6 +39,13 @@ export class OptimizationEngine {
 
         const totalSymbols: number = (db.prepare('SELECT COUNT(*) as count FROM nodes').get() as { count: number }).count;
 
+        // M-2 v20 (Phase 23-2): guard against division-by-zero on an empty graph
+        // (totalSymbols === 0 would yield 0/0 = NaN → "NaN%"). Non-empty behavior is unchanged.
+        const deadCount = highRows.length + mediumRows.length + lowRows.length;
+        const optimizationPotential = totalSymbols === 0
+            ? '0.00%'
+            : `${((deadCount / totalSymbols) * 100).toFixed(2)}%`;
+
         return {
             high: highRows,
             medium: mediumRows,
@@ -49,8 +56,8 @@ export class OptimizationEngine {
                 highConfidenceDead: highRows.length,
                 mediumConfidenceDead: mediumRows.length,
                 lowConfidenceDead: lowRows.length,
-                deadSymbols: highRows.length + mediumRows.length + lowRows.length,
-                optimizationPotential: `${(((highRows.length + mediumRows.length + lowRows.length) / totalSymbols) * 100).toFixed(2)}%`
+                deadSymbols: deadCount,
+                optimizationPotential
             }
         };
     }
