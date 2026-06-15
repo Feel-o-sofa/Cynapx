@@ -116,7 +116,7 @@ Cynapx never writes to your project directory. All persistent data lives in `~/.
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Node.js | >= 20 | Required |
+| Node.js | >= 22 | Required |
 | Git | Any recent | Required for `backfill_history` and churn metrics |
 | Python | 3.x | Optional — enables `semantic: true` vector search in `search_symbols` |
 

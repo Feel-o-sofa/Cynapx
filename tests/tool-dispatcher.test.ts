@@ -261,6 +261,39 @@ describe('executeTool: H-1 requireEngine guard (EngineNotReadyError)', () => {
         expect(result.content[0].text).toMatch(/policyDiscoverer.*not ready/i);
     });
 
+    // Phase 24-1 (M-2 v21): handler arg validation aligned to the real
+    // threshold / min_count args (previously dead-validated min_confidence /
+    // max_policies). Validation runs after the ctx check and before the engine
+    // call, so a working policyDiscoverer stub is injected.
+    function depsWithPolicyDiscoverer() {
+        return makeDeps({
+            getContext: vi.fn().mockReturnValue({
+                policyDiscoverer: { discoverPolicies: async () => [] },
+            }),
+        });
+    }
+
+    it('discover_latent_policies returns isError for threshold out of 0-1 range', async () => {
+        const deps = depsWithPolicyDiscoverer();
+        const result = await executeTool('discover_latent_policies', { threshold: 1.5 }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/threshold must be a number between 0 and 1/i);
+    });
+
+    it('discover_latent_policies returns isError for non-positive-integer min_count', async () => {
+        const deps = depsWithPolicyDiscoverer();
+        const result = await executeTool('discover_latent_policies', { min_count: -1 }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/min_count must be a positive integer/i);
+    });
+
+    it('discover_latent_policies accepts valid threshold/min_count args', async () => {
+        const deps = depsWithPolicyDiscoverer();
+        const result = await executeTool('discover_latent_policies', { threshold: 0.5, min_count: 2 }, deps);
+        expect(result.isError).toBeUndefined();
+        expect(result.content[0].text).toBeDefined();
+    });
+
     it('backfill_history returns isError when updatePipeline is not ready', async () => {
         const deps = makeDeps({
             getContext: vi.fn().mockReturnValue({
