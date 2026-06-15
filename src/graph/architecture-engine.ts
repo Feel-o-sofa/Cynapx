@@ -163,6 +163,17 @@ export class ArchitectureEngine {
         }
 
         // 3. Circular Dependency Detection
+        // Build an O(1) (from_id, to_id) -> edge index once, replacing the
+        // former per-cycle O(E) `edges.find(...)` linear scan. `edges.find`
+        // returns the FIRST match, so when multiple edges share the same
+        // (from_id, to_id) pair (e.g. differing edge_type) we must preserve
+        // the first one — hence the `if (!has)` guard (Map.set is last-wins).
+        const edgeByPair = new Map<string, CodeEdge>();
+        for (const e of edges) {
+            const k = `${e.from_id}:${e.to_id}`;
+            if (!edgeByPair.has(k)) edgeByPair.set(k, e);
+        }
+
         const cycles = this.detectCycles();
         for (const cycle of cycles) {
             const source = this.graphEngine.getNodeById(cycle[0]);
@@ -176,7 +187,7 @@ export class ArchitectureEngine {
                     violations.push({
                         source,
                         target,
-                        edge: edges.find(e => e.from_id === cycle[0] && e.to_id === cycle[1])!,
+                        edge: edgeByPair.get(`${cycle[0]}:${cycle[1]}`)!,
                         policyId: 'circular-dependency',
                         description: `Circular dependency detected: ${cycle.map(id => this.graphEngine.getNodeById(id)?.qualified_name).join(' -> ')} -> ${source.qualified_name}`
                     });
