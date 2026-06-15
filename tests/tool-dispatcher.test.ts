@@ -400,6 +400,34 @@ describe('executeTool: export_graph', () => {
 // ---------------------------------------------------------------------------
 
 describe('executeTool: search_symbols', () => {
+    it('returns isError when query is missing (undefined)', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('search_symbols', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/non-empty string/i);
+    });
+
+    it('returns isError when query is a non-string (number)', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('search_symbols', { query: 123 }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/non-empty string/i);
+    });
+
+    it('returns isError when query is an empty string', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('search_symbols', { query: '' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/non-empty string/i);
+    });
+
+    it('returns isError when query is whitespace only', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('search_symbols', { query: '   ' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/non-empty string/i);
+    });
+
     it('returns an empty JSON array when there are no contexts', async () => {
         // Default makeDeps: workspaceManager.getAllContexts() -> []
         const deps = makeDeps();

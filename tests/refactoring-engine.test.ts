@@ -164,3 +164,130 @@ describe('RefactoringEngine.getRiskProfile() — Phase 23-3 risk threshold gate'
         expect(result).toBeNull();
     });
 });
+
+describe('RefactoringEngine.proposeRefactor() — Phase 25-1 traverse/risk/reasons/steps gate', () => {
+    let engine: GraphEngine;
+    let nodeRepo: NodeRepository;
+    let edgeRepo: EdgeRepository;
+    let refactorEngine: RefactoringEngine;
+
+    beforeEach(() => {
+        ({ engine, nodeRepo, edgeRepo } = createInMemoryEngine());
+        refactorEngine = new RefactoringEngine(engine);
+    });
+
+    /** Seed N caller nodes with incoming 'calls' edges into the target node. */
+    function seedIncomingCallers(targetId: number, n: number): void {
+        for (let i = 0; i < n; i++) {
+            const callerId = makeNode(nodeRepo, { qualified_name: `caller${i}.ts#Caller.m${i}` });
+            edgeRepo.createEdge({ from_id: callerId, to_id: targetId, edge_type: 'calls', dynamic: false });
+        }
+    }
+
+    it('returns null for a non-existent qualified_name (!node branch)', async () => {
+        const result = await refactorEngine.proposeRefactor('does.not.exist');
+        expect(result).toBeNull();
+    });
+
+    it('counts impacted nodes via incoming BFS traversal (target + callers)', async () => {
+        const qn = 'a.ts#Foo.target';
+        const targetId = makeNode(nodeRepo, { qualified_name: qn });
+        seedIncomingCallers(targetId, 3);
+
+        const result = await refactorEngine.proposeRefactor(qn);
+        expect(result).not.toBeNull();
+        expect(result!.symbol).toBe(qn);
+        // BFS includes the start node itself plus its 3 incoming callers.
+        expect(result!.impactedNodeCount).toBe(4);
+    });
+
+    it('calculateRisk: fan_in 50 => CRITICAL', async () => {
+        const qn = 'a.ts#Foo.crit';
+        makeNode(nodeRepo, { qualified_name: qn, fan_in: 50, cyclomatic: 0 });
+        const result = await refactorEngine.proposeRefactor(qn);
+        expect(result!.risk).toBe('CRITICAL');
+    });
+
+    it('calculateRisk: fan_in 20 => HIGH', async () => {
+        const qn = 'a.ts#Foo.high';
+        makeNode(nodeRepo, { qualified_name: qn, fan_in: 20, cyclomatic: 0 });
+        const result = await refactorEngine.proposeRefactor(qn);
+        expect(result!.risk).toBe('HIGH');
+    });
+
+    it('calculateRisk: cyclomatic 8 => MEDIUM', async () => {
+        const qn = 'a.ts#Foo.med';
+        makeNode(nodeRepo, { qualified_name: qn, fan_in: 0, cyclomatic: 8 });
+        const result = await refactorEngine.proposeRefactor(qn);
+        expect(result!.risk).toBe('MEDIUM');
+    });
+
+    it('calculateRisk: all-zero metrics => LOW', async () => {
+        const qn = 'a.ts#Foo.low';
+        makeNode(nodeRepo, { qualified_name: qn, fan_in: 0, cyclomatic: 0 });
+        const result = await refactorEngine.proposeRefactor(qn);
+        expect(result!.risk).toBe('LOW');
+    });
+
+    it('getRiskReasons: fanIn>20 and cyclomatic>15 push coupling/complexity reasons', async () => {
+        const qn = 'a.ts#Foo.coupled';
+        makeNode(nodeRepo, { qualified_name: qn, fan_in: 21, cyclomatic: 16 });
+        const result = await refactorEngine.proposeRefactor(qn);
+        expect(result!.reasons.some(r => r.includes('High coupling'))).toBe(true);
+        expect(result!.reasons.some(r => r.includes('High complexity'))).toBe(true);
+    });
+
+    it('getRiskReasons: tags trigger entrypoint/core/data reasons', async () => {
+        const qn = 'a.ts#Foo.tagged';
+        makeNode(nodeRepo, {
+            qualified_name: qn,
+            fan_in: 0,
+            cyclomatic: 0,
+            tags: ['trait:entrypoint', 'layer:core', 'layer:data'],
+        });
+        const result = await refactorEngine.proposeRefactor(qn);
+        expect(result!.reasons.some(r => r.includes('System entrypoint'))).toBe(true);
+        expect(result!.reasons.some(r => r.includes('Core layer symbol'))).toBe(true);
+        expect(result!.reasons.some(r => r.includes('Data layer symbol'))).toBe(true);
+    });
+
+    it('getRiskReasons: low/untagged node falls back to "Low complexity and coupling."', async () => {
+        const qn = 'a.ts#Foo.plain';
+        makeNode(nodeRepo, { qualified_name: qn, fan_in: 0, cyclomatic: 0, tags: [] });
+        const result = await refactorEngine.proposeRefactor(qn);
+        expect(result!.reasons).toContain('Low complexity and coupling.');
+    });
+
+    it('generateSteps: CRITICAL risk includes Investigation, Abstraction, Branch by Abstraction, and Cleanup backfill', async () => {
+        const qn = 'a.ts#Foo.critsteps';
+        makeNode(nodeRepo, { qualified_name: qn, fan_in: 50, cyclomatic: 0 });
+        const result = await refactorEngine.proposeRefactor(qn);
+        const steps = result!.steps;
+        expect(steps[0]).toContain('[Investigation]');
+        expect(steps.some(s => s.includes('[Abstraction]'))).toBe(true);
+        expect(steps.some(s => s.includes('Branch by Abstraction'))).toBe(true);
+        expect(steps[steps.length - 1]).toContain('[Cleanup]');
+        expect(steps[steps.length - 1]).toContain('backfill_history');
+    });
+
+    it('generateSteps: MEDIUM risk includes a Preparation step mentioning unit tests', async () => {
+        const qn = 'a.ts#Foo.medsteps';
+        makeNode(nodeRepo, { qualified_name: qn, fan_in: 0, cyclomatic: 8 });
+        const result = await refactorEngine.proposeRefactor(qn);
+        const steps = result!.steps;
+        expect(steps[0]).toContain('[Investigation]');
+        expect(steps.some(s => s.startsWith('2. [Preparation]') && s.includes('Ensure unit tests'))).toBe(true);
+    });
+
+    it('generateSteps: Verification step interpolates impact.slice(0,3) qualified names', async () => {
+        const qn = 'a.ts#Foo.verify';
+        const targetId = makeNode(nodeRepo, { qualified_name: qn });
+        const callerId = makeNode(nodeRepo, { qualified_name: 'caller.ts#Caller.only' });
+        edgeRepo.createEdge({ from_id: callerId, to_id: targetId, edge_type: 'calls', dynamic: false });
+
+        const result = await refactorEngine.proposeRefactor(qn);
+        const verification = result!.steps.find(s => s.includes('[Verification]'));
+        expect(verification).toBeDefined();
+        expect(verification!).toContain('caller.ts#Caller.only');
+    });
+});

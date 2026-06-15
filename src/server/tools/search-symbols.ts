@@ -9,6 +9,12 @@ import { mergeResultsRRF, requireEngine, EngineNotReadyError } from './_utils.js
 
 export const searchSymbolsHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
+        // M-2 v22: validate schema-required arg `query` before it reaches
+        // nodeRepo.searchSymbols(), which calls query.replace(...) and would
+        // otherwise TypeError on undefined/non-string input.
+        if (typeof args.query !== 'string' || args.query.trim() === '') {
+            return { isError: true, content: [{ type: 'text', text: 'Invalid argument: query must be a non-empty string.' }] };
+        }
         // O-1/M4: clamp to [1, 200] — negative or zero limits would otherwise
         // reach SQLite as LIMIT -1 (= unlimited).
         const limit = Math.min(Math.max(Math.floor(args.limit) || 10, 1), 200);
