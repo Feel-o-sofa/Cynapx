@@ -576,6 +576,8 @@ export class TypeScriptParser implements CodeParser {
             }
         }
 
+        const docstring = this.extractDocstring(node, sourceFile);
+
         return {
             qualified_name: qname,
             symbol_type: type,
@@ -592,8 +594,42 @@ export class TypeScriptParser implements CodeParser {
             signature,
             return_type: returnType,
             field_type: fieldType,
-            modifiers
+            modifiers,
+            docstring
         };
+    }
+
+    /**
+     * Extracts the leading JSDoc comment or line-comment block for a node, if any.
+     * Captured as "intent" for the knowledge base (P1).
+     */
+    private extractDocstring(node: ts.Node, sourceFile: ts.SourceFile): string | undefined {
+        // Try TypeScript JSDoc first
+        const jsdocComments = ts.getJSDocCommentsAndTags(node) as ts.JSDoc[];
+        if (jsdocComments.length > 0) {
+            const jsdoc = jsdocComments[0];
+            if (ts.isJSDoc(jsdoc) && jsdoc.comment) {
+                const comment = typeof jsdoc.comment === 'string'
+                    ? jsdoc.comment
+                    : jsdoc.comment.map((n: ts.Node) => n.getText(sourceFile)).join('');
+                if (comment.trim()) return comment.trim();
+            }
+            // Fallback: get the raw JSDoc text
+            const raw = jsdoc.getText(sourceFile).replace(/^\/\*\*|\*\/$|^\s*\*\s?/gm, '').trim();
+            if (raw) return raw;
+        }
+
+        // Fall back to leading line comments
+        const fullStart = node.getFullStart();
+        const nodeStart = node.getStart(sourceFile);
+        const leadingText = sourceFile.getFullText().slice(fullStart, nodeStart);
+        const lineComments = leadingText.match(/\/\/[^\n]*/g);
+        if (lineComments) {
+            const text = lineComments.map(l => l.replace(/^\/\/\s?/, '').trim()).filter(Boolean).join('\n');
+            if (text) return text;
+        }
+
+        return undefined;
     }
 
     private getVisibility(node: ts.Node): Visibility {

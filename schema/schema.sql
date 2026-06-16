@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS nodes (
     -- Historical Evidence Mapping (Task 33)
     history TEXT, -- JSON array of commit objects
 
+    -- Intent Capture (Vision: AI Knowledge Base)
+    docstring TEXT,  -- leading JSDoc/docstring/comment block for this symbol
+
     -- Semantic Clustering (Task 24)
     cluster_id INTEGER,
     FOREIGN KEY (cluster_id) REFERENCES logical_clusters(id) ON DELETE SET NULL
@@ -205,3 +208,15 @@ CREATE TABLE IF NOT EXISTS node_tags (
 );
 
 CREATE INDEX IF NOT EXISTS idx_node_tags_tag ON node_tags (tag);
+
+-- Agent Annotations (Vision: AI agents can write context for future agents)
+CREATE TABLE IF NOT EXISTS annotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_qname TEXT NOT NULL,
+    kind TEXT NOT NULL,  -- 'decision' | 'gotcha' | 'todo' | 'rationale'
+    body TEXT NOT NULL,
+    author TEXT DEFAULT 'agent',
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    commit_hash TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_node_qname ON annotations (node_qname);

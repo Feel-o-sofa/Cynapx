@@ -42,6 +42,16 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
                 inputSchema: { type: "object", properties: {} }
             },
             {
+                name: "get_project_overview",
+                description: "Returns a token-efficient briefing of the indexed project: purpose, tech stack, architecture shape, entry points, hotspots, and documentation headers. Call this first when starting work on an unfamiliar codebase.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        include_clusters: { type: "boolean", default: true }
+                    }
+                }
+            },
+            {
                 name: "initialize_project",
                 description: "Initialize and register a project in the central registry.",
                 inputSchema: {

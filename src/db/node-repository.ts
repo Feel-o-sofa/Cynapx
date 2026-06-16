@@ -85,13 +85,13 @@ export class NodeRepository {
         visibility, is_generated, last_updated_commit, version,
         checksum, modifiers, signature, return_type, field_type,
         loc, cyclomatic, fan_in, fan_out, fan_in_dynamic, fan_out_dynamic,
-        cluster_id, remote_project_path, tags, history
+        cluster_id, remote_project_path, tags, history, docstring
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?, ?
       )
       ON CONFLICT(qualified_name) DO UPDATE SET
         symbol_name = excluded.symbol_name,
@@ -118,7 +118,8 @@ export class NodeRepository {
         cluster_id = excluded.cluster_id,
         remote_project_path = excluded.remote_project_path,
         tags = excluded.tags,
-        history = excluded.history
+        history = excluded.history,
+        docstring = excluded.docstring
       RETURNING id
     `);
         }
@@ -150,7 +151,8 @@ export class NodeRepository {
             node.cluster_id || null,
             node.remote_project_path || null,
             node.tags ? JSON.stringify(node.tags) : null,
-            node.history ? JSON.stringify(node.history) : null
+            node.history ? JSON.stringify(node.history) : null,
+            node.docstring || null
         ) as { id: number };
 
         const nodeId = row.id;
@@ -456,7 +458,8 @@ export class NodeRepository {
             cluster_id: row.cluster_id,
             remote_project_path: row.remote_project_path,
             tags: row.tags ? safeJsonParse<string[]>(row.tags, []) : undefined,
-            history: row.history ? safeJsonParse<{ hash: string; message: string; author: string; date: string }[]>(row.history, []) : undefined
+            history: row.history ? safeJsonParse<{ hash: string; message: string; author: string; date: string }[]>(row.history, []) : undefined,
+            docstring: row.docstring ?? undefined
         };
     }
 }

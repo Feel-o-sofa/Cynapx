@@ -367,6 +367,11 @@ export class EmbeddingManager {
         }
         if (tags.length > 0) snippet += `Context: ${tags.join(', ')}\n`;
 
+        // P2: include intent/meaning for richer semantic search
+        if (node.docstring) {
+            snippet += `Description: ${node.docstring.slice(0, 500)}\n`;
+        }
+
         return snippet;
     }
 

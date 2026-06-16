@@ -58,6 +58,9 @@ export interface CodeNode {
         date: string;
     }[]; // Stored as JSON in DB
 
+    // Intent Capture (Vision: AI Knowledge Base)
+    docstring?: string;  // leading JSDoc/docstring/comment block
+
     // Semantic Clustering (Task 24)
     cluster_id?: number;
 }

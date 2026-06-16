@@ -26,6 +26,7 @@ export const getSymbolDetailsHandler: ToolHandler = {
         let text = `### Symbol: ${node.qualified_name}\n`;
         text += `- **Type**: ${node.symbol_type}\n`;
         if (node.signature) text += `- **Signature**: ${node.signature}\n`;
+        if (node.docstring) text += `- **Docstring**: ${node.docstring}\n`;
         text += `- **File**: ${node.file_path} (line ${node.start_line}-${node.end_line})\n`;
 
         // L-2: tags is always string[] | undefined per type definition — Array.isArray branch removed

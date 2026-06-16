@@ -24,9 +24,11 @@ import { purgeIndexHandler } from './purge-index.js';
 import { reTagProjectHandler } from './re-tag-project.js';
 import { backfillHistoryHandler } from './backfill-history.js';
 import { discoverLatentPoliciesHandler } from './discover-latent-policies.js';
+import { getProjectOverviewHandler } from './get-project-overview.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
     ['get_setup_context', getSetupContextHandler],
+    ['get_project_overview', getProjectOverviewHandler],
     ['initialize_project', initializeProjectHandler],
     ['search_symbols', searchSymbolsHandler],
     ['get_symbol_details', getSymbolDetailsHandler],

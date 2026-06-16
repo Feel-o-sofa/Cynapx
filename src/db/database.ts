@@ -74,7 +74,7 @@ export class DatabaseManager implements Disposable {
     /**
      * Current schema version. Increment this when adding new migrations.
      */
-    public static readonly SCHEMA_VERSION = 3;
+    public static readonly SCHEMA_VERSION = 4;
 
     /**
      * M3/A-11: Registers a callback invoked at the end of runMigrations()
@@ -168,6 +168,32 @@ export class DatabaseManager implements Disposable {
                 `);
 
                 this.db.pragma(`user_version = 3`);
+            }
+
+            if (current < 4) {
+                // Migration 3 → 4: capture intent (docstrings) + agent annotations.
+                // Idempotent: guard the ALTER with a PRAGMA table_info check so re-runs
+                // (or fresh DBs already created from schema.sql) don't error.
+                const columns = this.db.prepare('PRAGMA table_info(nodes)').all() as { name: string }[];
+                const hasDocstring = columns.some(c => c.name === 'docstring');
+                if (!hasDocstring) {
+                    this.db.exec('ALTER TABLE nodes ADD COLUMN docstring TEXT');
+                }
+
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS annotations (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        node_qname TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        author TEXT DEFAULT 'agent',
+                        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                        commit_hash TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_annotations_node_qname ON annotations (node_qname);
+                `);
+
+                this.db.pragma(`user_version = 4`);
             }
         });
         migrate();
