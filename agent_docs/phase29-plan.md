@@ -51,7 +51,7 @@ L-18 (getProvider 확장자 엣지케이스 공백)  ──추적만(비-actiona
 
 ---
 
-## 2. Phase 29-1: graph 엔진 시딩/env-파싱 순수 함수 게이트 (M-1 v26) [예정]
+## 2. Phase 29-1: graph 엔진 시딩/env-파싱 순수 함수 게이트 (M-1 v26) [DONE]
 
 **목표**: `src/graph/graph-engine.ts`의 export 순수 함수 3종(`mulberry32`·`parseClusterSeed`·`parseClusterMaxNodes`)은 *클러스터링 결정성(A-5/A-2)의 핵심 시딩·설정 프리미티브*이나 *변환/결정성 동작 자체에 대한 직접 단위 테스트가 0건*이다(`tests/clustering.test.ts`는 *형제* `fisherYatesShuffle`만 직접 게이트하고, `mulberry32`는 *인자로만* 쓰여 자체 출력 미단언, env 파서 2종은 import조차 없이 `performClustering()` 통합 테스트로 *간접*으로만 닿음). `fisherYatesShuffle` describe 옆에 결정적 단위 게이트를 추가한다. **prod 코드 무변경**(테스트-only).
 
@@ -120,7 +120,7 @@ L-18 (getProvider 확장자 엣지케이스 공백)  ──추적만(비-actiona
 | Phase | 핵심 항목 | 커밋 수 | 리스크 |
 |-------|-----------|---------|--------|
 | 29-(docs) | diagnostic-v26 + phase29-plan 신규 docs | 1 | 없음 (docs-only) |
-| 29-1 [예정] | M-1 v26: `tests/clustering.test.ts`에 `mulberry32`·`parseClusterSeed`·`parseClusterMaxNodes` 직접 게이트(의존 0 순수 함수, 테스트-only) — PRNG 결정성·`[0,1)` 범위·시드 민감도·고정-시퀀스 + env 파서 unset/empty/non-finite/trunc/default (신규 >=10 케이스, vitest 657→대략 667~669) | 1 (29-(docs)와 합본 가능) | 매우 낮음 |
+| 29-1 [DONE] | M-1 v26: `tests/clustering.test.ts`에 `mulberry32`·`parseClusterSeed`·`parseClusterMaxNodes` 직접 게이트(의존 0 순수 함수, 테스트-only) — PRNG 결정성·`[0,1)` 범위·시드 민감도·고정-시퀀스 + env 파서 unset/empty/non-finite/trunc/default (신규 15 케이스, vitest 657→672) | 1 (29-(docs)와 합본 가능) | 매우 낮음 |
 
 **총 2개 커밋(P29-1 단독 + docs, 또는 합본).** 본 사이클은 *M-2(의존성 정렬)가 없는 경량 단일-항목* 사이클이다(express prod 드리프트를 P28-2가 닫고, 잔여는 dev-dep within-pin뿐 — L-17 비-actionable).
 

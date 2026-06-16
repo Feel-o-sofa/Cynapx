@@ -10,7 +10,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import Database from 'better-sqlite3';
 import * as path from 'path';
 import * as fs from 'fs';
-import { GraphEngine, fisherYatesShuffle, mulberry32 } from '../src/graph/graph-engine';
+import { GraphEngine, fisherYatesShuffle, mulberry32, parseClusterSeed, parseClusterMaxNodes } from '../src/graph/graph-engine';
 import { NodeRepository } from '../src/db/node-repository';
 import { EdgeRepository } from '../src/db/edge-repository';
 import { CodeNode, CodeEdge } from '../src/types';
@@ -335,5 +335,91 @@ describe('NodeRepository.countNodes()', () => {
         makeNode(nodeRepo, 'A');
         makeNode(nodeRepo, 'B');
         expect(nodeRepo.countNodes()).toBe(2);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// P29-1: mulberry32 / parseClusterSeed / parseClusterMaxNodes gate (M-1 v26)
+// ---------------------------------------------------------------------------
+
+describe('mulberry32()', () => {
+    it('produces the exact deterministic sequence for seed=1', () => {
+        const rng = mulberry32(1);
+        expect(rng()).toBeCloseTo(0.6270739405881613, 10);
+        expect(rng()).toBeCloseTo(0.002735721180215478, 10);
+        expect(rng()).toBeCloseTo(0.5274470399599522, 10);
+    });
+
+    it('produces values in [0, 1)', () => {
+        const rng = mulberry32(42);
+        for (let i = 0; i < 100; i++) {
+            const v = rng();
+            expect(v).toBeGreaterThanOrEqual(0);
+            expect(v).toBeLessThan(1);
+        }
+    });
+
+    it('different seeds produce different first values', () => {
+        expect(mulberry32(1)()).not.toBe(mulberry32(42)());
+        expect(mulberry32(0)()).not.toBe(mulberry32(1)());
+    });
+
+    it('seed=0 produces a deterministic first value', () => {
+        expect(mulberry32(0)()).toBeCloseTo(0.26642920868471265, 10);
+    });
+});
+
+describe('parseClusterSeed()', () => {
+    it('returns undefined when input is undefined', () => {
+        expect(parseClusterSeed(undefined)).toBeUndefined();
+    });
+
+    it('returns undefined when input is empty or whitespace', () => {
+        expect(parseClusterSeed('')).toBeUndefined();
+        expect(parseClusterSeed('   ')).toBeUndefined();
+    });
+
+    it('returns undefined when input is non-numeric', () => {
+        expect(parseClusterSeed('abc')).toBeUndefined();
+        expect(parseClusterSeed('NaN')).toBeUndefined();
+    });
+
+    it('parses a valid integer string', () => {
+        expect(parseClusterSeed('42')).toBe(42);
+        expect(parseClusterSeed('0')).toBe(0);
+    });
+
+    it('truncates a float to integer', () => {
+        expect(parseClusterSeed('3.7')).toBe(3);
+        expect(parseClusterSeed('-1.9')).toBe(-1);
+    });
+});
+
+describe('parseClusterMaxNodes()', () => {
+    it('returns 200000 (default) when input is undefined', () => {
+        expect(parseClusterMaxNodes(undefined)).toBe(200_000);
+    });
+
+    it('returns 200000 (default) when input is empty or whitespace', () => {
+        expect(parseClusterMaxNodes('')).toBe(200_000);
+        expect(parseClusterMaxNodes('  ')).toBe(200_000);
+    });
+
+    it('returns 200000 (default) when input is non-numeric', () => {
+        expect(parseClusterMaxNodes('abc')).toBe(200_000);
+    });
+
+    it('returns 200000 (default) for zero or negative values', () => {
+        expect(parseClusterMaxNodes('0')).toBe(200_000);
+        expect(parseClusterMaxNodes('-1')).toBe(200_000);
+    });
+
+    it('parses a valid positive integer string', () => {
+        expect(parseClusterMaxNodes('50000')).toBe(50_000);
+        expect(parseClusterMaxNodes('1')).toBe(1);
+    });
+
+    it('truncates a float to integer', () => {
+        expect(parseClusterMaxNodes('100.9')).toBe(100);
     });
 });
