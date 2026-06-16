@@ -546,3 +546,217 @@ describe('executeTool: get_remediation_strategy', () => {
         expect(result.content[0].text).toMatch(/source.*target|required/i);
     });
 });
+
+
+// ---------------------------------------------------------------------------
+// Helper to build deps whose graphEngine.nodeRepo.getDb() returns a custom db
+// ---------------------------------------------------------------------------
+
+function makeDepsWithDb(db: any, graphOverrides: any = {}) {
+    const mockGraphEngine = {
+        getNodeByQualifiedName: vi.fn().mockReturnValue(null),
+        nodeRepo: { getDb: vi.fn().mockReturnValue(db) },
+        ...graphOverrides,
+    };
+    return makeDeps({
+        getContext: vi.fn().mockReturnValue({
+            graphEngine: mockGraphEngine,
+            projectPath: '/mock/project',
+            securityProvider: null,
+        }),
+    });
+}
+
+// ---------------------------------------------------------------------------
+// get_recent_changes (P4)
+// ---------------------------------------------------------------------------
+
+describe('executeTool: get_recent_changes', () => {
+    it('returns isError when context is missing', async () => {
+        const deps = makeDeps({ getContext: vi.fn().mockReturnValue(null) });
+        const result = await executeTool('get_recent_changes', {}, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/No active project/i);
+    });
+
+    it('reports no changes when no history rows exist', async () => {
+        const db = { prepare: vi.fn().mockReturnValue({ all: vi.fn().mockReturnValue([]) }) };
+        const result = await executeTool('get_recent_changes', {}, makeDepsWithDb(db));
+        expect(result.isError).toBeUndefined();
+        expect(result.content[0].text).toMatch(/No recent changes/i);
+    });
+
+    it('groups commits by hash and lists changed symbols, sorted by date desc', async () => {
+        const rows = [
+            {
+                qualified_name: 'src/a.ts#foo', symbol_type: 'function', language: 'ts', file_path: 'src/a.ts',
+                history: JSON.stringify([{ hash: 'abc1234def', message: 'fix bug', author: 'Alice', date: '2026-06-15T10:00:00' }]),
+            },
+            {
+                qualified_name: 'src/a.ts#Bar', symbol_type: 'class', language: 'ts', file_path: 'src/a.ts',
+                history: JSON.stringify([
+                    { hash: 'abc1234def', message: 'fix bug', author: 'Alice', date: '2026-06-15T10:00:00' },
+                    { hash: 'old9999', message: 'old change', author: 'Bob', date: '2026-06-01T10:00:00' },
+                ]),
+            },
+        ];
+        const db = { prepare: vi.fn().mockReturnValue({ all: vi.fn().mockReturnValue(rows) }) };
+        const result = await executeTool('get_recent_changes', {}, makeDepsWithDb(db));
+        expect(result.isError).toBeUndefined();
+        const text = result.content[0].text;
+        expect(text).toMatch(/abc1234/);
+        expect(text).toMatch(/fix bug/);
+        expect(text).toMatch(/src\/a\.ts#foo/);
+        expect(text).toMatch(/src\/a\.ts#Bar/);
+        // Newest commit appears before the older one
+        expect(text.indexOf('abc1234')).toBeLessThan(text.indexOf('old9999'));
+    });
+
+    it('filters out commits older than since_days', async () => {
+        const recent = new Date(Date.now() - 1 * 24 * 60 * 60 * 1000).toISOString();
+        const old = new Date(Date.now() - 100 * 24 * 60 * 60 * 1000).toISOString();
+        const rows = [{
+            qualified_name: 'src/a.ts#foo', symbol_type: 'function', language: 'ts', file_path: 'src/a.ts',
+            history: JSON.stringify([
+                { hash: 'recent1', message: 'recent', author: 'A', date: recent },
+                { hash: 'ancient1', message: 'ancient', author: 'B', date: old },
+            ]),
+        }];
+        const db = { prepare: vi.fn().mockReturnValue({ all: vi.fn().mockReturnValue(rows) }) };
+        const result = await executeTool('get_recent_changes', { since_days: 7 }, makeDepsWithDb(db));
+        expect(result.content[0].text).toMatch(/recent1/);
+        expect(result.content[0].text).not.toMatch(/ancient1/);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// get_symbol_history (P4)
+// ---------------------------------------------------------------------------
+
+describe('executeTool: get_symbol_history', () => {
+    it('returns isError when qualified_name is missing', async () => {
+        const result = await executeTool('get_symbol_history', {}, makeDeps());
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/qualified_name/i);
+    });
+
+    it('returns isError when symbol not found', async () => {
+        const deps = makeDepsWithDb({}, { getNodeByQualifiedName: vi.fn().mockReturnValue(null) });
+        const result = await executeTool('get_symbol_history', { qualified_name: 'x#y' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/Symbol not found/i);
+    });
+
+    it('prompts to backfill when history is empty', async () => {
+        const node = { qualified_name: 'src/a.ts#foo', history: [] };
+        const deps = makeDepsWithDb({}, { getNodeByQualifiedName: vi.fn().mockReturnValue(node) });
+        const result = await executeTool('get_symbol_history', { qualified_name: 'src/a.ts#foo' }, deps);
+        expect(result.isError).toBeUndefined();
+        expect(result.content[0].text).toMatch(/No history recorded/i);
+    });
+
+    it('formats history with intent summary', async () => {
+        const node = {
+            qualified_name: 'src/a.ts#foo',
+            history: [
+                { hash: 'abc1234def', message: 'fix expiry', author: 'Alice', date: '2026-06-15T10:00:00' },
+                { hash: 'xyz9876', message: 'initial', author: 'Bob', date: '2026-06-01T09:00:00' },
+            ],
+        };
+        const deps = makeDepsWithDb({}, { getNodeByQualifiedName: vi.fn().mockReturnValue(node) });
+        const result = await executeTool('get_symbol_history', { qualified_name: 'src/a.ts#foo' }, deps);
+        const text = result.content[0].text;
+        expect(text).toMatch(/abc1234/);
+        expect(text).toMatch(/modified 2 times/);
+        expect(text).toMatch(/Most recent change: "fix expiry"/);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// add_annotation (P5)
+// ---------------------------------------------------------------------------
+
+describe('executeTool: add_annotation', () => {
+    it('rejects missing qualified_name', async () => {
+        const result = await executeTool('add_annotation', { kind: 'decision', body: 'x' }, makeDeps());
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/qualified_name/i);
+    });
+
+    it('rejects invalid kind', async () => {
+        const db = { prepare: vi.fn() };
+        const result = await executeTool('add_annotation', { qualified_name: 'a#b', kind: 'bogus', body: 'x' }, makeDepsWithDb(db));
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/kind must be one of/i);
+    });
+
+    it('rejects empty body', async () => {
+        const db = { prepare: vi.fn() };
+        const result = await executeTool('add_annotation', { qualified_name: 'a#b', kind: 'todo', body: '  ' }, makeDepsWithDb(db));
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/body must be/i);
+    });
+
+    it('returns error when the symbol does not exist', async () => {
+        const db = { prepare: vi.fn().mockReturnValue({ get: vi.fn().mockReturnValue(undefined), run: vi.fn() }) };
+        const result = await executeTool('add_annotation', { qualified_name: 'missing#x', kind: 'todo', body: 'do it' }, makeDepsWithDb(db));
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/Symbol not found: missing#x.*not saved/i);
+    });
+
+    it('inserts the annotation and returns a preview on success', async () => {
+        const runMock = vi.fn();
+        const db = {
+            prepare: vi.fn()
+                .mockReturnValueOnce({ get: vi.fn().mockReturnValue({ id: 1 }) }) // node exists check
+                .mockReturnValueOnce({ run: runMock }), // insert
+        };
+        const result = await executeTool('add_annotation', { qualified_name: 'a#b', kind: 'gotcha', body: 'retry limit is 3 not 5' }, makeDepsWithDb(db));
+        expect(result.isError).toBeUndefined();
+        expect(runMock).toHaveBeenCalledWith('a#b', 'gotcha', 'retry limit is 3 not 5', 'agent');
+        expect(result.content[0].text).toMatch(/Annotation added to `a#b`: \[gotcha\]/);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// get_annotations (P5)
+// ---------------------------------------------------------------------------
+
+describe('executeTool: get_annotations', () => {
+    it('reports none found when empty', async () => {
+        const db = { prepare: vi.fn().mockReturnValue({ all: vi.fn().mockReturnValue([]) }) };
+        const result = await executeTool('get_annotations', { qualified_name: 'a#b' }, makeDepsWithDb(db));
+        expect(result.isError).toBeUndefined();
+        expect(result.content[0].text).toMatch(/No annotations found/i);
+    });
+
+    it('rejects an invalid kind filter', async () => {
+        const db = { prepare: vi.fn() };
+        const result = await executeTool('get_annotations', { kind: 'bogus' }, makeDepsWithDb(db));
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/kind must be one of/i);
+    });
+
+    it('formats annotations for a symbol', async () => {
+        const rows = [
+            { id: 2, node_qname: 'a#b', kind: 'decision', body: 'stay sync', author: 'agent', created_at: 1750000000, commit_hash: null },
+            { id: 1, node_qname: 'a#b', kind: 'gotcha', body: 'limit is 3', author: 'agent', created_at: 1749000000, commit_hash: null },
+        ];
+        const db = { prepare: vi.fn().mockReturnValue({ all: vi.fn().mockReturnValue(rows) }) };
+        const result = await executeTool('get_annotations', { qualified_name: 'a#b' }, makeDepsWithDb(db));
+        const text = result.content[0].text;
+        expect(text).toMatch(/Annotations for `a#b`/);
+        expect(text).toMatch(/\[decision\] by agent/);
+        expect(text).toMatch(/stay sync/);
+    });
+
+    it('builds an unfiltered query when no qualified_name is given', async () => {
+        const allMock = vi.fn().mockReturnValue([]);
+        const prepareMock = vi.fn().mockReturnValue({ all: allMock });
+        const db = { prepare: prepareMock };
+        await executeTool('get_annotations', {}, makeDepsWithDb(db));
+        const sql = prepareMock.mock.calls[0][0];
+        expect(sql).not.toMatch(/WHERE/);
+        expect(sql).toMatch(/ORDER BY created_at DESC/);
+    });
+});

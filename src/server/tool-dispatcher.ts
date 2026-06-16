@@ -211,6 +211,54 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
                         min_count: { type: "number", default: 5 }
                     }
                 }
+            },
+            {
+                name: "get_recent_changes",
+                description: "List recent commits across the codebase and which symbols/files each changed (answers 'what changed recently'). Requires backfill_history.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        limit: { type: "number", default: 20 },
+                        since_days: { type: "number" }
+                    }
+                }
+            },
+            {
+                name: "get_symbol_history",
+                description: "Show the full commit history of a single symbol with an intent summary (answers 'why does this exist'). Requires backfill_history.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        qualified_name: { type: "string" }
+                    },
+                    required: ["qualified_name"]
+                }
+            },
+            {
+                name: "add_annotation",
+                description: "Record an agent annotation (decision, gotcha, todo, or rationale) against a symbol for future context.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        qualified_name: { type: "string" },
+                        kind: { type: "string", enum: ["decision", "gotcha", "todo", "rationale"] },
+                        body: { type: "string" },
+                        author: { type: "string", default: "agent" }
+                    },
+                    required: ["qualified_name", "kind", "body"]
+                }
+            },
+            {
+                name: "get_annotations",
+                description: "Retrieve agent annotations for a symbol, or recent annotations across the codebase if no symbol is given.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        qualified_name: { type: "string" },
+                        kind: { type: "string", enum: ["decision", "gotcha", "todo", "rationale"] },
+                        limit: { type: "number", default: 20 }
+                    }
+                }
             }
         ]
     }));

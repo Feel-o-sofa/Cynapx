@@ -41,6 +41,19 @@ export const getSymbolDetailsHandler: ToolHandler = {
             });
         }
 
+        // Surface annotations
+        const db = ctx.graphEngine.nodeRepo.getDb();
+        const annotations = db.prepare(
+            'SELECT kind, body, author, created_at FROM annotations WHERE node_qname = ? ORDER BY created_at DESC LIMIT 5'
+        ).all(node.qualified_name) as { kind: string; body: string; author: string; created_at: number }[];
+        if (annotations.length > 0) {
+            text += `\n#### Agent Annotations:\n`;
+            for (const a of annotations) {
+                const date = new Date(a.created_at * 1000).toISOString().slice(0, 10);
+                text += `- **[${a.kind}]** ${a.body.slice(0, 200)} *(${a.author}, ${date})*\n`;
+            }
+        }
+
         text += `\n#### Metrics:\n- LOC: ${node.loc}, CC: ${node.cyclomatic}\n- Static Coupling: Fan-in: ${node.fan_in || 0}, Fan-out: ${node.fan_out || 0}\n`;
 
         if (args.include_source !== false) {
