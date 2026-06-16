@@ -54,7 +54,7 @@ L-19 (CVE-2026-6991 zod CUID, 미도달)      ──추적만(비-actionable)─
 
 ---
 
-## 2. Phase 31-1: getProvider 확장자 엣지케이스 게이트 (M-1 v28) [예정]
+## 2. Phase 31-1: getProvider 확장자 엣지케이스 게이트 (M-1 v28) [DONE]
 
 **목표**: `src/indexer/language-registry.ts`의 `getProvider()` — *모든 파일 인덱싱 연산에서 호출되는 확장자→언어 매핑 함수*(라이브 핫패스 — update-pipeline·worker-pool·file-watcher가 인덱싱할 파일마다 호출)의 *확장자 추출 엣지케이스*에 회귀 게이트 추가. **prod 코드 무변경**(테스트-only). 이는 L-18을 *마지막 남은 내부 actionable로 승격*한 것으로 — *모든 상위 내부 각도가 소진된 지금* 0-의존 pure-function 게이트로 닫을 수 있는 유일한 내부 항목이다.
 
@@ -127,7 +127,7 @@ L-19 (CVE-2026-6991 zod CUID, 미도달)      ──추적만(비-actionable)─
 | Phase | 핵심 항목 | 커밋 수 | 리스크 | 테스트 |
 |-------|-----------|---------|--------|--------|
 | 31-(docs) | diagnostic-v28 + phase31-plan 신규 docs | 1 | 없음 (docs-only) | 베이스라인 672 (불변) |
-| 31-1 [예정] | M-1 v28: `getProvider` 확장자 엣지케이스 게이트(`tests/language-registry.test.ts`에 무-확장자/미지/dotfile/trailing-dot→undefined·multi-dot→python·case-insensitive 보강) — prod 코드 무변경, **vitest 그린**·tsc 그린·audit 0/0 | 1 (31-(docs)와 합본 가능) | 매우 낮음 | **672 → 대략 +5~6 (≈677~678)** |
+| 31-1 [DONE] | M-1 v28: `getProvider` 확장자 엣지케이스 게이트(`tests/language-registry.test.ts`에 무-확장자/미지/dotfile/trailing-dot→undefined·multi-dot→python·case-insensitive 보강) — prod 코드 무변경, **vitest 그린**·tsc 그린·audit 0/0 | 1 (31-(docs)와 합본 가능) | 매우 낮음 | **672 → 678 (6개 `it` 추가, 전량 그린)** |
 
 **총 2개 커밋(P31-1 단독 + docs, 또는 합본).** 본 사이클은 *M-2(추가 actionable)가 없는 경량 단일-항목* 사이클이다 — 내부 게이트 발굴 소진(L-18 승격이 마지막 후보) + 외부 정적이라 `getProvider` 엣지케이스 게이트가 유일하게 남은 actionable이다.
 

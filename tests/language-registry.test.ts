@@ -112,5 +112,48 @@ describe('LanguageRegistry — descriptor-driven registration', () => {
         const registry = LanguageRegistry.getInstance();
         expect(registry.getProvider('Main.PY')?.languageName).toBe('python');
         expect(registry.getProvider('Widget.Hpp')?.languageName).toBe('cpp');
+        expect(registry.getProvider('Main.TS')?.languageName).toBe('typescript');
+    });
+
+    // M-1 v28 (P31-1): gate the extension-extraction edge cases of
+    // getProvider() — the extension→language mapping invoked on every file
+    // indexing operation. These assertions are pinned to empirically verified
+    // outputs (npx tsx) so a regression in the split('.').pop()/!ext guard is
+    // caught deterministically. Prod code is unchanged (test-only gate).
+    it('returns undefined for a file with no extension (Makefile)', () => {
+        const registry = LanguageRegistry.getInstance();
+        // 'Makefile'.split('.').pop() === 'makefile' → extensionMap miss → undefined
+        expect(registry.getProvider('Makefile')).toBeUndefined();
+    });
+
+    it('returns undefined for an unknown extension (foo.xyz)', () => {
+        const registry = LanguageRegistry.getInstance();
+        expect(registry.getProvider('foo.xyz')).toBeUndefined();
+    });
+
+    it('returns undefined for a dotfile with no real extension (.gitignore)', () => {
+        const registry = LanguageRegistry.getInstance();
+        // '.gitignore'.split('.').pop() === 'gitignore' → extensionMap miss → undefined
+        expect(registry.getProvider('.gitignore')).toBeUndefined();
+    });
+
+    it('returns undefined for a trailing-dot filename (foo.)', () => {
+        const registry = LanguageRegistry.getInstance();
+        // 'foo.'.split('.').pop() === '' → falsy → early-return undefined (line 113)
+        expect(registry.getProvider('foo.')).toBeUndefined();
+    });
+
+    it('resolves multi-dot filenames by the last component', () => {
+        const registry = LanguageRegistry.getInstance();
+        // 'gz' is not registered → undefined
+        expect(registry.getProvider('archive.tar.gz')).toBeUndefined();
+        // 'ts' IS registered → typescript
+        expect(registry.getProvider('component.test.ts')?.languageName).toBe('typescript');
+        expect(registry.getProvider('a.b.py')?.languageName).toBe('python');
+    });
+
+    it('resolves a path-containing filename deterministically', () => {
+        const registry = LanguageRegistry.getInstance();
+        expect(registry.getProvider('src/path/to/file.py')?.languageName).toBe('python');
     });
 });
