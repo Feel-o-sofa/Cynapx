@@ -39,7 +39,7 @@
 
 ---
 
-## 2. Phase 32-1: metrics-calculator null-guard 게이트 (M-1 v29) [예정]
+## 2. Phase 32-1: metrics-calculator null-guard 게이트 (M-1 v29) [DONE]
 
 **목표**: `src/indexer/metrics-calculator.ts`의 `MetricsCalculator.calculateCyclomaticComplexityTreeSitter()` — *모든 비-TS 언어(12종)의 함수/메서드 인덱싱마다 호출되는* CC 측정 핫패스의 *null/undefined 가드·빈 decisionPoints 경계*에 회귀 게이트 추가. **prod 코드 무변경**(테스트-only). 이는 *0-의존 순수 함수 게이트 발굴 사이클의 마지막 후보*다 — paths.ts 형제(후보 ①)는 이미 전수 게이트되고, 본 함수의 본체(operator 디스앰비규에이션·`switch_label` 가드·strings/comments 미카운트·TS-AST 경로)도 *Rust/Go/Java/Python/TS 실파스 12 `it`로 전수 게이트*되나 — null-guard·빈-dp 경계만 누락이다.
 
@@ -127,7 +127,7 @@
 | Phase | 핵심 항목 | 커밋 수 | 리스크 | 테스트 |
 |-------|-----------|---------|--------|--------|
 | 32-(docs) | diagnostic-v29 + phase32-plan 신규 docs | 1 | 없음 (docs-only) | 베이스라인 678 (불변) |
-| 32-1 [예정] | M-1 v29: metrics-calculator null-guard 게이트(`tests/metrics-calculator.test.ts`에 null/undefined→1·빈-dp→1 추가) — prod 코드 무변경, **vitest 그린**·tsc 그린·audit 0/0 | 1 (32-(docs)와 합본 가능) | 매우 낮음 | **678 → 대략 +2~3 (전량 그린)** |
+| 32-1 [DONE] | M-1 v29: metrics-calculator null-guard 게이트(`tests/metrics-calculator.test.ts`에 null/undefined→1·빈-dp→1 추가) — prod 코드 무변경, **vitest 그린**·tsc 그린·audit 0/0 | 1 (32-(docs)와 합본 가능) | 매우 낮음 | **678 → 681 (전량 그린, +3 `it`)** |
 
 **총 2개 커밋(P32-1 단독 + docs, 또는 합본).** 본 사이클은 *M-2(추가 actionable)가 없는 경량 단일-항목* 사이클이다 — 0-의존 게이트 발굴 소진(metrics-calculator null-guard가 마지막 후보) + 외부 정적이라 이 게이트가 유일하게 남은 actionable이다.
 

@@ -245,3 +245,34 @@ describe('CC — TypeScript AST path unchanged', () => {
         expect(ccOf(typescriptDescriptor, src, ['function_declaration'])).toBe(4);
     });
 });
+
+// ─── Defensive guards (Phase 32-1, M-1 v29) ──────────────────────────────────
+//
+// `calculateCyclomaticComplexityTreeSitter` is on the hot path for every non-TS
+// function/method index (12 languages). Its null/undefined guard
+// (`if (!node) return 1`) and the empty-decisionPoints boundary are not directly
+// asserted by the language-parse tests above (those always pass a valid node and
+// a non-empty decision-point list). These cases pin the safe-degrade behaviour so
+// a regression that drops the guard — causing a `null` deref crash across all
+// non-TS indexing — is caught deterministically.
+
+describe('CC (tree-sitter) — defensive guards', () => {
+    it('returns 1 for a null node (early-return guard)', () => {
+        expect(
+            MetricsCalculator.calculateCyclomaticComplexityTreeSitter(null, ['if_statement'])
+        ).toBe(1);
+    });
+
+    it('returns 1 for an undefined node (same falsy guard)', () => {
+        expect(
+            MetricsCalculator.calculateCyclomaticComplexityTreeSitter(undefined, ['if_statement'])
+        ).toBe(1);
+    });
+
+    it('returns 1 when decisionPoints is empty (no node type can match)', () => {
+        // A minimal stub node whose type *would* match a non-empty list, but with
+        // an empty decisionPoints set nothing is counted → base complexity 1.
+        const stub = { type: 'if_statement', namedChildCount: 0, childCount: 0, child: () => null };
+        expect(MetricsCalculator.calculateCyclomaticComplexityTreeSitter(stub, [])).toBe(1);
+    });
+});
