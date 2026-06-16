@@ -49,7 +49,7 @@ L-18 (getProvider 확장자 엣지케이스 공백)  ──추적만(비-actiona
 
 ---
 
-## 2. Phase 30-1: lockfile within-pin 위생 정렬 (M-1 v27) [예정]
+## 2. Phase 30-1: lockfile within-pin 위생 정렬 (M-1 v27) [DONE]
 
 **목표**: `npm outdated`가 보고한 within-pin(semver-호환) lockfile 드리프트 3건을 `npm update`로 정렬한다. **`package.json` 핀 무변경**(lockfile-only). 이는 diagnostic-v26 L-17을 *마지막 남은 경량 actionable로 승격*한 것으로 — *모든 다른 내부/외부 각도가 소진된 지금* prod 동작 무변경(핀 무변경)으로 닫을 수 있는 유일한 항목이다.
 
@@ -118,7 +118,7 @@ L-18 (getProvider 확장자 엣지케이스 공백)  ──추적만(비-actiona
 | Phase | 핵심 항목 | 커밋 수 | 리스크 |
 |-------|-----------|---------|--------|
 | 30-(docs) | diagnostic-v27 + phase30-plan 신규 docs | 1 | 없음 (docs-only) |
-| 30-1 [예정] | M-1 v27: `npm update`로 within-pin lockfile 정렬(`zod` 4.3.6→4.4.3[prod-dep, 핀-내 minor]·`@types/node` 20.19.33→20.19.43·`vitest` 4.1.2→4.1.9[dev-dep, 핀-내 patch]) — `package.json` 핀 무변경, vitest 672 그린·tsc 그린·audit 0/0·npm outdated within-pin 드리프트 0 | 1 (30-(docs)와 합본 가능) | 매우 낮음 |
+| 30-1 [DONE] | M-1 v27: `npm update`로 within-pin lockfile 정렬(`zod` 4.3.6→4.4.3[prod-dep, 핀-내 minor]·`@types/node` 20.19.33→20.19.43·`vitest` 4.1.2→4.1.9[dev-dep, 핀-내 patch]) — `package.json` 핀 무변경, **vitest 672 그린**·tsc 그린·audit 0/0·npm outdated within-pin 드리프트 0 | 1 (30-(docs)와 합본 가능) | 매우 낮음 |
 
 **총 2개 커밋(P30-1 단독 + docs, 또는 합본).** 본 사이클은 *M-2(추가 actionable)가 없는 경량 단일-항목* 사이클이다 — 내부 게이트 발굴 소진 + 외부 정적이라 lockfile within-pin 정렬이 유일하게 남은 actionable이다.
 
