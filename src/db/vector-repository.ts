@@ -50,4 +50,19 @@ export class VectorRepository {
         const rows = stmt.all(buffer, limit) as VectorSearchResult[];
         return rows;
     }
+
+    /**
+     * Retrieves a stored embedding vector by node id (rowid).
+     * Returns null if no embedding exists for the node or on any error
+     * (e.g. the node_embeddings table does not exist).
+     */
+    public getEmbedding(nodeId: number): number[] | null {
+        try {
+            const row = this.db.prepare('SELECT embedding FROM node_embeddings WHERE rowid = ?').get(nodeId) as { embedding: Buffer } | undefined;
+            if (!row || !row.embedding) return null;
+            return Array.from(new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4));
+        } catch {
+            return null;
+        }
+    }
 }

@@ -84,6 +84,18 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
                 }
             },
             {
+                name: "find_similar_symbols",
+                description: "Find symbols semantically similar to a given symbol using vector embeddings. Useful for identifying duplicates, patterns, or related code during refactoring.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        qualified_name: { type: "string" },
+                        limit: { type: "number", default: 10 }
+                    },
+                    required: ["qualified_name"]
+                }
+            },
+            {
                 name: "get_symbol_details",
                 description: "Get comprehensive details, metrics, and pruned source code for a symbol.",
                 inputSchema: {
