@@ -504,6 +504,8 @@ describe('executeTool: search_symbols', () => {
             docstring_snippet: 'Does a thing.',
             tags: ['public'],
             fan_in: 5,
+            // P9-4: single keyword-only hit -> positional confidence score of 1.
+            score: 1,
         });
     });
 

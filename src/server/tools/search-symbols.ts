@@ -34,10 +34,16 @@ export const searchSymbolsHandler: ToolHandler = {
         // reach SQLite as LIMIT -1 (= unlimited).
         const limit = Math.min(Math.max(Math.floor(args.limit) || 10, 1), 200);
         const contexts = deps.workspaceManager.getAllContexts();
+        // P9-4: wrap keyword-only nodes with a positional confidence score so
+        // every code path produces uniform `{ node, score }` pairs. The top
+        // keyword hit scores 1, the next 1/2, then 1/3, ... mirroring the
+        // descending-relevance ordering returned by the keyword index.
+        const keywordOnly = (nodes: any[]): Array<{ node: any, score: number }> =>
+            nodes.map((node, rank) => ({ node, score: 1 / (1 + rank) }));
         const settled = await Promise.allSettled(contexts.map(async (ctx) => {
             const graphEngine = requireEngine(ctx, 'graphEngine');
             const keywordNodes = graphEngine.nodeRepo.searchSymbols(args.query, limit, { symbol_type: args.symbol_type });
-            if (!useSemantic) return keywordNodes;
+            if (!useSemantic) return keywordOnly(keywordNodes);
             try {
                 // P9-2: prefer the caller-supplied vector; only fall back to
                 // server-side generation when no embedding was passed.
@@ -46,11 +52,12 @@ export const searchSymbolsHandler: ToolHandler = {
                     : await deps.embeddingProvider.generate(args.query);
                 const vectorResults = requireEngine(ctx, 'vectorRepo').search(queryVector, limit);
                 const vectorNodes = vectorResults.map(r => graphEngine.getNodeById(r.id)).filter(n => n !== null);
+                // P9-4: mergeResultsRRF now returns { node, score } pairs.
                 return mergeResultsRRF(keywordNodes, vectorNodes, limit);
-            } catch { return keywordNodes; }
+            } catch { return keywordOnly(keywordNodes); }
         }));
         const results = settled
-            .filter((r): r is PromiseFulfilledResult<any[]> => r.status === 'fulfilled')
+            .filter((r): r is PromiseFulfilledResult<Array<{ node: any, score: number }>> => r.status === 'fulfilled')
             .map(r => r.value);
         // O-12: previously allSettled silently dropped EngineNotReadyError
         // rejections, so a search issued while the host is still initializing
@@ -67,6 +74,8 @@ export const searchSymbolsHandler: ToolHandler = {
             }
         }
         const flat = results.flat().slice(0, limit);
-        return { content: [{ type: "text", text: JSON.stringify(flat.map(n => toStructuredResult(n)), null, 2) }] };
+        // P9-4: thread the RRF / positional confidence score through to the
+        // structured result so agents can judge and filter match quality.
+        return { content: [{ type: "text", text: JSON.stringify(flat.map(r => toStructuredResult(r.node, { score: r.score })), null, 2) }] };
     }
 };

@@ -21,6 +21,9 @@ import { describe, it, expect } from 'vitest';
 import { mergeResultsRRF, escapeXml, escapeDot } from '../src/server/tools/_utils.js';
 
 describe('mergeResultsRRF', () => {
+    // P9-4: mergeResultsRRF now returns `{ node, score }` pairs (sorted by
+    // descending RRF score) rather than bare node objects, so callers can
+    // surface a confidence score. Assertions read through `.node` / `.score`.
     it('orders nodes by RRF rank: earlier (lower rank) scores higher (single list)', () => {
         // vector list empty; keyword list ranks 0,1,2 -> scores 1/61 > 1/62 > 1/63.
         const keyword = [
@@ -29,7 +32,25 @@ describe('mergeResultsRRF', () => {
             { id: 3, qualified_name: 'c' },
         ];
         const result = mergeResultsRRF(keyword, [], 10);
-        expect(result.map(n => n.id)).toEqual([1, 2, 3]);
+        expect(result.map(e => e.node.id)).toEqual([1, 2, 3]);
+    });
+
+    it('attaches a positive numeric RRF score to every pair, sorted descending', () => {
+        const keyword = [
+            { id: 1, qualified_name: 'a' },
+            { id: 2, qualified_name: 'b' },
+            { id: 3, qualified_name: 'c' },
+        ];
+        const result = mergeResultsRRF(keyword, [], 10);
+        for (const e of result) {
+            expect(typeof e.score).toBe('number');
+            expect(e.score).toBeGreaterThan(0);
+        }
+        for (let i = 1; i < result.length; i++) {
+            expect(result[i - 1].score).toBeGreaterThan(result[i].score);
+        }
+        // rank-0 keyword hit: 1/(60+0+1) = 1/61.
+        expect(result[0].score).toBeCloseTo(1 / 61);
     });
 
     it('dedup boost: a node present in BOTH lists outranks a rank-0 unique node', () => {
@@ -45,9 +66,13 @@ describe('mergeResultsRRF', () => {
             { id: 10, qualified_name: 'shared' },
         ];
         const result = mergeResultsRRF(keyword, vector, 10);
-        expect(result[0].id).toBe(10);
+        expect(result[0].node.id).toBe(10);
+        // The shared (accumulated) node scores higher than the unique keyword node.
+        const shared = result.find(e => e.node.id === 10)!;
+        const unique = result.find(e => e.node.id === 20)!;
+        expect(shared.score).toBeGreaterThan(unique.score);
         // and the shared node is ranked above the rank-0 unique keyword node.
-        const idsInOrder = result.map(n => n.id);
+        const idsInOrder = result.map(e => e.node.id);
         expect(idsInOrder.indexOf(10)).toBeLessThan(idsInOrder.indexOf(20));
     });
 
@@ -61,7 +86,7 @@ describe('mergeResultsRRF', () => {
         ];
         const result = mergeResultsRRF(keyword, [], 10);
         // rank0 (1/61) > rank1 (1/62) > rank2 (1/63)
-        expect(result.map(n => n.id)).toEqual([100, 200, 300]);
+        expect(result.map(e => e.node.id)).toEqual([100, 200, 300]);
     });
 
     it('slices to limit when combined unique node count exceeds limit', () => {
@@ -78,7 +103,7 @@ describe('mergeResultsRRF', () => {
         const result = mergeResultsRRF(keyword, vector, 2);
         expect(result).toHaveLength(2);
         // Top two are the rank-0 nodes of each list (both 1/61): ids 1 and 4.
-        expect(result.map(n => n.id).sort((a, b) => a - b)).toEqual([1, 4]);
+        expect(result.map(e => e.node.id).sort((a, b) => a - b)).toEqual([1, 4]);
     });
 
     it('returns [] for empty inputs', () => {
@@ -89,10 +114,10 @@ describe('mergeResultsRRF', () => {
         const nodeA = { id: 1, qualified_name: 'a', extra: 'payload' };
         const nodeB = { id: 2, qualified_name: 'b', extra: 'payload2' };
         const result = mergeResultsRRF([nodeA], [nodeB], 10);
-        // Same object references are returned, not copies.
-        expect(result).toContain(nodeA);
-        expect(result).toContain(nodeB);
-        expect(result.find(n => n.id === 1)).toBe(nodeA);
+        // Same object references are returned (under `.node`), not copies.
+        expect(result.map(e => e.node)).toContain(nodeA);
+        expect(result.map(e => e.node)).toContain(nodeB);
+        expect(result.find(e => e.node.id === 1)!.node).toBe(nodeA);
     });
 });
 
