@@ -73,7 +73,12 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
                         query: { type: "string" },
                         semantic: { type: "boolean" },
                         limit: { type: "number" },
-                        symbol_type: { type: "string" }
+                        symbol_type: { type: "string" },
+                        query_embedding: {
+                            type: "array",
+                            items: { type: "number" },
+                            description: "Pre-computed embedding vector for the query. When provided, skips server-side embedding generation and uses this vector directly for semantic search. Useful when the calling agent has already computed an embedding."
+                        }
                     },
                     required: ["query"]
                 }

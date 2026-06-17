@@ -15,6 +15,21 @@ export const searchSymbolsHandler: ToolHandler = {
         if (typeof args.query !== 'string' || args.query.trim() === '') {
             return { isError: true, content: [{ type: 'text', text: 'Invalid argument: query must be a non-empty string.' }] };
         }
+        // P9-2: validate a caller-supplied pre-computed embedding vector. When
+        // present it must be a non-empty array of finite numbers, otherwise the
+        // downstream vectorRepo.search() would receive garbage / throw.
+        if (args.query_embedding !== undefined) {
+            if (
+                !Array.isArray(args.query_embedding) ||
+                args.query_embedding.length === 0 ||
+                !args.query_embedding.every((v: unknown) => typeof v === 'number' && Number.isFinite(v))
+            ) {
+                return { isError: true, content: [{ type: 'text', text: 'Invalid argument: query_embedding must be a non-empty array of finite numbers.' }] };
+            }
+        }
+        // P9-2: a pre-computed embedding implies the caller wants semantic
+        // results even if `semantic` was not explicitly set to true.
+        const useSemantic = args.semantic === true || args.query_embedding !== undefined;
         // O-1/M4: clamp to [1, 200] — negative or zero limits would otherwise
         // reach SQLite as LIMIT -1 (= unlimited).
         const limit = Math.min(Math.max(Math.floor(args.limit) || 10, 1), 200);
@@ -22,9 +37,13 @@ export const searchSymbolsHandler: ToolHandler = {
         const settled = await Promise.allSettled(contexts.map(async (ctx) => {
             const graphEngine = requireEngine(ctx, 'graphEngine');
             const keywordNodes = graphEngine.nodeRepo.searchSymbols(args.query, limit, { symbol_type: args.symbol_type });
-            if (!args.semantic) return keywordNodes;
+            if (!useSemantic) return keywordNodes;
             try {
-                const queryVector = await deps.embeddingProvider.generate(args.query);
+                // P9-2: prefer the caller-supplied vector; only fall back to
+                // server-side generation when no embedding was passed.
+                const queryVector = args.query_embedding
+                    ? args.query_embedding
+                    : await deps.embeddingProvider.generate(args.query);
                 const vectorResults = requireEngine(ctx, 'vectorRepo').search(queryVector, limit);
                 const vectorNodes = vectorResults.map(r => graphEngine.getNodeById(r.id)).filter(n => n !== null);
                 return mergeResultsRRF(keywordNodes, vectorNodes, limit);

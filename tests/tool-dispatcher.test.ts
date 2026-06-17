@@ -506,6 +506,93 @@ describe('executeTool: search_symbols', () => {
             fan_in: 5,
         });
     });
+
+    // -----------------------------------------------------------------------
+    // P9-2: query-time embedding pass-through.
+    // -----------------------------------------------------------------------
+
+    // A context wired for the semantic path: keyword search returns nothing,
+    // vectorRepo.search records its calls and yields one node id mapped back
+    // through getNodeById.
+    function makeSemanticCtx() {
+        const vectorSearch = vi.fn().mockReturnValue([{ id: 7 }]);
+        const node = { qualified_name: 'pkg#Foo.bar', symbol_type: 'method', file_path: 'src/foo.ts' };
+        const ctx = {
+            projectPath: '/mock/project',
+            graphEngine: {
+                nodeRepo: { searchSymbols: vi.fn().mockReturnValue([]) },
+                getNodeById: vi.fn().mockReturnValue(node),
+            },
+            vectorRepo: { search: vectorSearch },
+        };
+        return { ctx, vectorSearch };
+    }
+
+    it('uses query_embedding directly and does NOT call embeddingProvider.generate (P9-2)', async () => {
+        const { ctx, vectorSearch } = makeSemanticCtx();
+        const deps = makeDeps({
+            workspaceManager: { getAllContexts: vi.fn().mockReturnValue([ctx]) } as any,
+        });
+        const result = await executeTool('search_symbols', { query: 'bar', semantic: true, query_embedding: [0.1, 0.2, 0.3] }, deps);
+        expect(result.isError).toBeUndefined();
+        expect(deps.embeddingProvider.generate).not.toHaveBeenCalled();
+        expect(vectorSearch).toHaveBeenCalledWith([0.1, 0.2, 0.3], 10);
+    });
+
+    it('triggers semantic search when query_embedding is provided without semantic: true (P9-2)', async () => {
+        const { ctx, vectorSearch } = makeSemanticCtx();
+        const deps = makeDeps({
+            workspaceManager: { getAllContexts: vi.fn().mockReturnValue([ctx]) } as any,
+        });
+        const result = await executeTool('search_symbols', { query: 'bar', query_embedding: [0.5, 0.6] }, deps);
+        expect(result.isError).toBeUndefined();
+        expect(vectorSearch).toHaveBeenCalledOnce();
+        expect(vectorSearch).toHaveBeenCalledWith([0.5, 0.6], 10);
+        expect(deps.embeddingProvider.generate).not.toHaveBeenCalled();
+    });
+
+    it('falls back to server-side generation when semantic: true and no query_embedding (P9-2)', async () => {
+        const { ctx, vectorSearch } = makeSemanticCtx();
+        const deps = makeDeps({
+            workspaceManager: { getAllContexts: vi.fn().mockReturnValue([ctx]) } as any,
+        });
+        await executeTool('search_symbols', { query: 'bar', semantic: true }, deps);
+        expect(deps.embeddingProvider.generate).toHaveBeenCalledWith('bar');
+        expect(vectorSearch).toHaveBeenCalledOnce();
+    });
+
+    it('returns isError for an empty query_embedding array (P9-2)', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('search_symbols', { query: 'bar', query_embedding: [] }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/query_embedding/i);
+        expect(deps.embeddingProvider.generate).not.toHaveBeenCalled();
+    });
+
+    it('returns isError for a query_embedding with non-number elements (P9-2)', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('search_symbols', { query: 'bar', query_embedding: [0.1, 'oops', 0.3] }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/query_embedding/i);
+    });
+
+    it('returns isError for a non-array query_embedding (P9-2)', async () => {
+        const deps = makeDeps();
+        const result = await executeTool('search_symbols', { query: 'bar', query_embedding: 'not-an-array' }, deps);
+        expect(result.isError).toBe(true);
+        expect(result.content[0].text).toMatch(/query_embedding/i);
+    });
+
+    it('does keyword-only search (no embedding) when neither query_embedding nor semantic provided (P9-2)', async () => {
+        const { ctx, vectorSearch } = makeSemanticCtx();
+        const deps = makeDeps({
+            workspaceManager: { getAllContexts: vi.fn().mockReturnValue([ctx]) } as any,
+        });
+        const result = await executeTool('search_symbols', { query: 'bar' }, deps);
+        expect(result.isError).toBeUndefined();
+        expect(deps.embeddingProvider.generate).not.toHaveBeenCalled();
+        expect(vectorSearch).not.toHaveBeenCalled();
+    });
 });
 
 // ---------------------------------------------------------------------------
