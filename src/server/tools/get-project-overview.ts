@@ -104,7 +104,23 @@ export const getProjectOverviewHandler: ToolHandler = {
             lines.push('\n## Tech Stack\n' + langRows.map(r => `- **${r.language}**: ${r.count} symbols`).join('\n'));
         }
 
-        if (layerCounts.size > 0) {
+        // Prefer the project's declared architecture intent (P6) when present, so the
+        // overview reflects the intended design rather than only tag-derived counts.
+        const declaredIntent = ctx.archEngine ? ctx.archEngine.getIntent() : null;
+        if (declaredIntent && declaredIntent.layers.length > 0) {
+            lines.push('\n## Architecture Layers (declared)');
+            for (const layer of declaredIntent.layers) {
+                const desc = layer.description ? ` — ${layer.description}` : '';
+                lines.push(`- **${layer.name}** (\`${layer.pathPattern}\`)${desc}`);
+            }
+            const respKeys = Object.keys(declaredIntent.responsibilities);
+            if (respKeys.length > 0) {
+                lines.push('\n## Layer Responsibilities');
+                for (const key of respKeys) {
+                    lines.push(`- **${key}**: ${declaredIntent.responsibilities[key]}`);
+                }
+            }
+        } else if (layerCounts.size > 0) {
             const sorted = Array.from(layerCounts.entries()).sort((a, b) => b[1] - a[1]);
             lines.push('\n## Architecture Layers\n' + sorted.map(([tag, count]) => `- ${tag} (${count} symbols)`).join('\n'));
         } else if (layerRows.count > 0) {

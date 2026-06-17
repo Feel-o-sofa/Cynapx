@@ -29,6 +29,7 @@ import { getRecentChangesHandler } from './get-recent-changes.js';
 import { getSymbolHistoryHandler } from './get-symbol-history.js';
 import { addAnnotationHandler } from './add-annotation.js';
 import { getAnnotationsHandler } from './get-annotations.js';
+import { getArchitectureHandler } from './get-architecture.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
     ['get_setup_context', getSetupContextHandler],
@@ -56,4 +57,5 @@ export const toolRegistry = new Map<string, ToolHandler>([
     ['get_symbol_history', getSymbolHistoryHandler],
     ['add_annotation', addAnnotationHandler],
     ['get_annotations', getAnnotationsHandler],
+    ['get_architecture', getArchitectureHandler],
 ]);

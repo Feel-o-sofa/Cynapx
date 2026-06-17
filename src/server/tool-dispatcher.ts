@@ -259,6 +259,11 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
                         limit: { type: "number", default: 20 }
                     }
                 }
+            },
+            {
+                name: "get_architecture",
+                description: "Returns declared architecture intent (layers, rules, responsibilities) and drift detection showing where reality diverges from the declared design.",
+                inputSchema: { type: "object", properties: {} }
             }
         ]
     }));

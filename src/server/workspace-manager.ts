@@ -175,6 +175,17 @@ export class WorkspaceManager {
             }
         }
 
+        // Load optional declared architecture intent (P6)
+        const archIntentPath = path.join(ctx.projectPath, 'cynapx.architecture.json');
+        if (fs.existsSync(archIntentPath)) {
+            try {
+                ctx.archEngine.loadIntent(archIntentPath);
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[WorkspaceManager] Warning: failed to load cynapx.architecture.json: ${msg}`);
+            }
+        }
+
         ctx.refactorEngine = new RefactoringEngine(graphEngine);
         ctx.optEngine = new OptimizationEngine(graphEngine);
         ctx.policyDiscoverer = new PolicyDiscoverer(graphEngine);

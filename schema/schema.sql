@@ -220,3 +220,13 @@ CREATE TABLE IF NOT EXISTS annotations (
     commit_hash TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_annotations_node_qname ON annotations (node_qname);
+
+-- Architecture Intent Model (P6)
+-- Singleton table storing the project's declared architecture intent,
+-- loaded from cynapx.architecture.json. Used for drift detection.
+CREATE TABLE IF NOT EXISTS architecture_intent (
+    id INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton
+    layers TEXT,           -- JSON array of LayerDef
+    rules TEXT,            -- JSON array of ArchRule (with rationale)
+    responsibilities TEXT  -- JSON object { layerName: description }
+);

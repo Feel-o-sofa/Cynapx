@@ -74,7 +74,7 @@ export class DatabaseManager implements Disposable {
     /**
      * Current schema version. Increment this when adding new migrations.
      */
-    public static readonly SCHEMA_VERSION = 4;
+    public static readonly SCHEMA_VERSION = 5;
 
     /**
      * M3/A-11: Registers a callback invoked at the end of runMigrations()
@@ -194,6 +194,22 @@ export class DatabaseManager implements Disposable {
                 `);
 
                 this.db.pragma(`user_version = 4`);
+            }
+
+            if (current < 5) {
+                // Migration 4 → 5: architecture intent model (P6).
+                // Singleton table holding the declared architecture for the project.
+                // CREATE TABLE IF NOT EXISTS keeps this idempotent even if schema.sql
+                // already created it during initializeSchema().
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS architecture_intent (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton
+                        layers TEXT,           -- JSON array of LayerDef
+                        rules TEXT,            -- JSON array of ArchRule (with rationale)
+                        responsibilities TEXT  -- JSON object { layerName: description }
+                    );
+                `);
+                this.db.pragma(`user_version = 5`);
             }
         });
         migrate();
