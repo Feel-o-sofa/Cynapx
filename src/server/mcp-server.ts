@@ -11,7 +11,8 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { RemediationEngine } from '../graph/remediation-engine';
 import { IpcCoordinator } from './ipc-coordinator';
-import { EmbeddingProvider, PythonEmbeddingProvider } from '../indexer/embedding-manager';
+import { EmbeddingProvider } from '../indexer/embedding-manager';
+import { createEmbeddingProviderFromEnv } from '../indexer/embedding-providers/index';
 import { WorkspaceManager, EngineContext } from './workspace-manager';
 import { readRegistry, isPathInside } from '../utils/paths';
 import { getVersion } from '../utils/version';
@@ -61,7 +62,9 @@ export class McpServer {
         });
 
         this.workspaceManager = workspaceManager || new WorkspaceManager();
-        this.embeddingProvider = new PythonEmbeddingProvider();
+        // P9-0: provider is selected from env vars (CYNAPX_EMBED_*). Absent
+        // config falls back to the jina-sidecar default — unchanged behavior.
+        this.embeddingProvider = createEmbeddingProviderFromEnv();
         this.remediationEngine = new RemediationEngine();
 
         this.readyPromise = new Promise((resolve) => { this.resolveReady = resolve; });

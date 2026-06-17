@@ -48,6 +48,39 @@ export function mergeResultsRRF(keywordNodes: any[], vectorNodes: any[], limit: 
     return Array.from(scores.entries()).sort((a, b) => b[1] - a[1]).slice(0, limit).map(([id]) => nodeMap.get(id));
 }
 
+/**
+ * P9-5: Rich structured representation of a symbol for search results. Gives
+ * any AI model enough signal (signature, docstring, tags, fan_in, score) to
+ * reason over results instead of just qnames.
+ */
+export interface StructuredSymbolResult {
+    qname: string;
+    type: string;
+    file: string;
+    signature?: string;
+    docstring_snippet?: string;
+    tags?: string[];
+    fan_in?: number;
+    score?: number;
+}
+
+export function toStructuredResult(node: any, opts?: { score?: number }): StructuredSymbolResult {
+    const result: StructuredSymbolResult = {
+        qname: node.qualified_name,
+        type: node.symbol_type,
+        file: node.file_path,
+    };
+    if (node.signature) result.signature = node.signature;
+    if (node.docstring) result.docstring_snippet = node.docstring.slice(0, 200);
+    if (node.tags) {
+        const tags = typeof node.tags === 'string' ? JSON.parse(node.tags) : node.tags;
+        if (tags.length > 0) result.tags = tags;
+    }
+    if (node.fan_in && node.fan_in > 0) result.fan_in = node.fan_in;
+    if (opts?.score !== undefined) result.score = opts.score;
+    return result;
+}
+
 export function escapeXml(s: string): string {
     return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

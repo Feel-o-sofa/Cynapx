@@ -468,6 +468,44 @@ describe('executeTool: search_symbols', () => {
         expect(result.isError).toBe(true);
         expect(result.content[0].text).toMatch(/not ready|initializing/i);
     });
+
+    // P9-5: structured output includes signature/docstring/tags/fan_in, not
+    // just qname/type/file.
+    it('emits rich structured fields (P9-5)', async () => {
+        const node = {
+            qualified_name: 'pkg#Foo.bar',
+            symbol_type: 'method',
+            file_path: 'src/foo.ts',
+            signature: 'bar(): void',
+            docstring: 'Does a thing.',
+            tags: ['public'],
+            fan_in: 5,
+        };
+        const ctx = {
+            projectPath: '/mock/project',
+            graphEngine: {
+                nodeRepo: { searchSymbols: vi.fn().mockReturnValue([node]) },
+            },
+        };
+        const deps = makeDeps({
+            workspaceManager: {
+                getAllContexts: vi.fn().mockReturnValue([ctx]),
+            } as any,
+        });
+        const result = await executeTool('search_symbols', { query: 'bar' }, deps);
+        expect(result.isError).toBeUndefined();
+        const parsed = JSON.parse(result.content[0].text);
+        expect(parsed).toHaveLength(1);
+        expect(parsed[0]).toEqual({
+            qname: 'pkg#Foo.bar',
+            type: 'method',
+            file: 'src/foo.ts',
+            signature: 'bar(): void',
+            docstring_snippet: 'Does a thing.',
+            tags: ['public'],
+            fan_in: 5,
+        });
+    });
 });
 
 // ---------------------------------------------------------------------------

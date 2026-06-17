@@ -5,7 +5,7 @@
  */
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
-import { mergeResultsRRF, requireEngine, EngineNotReadyError } from './_utils.js';
+import { mergeResultsRRF, requireEngine, EngineNotReadyError, toStructuredResult } from './_utils.js';
 
 export const searchSymbolsHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -48,6 +48,6 @@ export const searchSymbolsHandler: ToolHandler = {
             }
         }
         const flat = results.flat().slice(0, limit);
-        return { content: [{ type: "text", text: JSON.stringify(flat.map(n => ({ qname: n.qualified_name, type: n.symbol_type, file: n.file_path, tags: n.tags })), null, 2) }] };
+        return { content: [{ type: "text", text: JSON.stringify(flat.map(n => toStructuredResult(n)), null, 2) }] };
     }
 };
