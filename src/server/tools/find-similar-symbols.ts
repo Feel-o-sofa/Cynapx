@@ -5,27 +5,7 @@
  */
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
-
-/**
- * Builds a rich, structured representation of a code node for tool output.
- * Mirrors the fields agents need for refactoring / pattern discovery.
- */
-function toStructuredResult(node: any, opts?: { score?: number }): Record<string, unknown> {
-    const docstring: string | undefined = node.docstring ?? node.doc ?? undefined;
-    const result: Record<string, unknown> = {
-        qname: node.qualified_name,
-        type: node.symbol_type,
-        file: node.file_path,
-        signature: node.signature ?? undefined,
-        docstring_snippet: typeof docstring === 'string' ? docstring.slice(0, 200) : undefined,
-        tags: node.tags ?? undefined,
-        fan_in: node.fan_in ?? undefined,
-    };
-    if (opts && typeof opts.score === 'number') {
-        result.score = opts.score;
-    }
-    return result;
-}
+import { toStructuredResult, StructuredSymbolResult } from './_utils.js';
 
 export const findSimilarSymbolsHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -79,7 +59,7 @@ export const findSimilarSymbolsHandler: ToolHandler = {
                 const score = 1 / (1 + r.distance);
                 return toStructuredResult(n, { score });
             })
-            .filter((n): n is Record<string, unknown> => n !== null);
+            .filter((n): n is StructuredSymbolResult => n !== null);
 
         return { content: [{ type: 'text', text: JSON.stringify(similar, null, 2) }] };
     }
