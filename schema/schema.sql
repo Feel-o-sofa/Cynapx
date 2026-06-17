@@ -230,3 +230,19 @@ CREATE TABLE IF NOT EXISTS architecture_intent (
     rules TEXT,            -- JSON array of ArchRule (with rationale)
     responsibilities TEXT  -- JSON object { layerName: description }
 );
+
+-- Richer Test Linkage (P7)
+-- Captures it()/test() block titles, their expect() assertions, and links them
+-- to the symbols they verify. Gives AI agents behavioral contracts: not just
+-- "tests exist" but "what the tests verify".
+CREATE TABLE IF NOT EXISTS test_specs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    test_qname TEXT NOT NULL,      -- qualified name of the test file
+    title TEXT NOT NULL,            -- it('title') or test('title')
+    target_qname TEXT,             -- symbol being tested (nullable)
+    assertions TEXT,                -- JSON array of normalized assertion strings
+    file_path TEXT NOT NULL,
+    start_line INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_test_specs_test_qname ON test_specs (test_qname);
+CREATE INDEX IF NOT EXISTS idx_test_specs_target_qname ON test_specs (target_qname);

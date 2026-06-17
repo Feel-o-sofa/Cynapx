@@ -29,8 +29,9 @@ export const getRelatedTestsHandler: ToolHandler = {
 
         // 2. File-level tests edges (test file → production file that contains this symbol)
         let fileTests: string[] = [];
+        let fileQname: string | undefined;
         if (node.symbol_type !== 'file') {
-            const fileQname = toCanonical(node.file_path);
+            fileQname = toCanonical(node.file_path);
             const fileNode = graphEngine.getNodeByQualifiedName(fileQname);
             if (fileNode) {
                 fileTests = graphEngine.getIncomingEdges(fileNode.id!)
@@ -41,6 +42,27 @@ export const getRelatedTestsHandler: ToolHandler = {
         }
 
         const allTests = [...new Set([...directTests, ...fileTests])];
-        return { content: [{ type: "text", text: JSON.stringify(allTests, null, 2) }] };
+
+        // P7: behavioral contracts — the captured it()/test() specs and their
+        // expect() assertions linked to this symbol (and to its file-level qname).
+        const db = graphEngine.nodeRepo.getDb();
+        const specs = db.prepare(
+            'SELECT title, assertions, file_path, start_line FROM test_specs WHERE target_qname = ?'
+        ).all(args.qualified_name) as { title: string; assertions: string; file_path: string; start_line: number }[];
+
+        if (node.symbol_type !== 'file') {
+            const fileSpecs = db.prepare(
+                'SELECT title, assertions, file_path, start_line FROM test_specs WHERE target_qname = ?'
+            ).all(fileQname ?? '') as { title: string; assertions: string; file_path: string; start_line: number }[];
+            specs.push(...fileSpecs);
+        }
+
+        const allSpecs = specs.map(s => ({
+            title: s.title,
+            assertions: JSON.parse(s.assertions) as string[],
+            location: `${s.file_path}:${s.start_line}`
+        }));
+
+        return { content: [{ type: "text", text: JSON.stringify({ tests: allTests, specs: allSpecs }, null, 2) }] };
     }
 };

@@ -5,7 +5,7 @@
  */
 import * as ts from 'typescript';
 import * as fs from 'fs';
-import { CodeParser, DeltaGraph, RawCodeEdge } from './types';
+import { CodeParser, DeltaGraph, RawCodeEdge, TestSpec } from './types';
 
 /** Augments ts.Symbol with the optional `parent` property used internally by the TS compiler */
 interface SymbolWithParent extends ts.Symbol {
@@ -300,11 +300,12 @@ export class TypeScriptParser implements CodeParser {
 
         visit(sourceFile);
 
+        const testSpecs: TestSpec[] = [];
         if (this.isTestFile(filePath)) {
-            this.emitTestEdges(sourceFile, filePath, canonicalFilePath, edges);
+            this.emitTestEdges(sourceFile, filePath, canonicalFilePath, edges, testSpecs);
         }
 
-        return { nodes, edges };
+        return { nodes, edges, testSpecs };
     }
 
     private isTestFile(filePath: string): boolean {
@@ -428,7 +429,7 @@ export class TypeScriptParser implements CodeParser {
         return null;
     }
 
-    private emitTestEdges(sourceFile: ts.SourceFile, testFilePath: string, testFileQname: string, edges: RawCodeEdge[]): void {
+    private emitTestEdges(sourceFile: ts.SourceFile, testFilePath: string, testFileQname: string, edges: RawCodeEdge[], testSpecs: TestSpec[]): void {
         const candidatePath = this.inferProductionFilePath(testFilePath);
         if (candidatePath === null) return;
 
@@ -485,6 +486,147 @@ export class TypeScriptParser implements CodeParser {
         };
 
         walkForDescribe(sourceFile);
+
+        // P7: Second pass — capture individual it()/test() specs, their assertions,
+        // and the target symbol resolved from the enclosing describe() block name.
+        const walkForSpecs = (node: ts.Node, describeTarget: string | undefined) => {
+            let currentTarget = describeTarget;
+
+            // Track enclosing describe() so nested it()/test() resolve to the right symbol.
+            if (
+                ts.isCallExpression(node) &&
+                ts.isIdentifier(node.expression) &&
+                node.expression.text === 'describe' &&
+                node.arguments.length > 0 &&
+                ts.isStringLiteral(node.arguments[0])
+            ) {
+                const describeName = (node.arguments[0] as ts.StringLiteral).text;
+                // Use the leading PascalCase identifier as the precise symbol name,
+                // mirroring the matching logic in walkForDescribe.
+                const leadingIdent = describeName.match(/^([A-Z][a-zA-Z0-9]+)/)?.[1] ?? describeName;
+                currentTarget = `${prodFileQname}#${leadingIdent}`;
+            }
+
+            // Detect it(...) / test(...) including it.each(...)/test.each(...) forms.
+            const spec = this.extractSpecCall(node);
+            if (spec) {
+                const startLine = sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+                const assertions: string[] = [];
+                this.collectAssertions(node, assertions);
+                testSpecs.push({
+                    testQname: testFileQname,
+                    title: spec.title,
+                    targetQname: currentTarget,
+                    assertions,
+                    filePath: testFilePath,
+                    startLine
+                });
+            }
+
+            ts.forEachChild(node, child => walkForSpecs(child, currentTarget));
+        };
+
+        walkForSpecs(sourceFile, undefined);
+    }
+
+    /**
+     * P7: Recognizes an it()/test() call (and it.each()/test.each() variants) and
+     * extracts the title string from the first argument. Returns null otherwise.
+     */
+    private extractSpecCall(node: ts.Node): { title: string } | null {
+        if (!ts.isCallExpression(node)) return null;
+        const expr = node.expression;
+
+        let isSpec = false;
+        if (ts.isIdentifier(expr) && (expr.text === 'it' || expr.text === 'test')) {
+            isSpec = true;
+        } else if (
+            // it.each(...)(...) / test.each(...)(...) — the outer call's expression
+            // is itself a call to it.each / test.each.
+            ts.isCallExpression(expr) &&
+            ts.isPropertyAccessExpression(expr.expression) &&
+            ts.isIdentifier(expr.expression.expression) &&
+            (expr.expression.expression.text === 'it' || expr.expression.expression.text === 'test') &&
+            expr.expression.name.text === 'each'
+        ) {
+            isSpec = true;
+        } else if (
+            // it.only(...) / it.skip(...) / test.only(...) etc.
+            ts.isPropertyAccessExpression(expr) &&
+            ts.isIdentifier(expr.expression) &&
+            (expr.expression.text === 'it' || expr.expression.text === 'test') &&
+            (expr.name.text === 'only' || expr.name.text === 'skip')
+        ) {
+            isSpec = true;
+        }
+
+        if (!isSpec || node.arguments.length === 0) return null;
+        const titleArg = node.arguments[0];
+        if (!ts.isStringLiteralLike(titleArg)) return null;
+        return { title: titleArg.text };
+    }
+
+    /**
+     * P7: Walks a node subtree collecting normalized expect(...).<matcher>(...)
+     * assertion strings. Skips nested it()/test() bodies so each spec only owns
+     * its own assertions.
+     */
+    private collectAssertions(specNode: ts.Node, out: string[]): void {
+        const walk = (node: ts.Node) => {
+            // Don't descend into nested it()/test() calls — those own their assertions.
+            if (node !== specNode && this.extractSpecCall(node)) return;
+
+            if (ts.isCallExpression(node)) {
+                const normalized = this.normalizeAssertion(node);
+                if (normalized) out.push(normalized);
+            }
+            ts.forEachChild(node, walk);
+        };
+        ts.forEachChild(specNode, walk);
+    }
+
+    /**
+     * P7: Normalizes an expect(subject).<...>.matcher(arg) call expression into a
+     * compact string like "expect(result).toBe(42)" or "expect(fn).not.toThrow()".
+     * Returns null if the call is not a recognizable expect() chain.
+     */
+    private normalizeAssertion(node: ts.CallExpression): string | null {
+        const TRUNC = 80;
+        const truncate = (s: string): string => {
+            const compact = s.replace(/\s+/g, ' ').trim();
+            return compact.length > TRUNC ? compact.slice(0, TRUNC) + '…' : compact;
+        };
+
+        // The matcher call's expression must be a property access whose chain
+        // bottoms out at an expect(...) call.
+        if (!ts.isPropertyAccessExpression(node.expression)) return null;
+        const matcherName = node.expression.name.text;
+
+        // Walk the property-access chain inward, collecting modifier prefixes
+        // (e.g. .not, .resolves, .rejects) until we hit the expect(...) call.
+        const modifiers: string[] = [];
+        let chain: ts.Expression = node.expression.expression;
+        while (ts.isPropertyAccessExpression(chain)) {
+            modifiers.unshift(chain.name.text);
+            chain = chain.expression;
+        }
+
+        if (
+            !ts.isCallExpression(chain) ||
+            !ts.isIdentifier(chain.expression) ||
+            chain.expression.text !== 'expect'
+        ) {
+            return null;
+        }
+
+        // Subject is the first argument to expect(...).
+        const subject = chain.arguments.length > 0 ? truncate(chain.arguments[0].getText()) : '';
+
+        // First argument to the matcher (if any).
+        const arg = node.arguments.length > 0 ? truncate(node.arguments[0].getText()) : '';
+
+        const modifierPrefix = modifiers.length > 0 ? '.' + modifiers.join('.') : '';
+        return `expect(${subject})${modifierPrefix}.${matcherName}(${arg})`;
     }
 
     private getName(symbol: ts.Symbol): string {

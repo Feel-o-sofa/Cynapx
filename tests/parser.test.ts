@@ -301,7 +301,7 @@ describe('LockManager — basic tests', () => {
             const edges: any[] = [];
             const ts = require('typescript');
             const sf = ts.createSourceFile(testFile, testContent, ts.ScriptTarget.Latest, true);
-            (parser as any).emitTestEdges(sf, testFile, 'tests/lockmanager.test.ts', edges);
+            (parser as any).emitTestEdges(sf, testFile, 'tests/lockmanager.test.ts', edges, []);
 
             const testEdges = edges.filter((e: any) => e.edge_type === 'tests');
             const toQnames  = testEdges.map((e: any) => e.to_qname as string);

@@ -175,24 +175,28 @@ describe('executeTool: get_related_tests', () => {
         expect(result.content[0].text).toMatch(/non-empty string/i);
     });
 
-    it('returns [] (not error) for a valid symbol with no tests edges', async () => {
+    it('returns empty tests/specs (not error) for a valid symbol with no tests edges', async () => {
+        const emptyStmt = { all: vi.fn().mockReturnValue([]) };
         const mockGraphEngine = {
             getNodeByQualifiedName: vi.fn().mockReturnValue({ id: 42, symbol_type: 'class', file_path: '/src/foo.ts', qualified_name: '/src/foo.ts#MyClass' }),
             getNodeById: vi.fn().mockReturnValue(null),
             getIncomingEdges: vi.fn().mockReturnValue([]),
+            // P7: get_related_tests now also queries the test_specs table.
+            nodeRepo: { getDb: vi.fn().mockReturnValue({ prepare: vi.fn().mockReturnValue(emptyStmt) }) },
         };
         const deps = makeDeps({
             getContext: vi.fn().mockReturnValue({
                 graphEngine: mockGraphEngine,
-                dbManager: { getDb: vi.fn().mockReturnValue({ prepare: vi.fn().mockReturnValue({ all: vi.fn().mockReturnValue([]) }) }) },
+                dbManager: { getDb: vi.fn().mockReturnValue({ prepare: vi.fn().mockReturnValue(emptyStmt) }) },
                 projectPath: '/mock/project',
             }),
         });
         const result = await executeTool('get_related_tests', { qualified_name: '/src/foo.ts#MyClass' }, deps);
         expect(result.isError).toBeUndefined();
         const parsed = JSON.parse(result.content[0].text);
-        expect(Array.isArray(parsed)).toBe(true);
-        expect(parsed).toHaveLength(0);
+        // P7: shape is now { tests: [], specs: [] }.
+        expect(parsed.tests).toEqual([]);
+        expect(parsed.specs).toEqual([]);
     });
 });
 

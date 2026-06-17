@@ -54,6 +54,23 @@ export const getSymbolDetailsHandler: ToolHandler = {
             }
         }
 
+        // P7: surface verified behavior — captured test specs and their assertions.
+        const testSpecs = db.prepare(
+            'SELECT title, assertions FROM test_specs WHERE target_qname = ?'
+        ).all(node.qualified_name) as { title: string; assertions: string }[];
+        if (testSpecs.length > 0) {
+            text += `\n#### Verified Behavior:\n`;
+            for (const spec of testSpecs.slice(0, 10)) {
+                const assertions = JSON.parse(spec.assertions) as string[];
+                text += `- **${spec.title}**`;
+                if (assertions.length > 0) {
+                    text += `: ${assertions.slice(0, 3).join('; ')}`;
+                    if (assertions.length > 3) text += ` (+${assertions.length - 3} more)`;
+                }
+                text += '\n';
+            }
+        }
+
         text += `\n#### Metrics:\n- LOC: ${node.loc}, CC: ${node.cyclomatic}\n- Static Coupling: Fan-in: ${node.fan_in || 0}, Fan-out: ${node.fan_out || 0}\n`;
 
         if (args.include_source !== false) {

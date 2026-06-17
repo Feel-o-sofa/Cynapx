@@ -441,6 +441,21 @@ export class UpdatePipeline {
             // (the triggers already maintained them incrementally).
             this.recomputeFanMetrics(changedNodeIds);
 
+            // P7: replace this file's test specs with the freshly-parsed set.
+            // On MODIFY we always clear first so specs deleted from the source
+            // (e.g. a removed it() block) don't linger; on ADD the delete is a no-op.
+            if (type === 'MODIFY' || (delta.testSpecs && delta.testSpecs.length > 0)) {
+                this.db.prepare('DELETE FROM test_specs WHERE file_path = ?').run(filePath);
+            }
+            if (delta.testSpecs && delta.testSpecs.length > 0) {
+                const insertSpec = this.db.prepare(
+                    'INSERT INTO test_specs (test_qname, title, target_qname, assertions, file_path, start_line) VALUES (?, ?, ?, ?, ?, ?)'
+                );
+                for (const spec of delta.testSpecs) {
+                    insertSpec.run(spec.testQname, spec.title, spec.targetQname ?? null, JSON.stringify(spec.assertions), spec.filePath, spec.startLine);
+                }
+            }
+
             this.db.prepare('COMMIT').run();
             this.graphEngine?.invalidateCache();
 
@@ -469,6 +484,8 @@ export class UpdatePipeline {
                 this.edgeRepo.deleteEdgesByNodeId(id);
             }
             this.nodeRepo.deleteNodesByFilePath(filePath);
+            // P7: drop any test specs captured from the deleted file.
+            this.db.prepare('DELETE FROM test_specs WHERE file_path = ?').run(filePath);
             this.db.prepare('COMMIT').run();
         } catch (e) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();

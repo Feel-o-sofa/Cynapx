@@ -74,7 +74,7 @@ export class DatabaseManager implements Disposable {
     /**
      * Current schema version. Increment this when adding new migrations.
      */
-    public static readonly SCHEMA_VERSION = 5;
+    public static readonly SCHEMA_VERSION = 6;
 
     /**
      * M3/A-11: Registers a callback invoked at the end of runMigrations()
@@ -210,6 +210,27 @@ export class DatabaseManager implements Disposable {
                     );
                 `);
                 this.db.pragma(`user_version = 5`);
+            }
+
+            if (current < 6) {
+                // Migration 5 → 6: richer test linkage (P7).
+                // Capture it()/test() block titles, their expect() assertions, and
+                // link them to the symbols they verify. CREATE TABLE IF NOT EXISTS
+                // keeps this idempotent even if schema.sql already created it.
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS test_specs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        test_qname TEXT NOT NULL,      -- qualified name of the test file
+                        title TEXT NOT NULL,            -- it('title') or test('title')
+                        target_qname TEXT,             -- symbol being tested (nullable)
+                        assertions TEXT,                -- JSON array of normalized assertion strings
+                        file_path TEXT NOT NULL,
+                        start_line INTEGER NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_test_specs_test_qname ON test_specs (test_qname);
+                    CREATE INDEX IF NOT EXISTS idx_test_specs_target_qname ON test_specs (target_qname);
+                `);
+                this.db.pragma(`user_version = 6`);
             }
         });
         migrate();

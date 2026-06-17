@@ -26,9 +26,23 @@ export interface RawCodeEdge {
     target_file_hint?: string;
 }
 
+/**
+ * P7: A captured test specification — an it()/test() block, its expect()
+ * assertions, and the symbol it verifies. Gives agents behavioral contracts.
+ */
+export interface TestSpec {
+    testQname: string;
+    title: string;
+    targetQname?: string;
+    assertions: string[];
+    filePath: string;
+    startLine: number;
+}
+
 export interface DeltaGraph {
     nodes: CodeNode[];
     edges: RawCodeEdge[];
+    testSpecs?: TestSpec[];  // P7
 }
 
 /**
