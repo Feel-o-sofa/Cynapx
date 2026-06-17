@@ -9,7 +9,27 @@ import { NodeRepository } from '../db/node-repository';
 import { spawn, spawnSync, ChildProcess } from 'child_process';
 import * as readline from 'readline';
 import * as path from 'path';
+import * as fs from 'fs';
 import { Logger } from '../utils/logger';
+
+/**
+ * Reads the source code body for a node directly from its file.
+ *
+ * CodeNode does not store its source, so the body is read at snippet-creation
+ * time using file_path/start_line/end_line. Returns null if the file cannot be
+ * read (e.g. deleted before re-index). Truncated to maxChars with a '...' suffix.
+ */
+function readSourceBody(node: CodeNode, maxChars: number = 1000): string | null {
+    try {
+        const content = fs.readFileSync(node.file_path, 'utf8');
+        const lines = content.split('\n');
+        const bodyLines = lines.slice(node.start_line - 1, node.end_line);
+        const body = bodyLines.join('\n');
+        return body.length > maxChars ? body.slice(0, maxChars) + '...' : body;
+    } catch {
+        return null; // File may not exist (e.g., after deletion but before re-index)
+    }
+}
 
 
 const log = new Logger('Embedding');
@@ -370,6 +390,14 @@ export class EmbeddingManager {
         // P2: include intent/meaning for richer semantic search
         if (node.docstring) {
             snippet += `Description: ${node.docstring.slice(0, 500)}\n`;
+        }
+
+        // P9-1: include a truncated code body for symbols where it adds semantic
+        // signal. File/module/package nodes are skipped since they'd embed entire
+        // files. Kept last so it has lower attention priority and stays bounded.
+        if (node.symbol_type !== 'file' && node.symbol_type !== 'module' && node.symbol_type !== 'package') {
+            const body = readSourceBody(node, 1000);
+            if (body) snippet += `Code:\n${body}\n`;
         }
 
         return snippet;
