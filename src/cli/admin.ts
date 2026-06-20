@@ -35,6 +35,8 @@ import {
     ProjectEntry
 } from '../utils/paths';
 import { AuditLogger, AuditEvent } from '../utils/audit-logger';
+import { LockManager } from '../utils/lock-manager';
+import { getVersion } from '../utils/version';
 
 // ─── ANSI colour helpers ──────────────────────────────────────────────────────
 const c = {
@@ -121,6 +123,45 @@ function getBackupsDir(): string {
 
 function copyFileSafe(src: string, dest: string): void {
     if (fs.existsSync(src)) fs.copyFileSync(src, dest);
+}
+
+/**
+ * A-9: Guard a destructive admin command (purge / compact / restore) against a
+ * live Host. Reuses LockManager.probeProjectLock() — the SAME PID-liveness +
+ * heartbeat-staleness policy the Host/Terminal use (Phase 13-3) — instead of
+ * reimplementing PID/heartbeat logic here. Returns true when it is SAFE to
+ * proceed. When a live Host holds the project lock and `force` is not set, it
+ * prints a refusal and returns false so the caller aborts.
+ */
+function assertNoLiveHost(projectPath: string, action: string, force?: boolean): boolean {
+    const lock = LockManager.probeProjectLock(projectPath);
+    if (!lock) return true;
+    if (force) {
+        console.log(yellow(`⚠  A live Cynapx Host (PID ${lock.pid}) holds the lock — proceeding anyway (--force).`));
+        return true;
+    }
+    console.error(red(`Refusing to ${action}: a live Cynapx Host (PID ${lock.pid}, ipcPort ${lock.ipcPort}) is running for this project.`));
+    console.error(yellow(`Stop the Host first, or re-run with --force to override (may corrupt a live database).`));
+    return false;
+}
+
+/**
+ * A-9: Online backup of a (possibly live) SQLite DB via better-sqlite3's
+ * `VACUUM INTO` — produces a single consistent, fully-checkpointed snapshot file
+ * without copying the volatile WAL/SHM sidecars (which fs.copyFileSync could
+ * capture mid-write, yielding an inconsistent snapshot). Returns the path of the
+ * backup DB file.
+ */
+function onlineBackup(srcDbPath: string, destDbPath: string): void {
+    const db = new Database(srcDbPath, { readonly: true, fileMustExist: true });
+    try {
+        // VACUUM INTO writes a fresh, defragmented, consistent copy. SQLite
+        // requires the destination not already exist.
+        if (fs.existsSync(destDbPath)) fs.unlinkSync(destDbPath);
+        db.prepare('VACUUM INTO ?').run(destDbPath);
+    } finally {
+        db.close();
+    }
 }
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
@@ -283,7 +324,7 @@ function cmdDoctor(): void {
     console.log('');
 }
 
-function cmdPurge(name: string, opts: { yes?: boolean }): void {
+function cmdPurge(name: string, opts: { yes?: boolean; force?: boolean }): void {
     const registry = readRegistry();
     const entry = registry.find(e => e.name.toLowerCase() === name.toLowerCase() || e.path === name);
     if (!entry) {
@@ -296,6 +337,8 @@ function cmdPurge(name: string, opts: { yes?: boolean }): void {
         console.log(yellow(`Re-run with --yes to confirm.`));
         return;
     }
+
+    if (!assertNoLiveHost(entry.path, 'purge', opts.force)) process.exit(1);
 
     const targets = [entry.db_path, `${entry.db_path}-wal`, `${entry.db_path}-shm`];
     let deleted = 0;
@@ -334,7 +377,7 @@ function cmdUnregister(name: string, opts: { yes?: boolean }): void {
     console.log(green(`✓ Removed '${entry.name}' from registry.`));
 }
 
-function cmdCompact(opts: { yes?: boolean }): void {
+function cmdCompact(opts: { yes?: boolean; force?: boolean }): void {
     const registry = readRegistry();
     if (registry.length === 0) {
         console.log(yellow('No projects registered.'));
@@ -351,6 +394,11 @@ function cmdCompact(opts: { yes?: boolean }): void {
     for (const entry of registry) {
         if (!fs.existsSync(entry.db_path)) {
             console.log(dim(`  Skipping ${entry.name} (DB missing)`));
+            continue;
+        }
+        // A-9: never VACUUM a DB a live Host is writing to (unless --force).
+        if (!assertNoLiveHost(entry.path, 'compact', opts.force)) {
+            console.log(dim(`  Skipping ${entry.name} (live Host)`));
             continue;
         }
         try {
@@ -390,10 +438,18 @@ function cmdBackup(name: string): void {
     const backupDir = path.join(getBackupsDir(), backupName);
     fs.mkdirSync(backupDir, { recursive: true });
 
+    // A-9: online backup via VACUUM INTO — a single consistent, fully
+    // checkpointed snapshot even if a Host is actively writing the WAL. The old
+    // fs.copyFileSync of the .db + volatile -wal/-shm sidecars could capture a
+    // torn mid-checkpoint state.
     const dbBase = path.basename(entry.db_path);
-    copyFileSafe(entry.db_path,              path.join(backupDir, dbBase));
-    copyFileSafe(`${entry.db_path}-wal`,     path.join(backupDir, `${dbBase}-wal`));
-    copyFileSafe(`${entry.db_path}-shm`,     path.join(backupDir, `${dbBase}-shm`));
+    try {
+        onlineBackup(entry.db_path, path.join(backupDir, dbBase));
+    } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(red(`Backup failed: ${msg}`));
+        process.exit(1);
+    }
 
     // Save metadata
     fs.writeFileSync(
@@ -406,7 +462,7 @@ function cmdBackup(name: string): void {
     console.log(green(`✓ Backup created: ${backupDir}`));
 }
 
-function cmdRestore(backupPath: string, opts: { yes?: boolean }): void {
+function cmdRestore(backupPath: string, opts: { yes?: boolean; force?: boolean }): void {
     // Resolve backup dir
     const resolvedBackup = path.isAbsolute(backupPath)
         ? backupPath
@@ -434,6 +490,8 @@ function cmdRestore(backupPath: string, opts: { yes?: boolean }): void {
         return;
     }
 
+    if (!assertNoLiveHost(meta.path, 'restore', opts.force)) process.exit(1);
+
     const dbBase = path.basename(meta.db_path);
     const srcDb  = path.join(resolvedBackup, dbBase);
 
@@ -446,9 +504,19 @@ function cmdRestore(backupPath: string, opts: { yes?: boolean }): void {
     const targetDir = path.dirname(meta.db_path);
     if (!fs.existsSync(targetDir)) fs.mkdirSync(targetDir, { recursive: true });
 
+    // A-9: VACUUM INTO backups are a single self-contained .db file. Restore the
+    // DB and clear any stale -wal/-shm at the target so the restored snapshot is
+    // not reinterpreted against a leftover journal. Legacy backups that still
+    // carry -wal/-shm sidecars are copied through for backward compatibility.
     copyFileSafe(srcDb,                             meta.db_path);
-    copyFileSafe(path.join(resolvedBackup, `${dbBase}-wal`), `${meta.db_path}-wal`);
-    copyFileSafe(path.join(resolvedBackup, `${dbBase}-shm`), `${meta.db_path}-shm`);
+    const backupWal = path.join(resolvedBackup, `${dbBase}-wal`);
+    const backupShm = path.join(resolvedBackup, `${dbBase}-shm`);
+    for (const suffix of ['-wal', '-shm']) {
+        const target = `${meta.db_path}${suffix}`;
+        if (fs.existsSync(target)) fs.unlinkSync(target);
+    }
+    copyFileSafe(backupWal, `${meta.db_path}-wal`);
+    copyFileSafe(backupShm, `${meta.db_path}-shm`);
 
     new AuditLogger().log('restore', { project: meta.path, backupDir: resolvedBackup });
     console.log(green(`✓ Restored '${meta.project}' from backup.`));
@@ -457,14 +525,12 @@ function cmdRestore(backupPath: string, opts: { yes?: boolean }): void {
 
 // ─── CLI setup ────────────────────────────────────────────────────────────────
 
-const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '../../package.json'), 'utf-8')) as { version: string };
-
 const program = new Command();
 
 program
     .name('cynapx-admin')
     .description('Cynapx organisation management CLI — no server required')
-    .version(pkg.version);
+    .version(getVersion());
 
 // Default command — status dashboard
 program
@@ -491,7 +557,8 @@ program
     .command('purge <name>')
     .description('Delete index database files for a project')
     .option('-y, --yes', 'Skip confirmation prompt')
-    .action((name: string, opts: { yes?: boolean }) => cmdPurge(name, opts));
+    .option('-f, --force', 'Proceed even if a live Host holds the project lock')
+    .action((name: string, opts: { yes?: boolean; force?: boolean }) => cmdPurge(name, opts));
 
 program
     .command('unregister <name>')
@@ -503,7 +570,8 @@ program
     .command('compact')
     .description('Run VACUUM on all project databases to reclaim disk space')
     .option('-y, --yes', 'Skip confirmation prompt')
-    .action((opts: { yes?: boolean }) => cmdCompact(opts));
+    .option('-f, --force', 'Proceed even if a live Host holds a project lock')
+    .action((opts: { yes?: boolean; force?: boolean }) => cmdCompact(opts));
 
 program
     .command('backup <name>')
@@ -514,6 +582,7 @@ program
     .command('restore <backup-path>')
     .description('Restore a project database from a backup directory')
     .option('-y, --yes', 'Skip confirmation prompt')
-    .action((backupPath: string, opts: { yes?: boolean }) => cmdRestore(backupPath, opts));
+    .option('-f, --force', 'Proceed even if a live Host holds the project lock')
+    .action((backupPath: string, opts: { yes?: boolean; force?: boolean }) => cmdRestore(backupPath, opts));
 
 program.parse(process.argv);

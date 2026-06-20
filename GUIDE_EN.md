@@ -1,4 +1,4 @@
-# 🧠 Cynapx v2.0.0 — User Guide
+# 🧠 Cynapx v3.0.0 — User Guide
 
 > Complete how-to reference for the AI-native Code Knowledge Engine
 
@@ -17,13 +17,15 @@
    - [2.3 Connecting to Claude Code](#23-connecting-to-claude-code)
    - [2.4 Developer Workflow (Live Source Changes)](#24-developer-workflow-live-source-changes)
    - [2.5 CLI Options](#25-cli-options)
+   - [2.6 Model-Agnostic Embeddings](#26-model-agnostic-embeddings)
 3. [Project Lifecycle](#3-project-lifecycle)
 4. [MCP Tool Reference](#4-mcp-tool-reference)
    - [4.1 Setup & Lifecycle](#41-setup--lifecycle)
-   - [4.2 Symbol Navigation](#42-symbol-navigation)
-   - [4.3 Architecture Analysis](#43-architecture-analysis)
-   - [4.4 Quality & Risk](#44-quality--risk)
-   - [4.5 Refactoring & Export](#45-refactoring--export)
+   - [4.2 Symbol Navigation & Semantic Search](#42-symbol-navigation--semantic-search)
+   - [4.3 Temporal Context & Agent Memory](#43-temporal-context--agent-memory)
+   - [4.4 Architecture Analysis](#44-architecture-analysis)
+   - [4.5 Quality & Risk](#45-quality--risk)
+   - [4.6 Refactoring & Export](#46-refactoring--export)
 5. [Admin CLI Reference](#5-admin-cli-reference)
 6. [Real-World Workflows](#6-real-world-workflows)
    - [6.1 Understanding an Unfamiliar Codebase](#61-understanding-an-unfamiliar-codebase)
@@ -48,7 +50,8 @@ Your Project (any of 12 supported languages)
 │  TypeScript Compiler API  →  Type-Aware Edge Build   │
 │  Git Service          →  Commit History Mapping      │
 │  Structural Tagger    →  5-Pass Tag Propagation      │
-│  Python Sidecar       →  Vector Embeddings (optional)│
+│  Embedding Provider   →  Vector Embeddings (pluggable)│
+│   (OpenAI · Ollama · Jina sidecar · Null)            │
 └──────────────────────────┬───────────────────────────┘
                            │
                            ▼
@@ -65,7 +68,7 @@ Your Project (any of 12 supported languages)
             ▼              ▼              ▼
        MCP Server      REST API      Graph Engine
        (stdio)        (:3001)      (BFS/DFS/LRU cache)
-       20 tools     Swagger UI     Impact traversal
+       27 tools     Swagger UI     Impact traversal
 ```
 
 ### Key Concepts
@@ -116,7 +119,7 @@ Cynapx never writes to your project directory. All persistent data lives in `~/.
 
 | Requirement | Version | Notes |
 |-------------|---------|-------|
-| Node.js | >= 20 | Required |
+| Node.js | >= 22 | Required |
 | Git | Any recent | Required for `backfill_history` and churn metrics |
 | Python | 3.x | Optional — enables `semantic: true` vector search in `search_symbols` |
 
@@ -176,7 +179,7 @@ Replace `/absolute/path/to/Cynapx` with the actual path where you cloned the rep
 }
 ```
 
-After saving `.mcp.json`, restart Claude Code. Cynapx appears in the MCP tools panel and all 20 tools become available.
+After saving `.mcp.json`, restart Claude Code. Cynapx appears in the MCP tools panel and all 27 tools become available.
 
 ### 2.4 Developer Workflow (Live Source Changes)
 
@@ -213,6 +216,37 @@ These options are passed to `node dist/bootstrap.js` (or `ts-node src/bootstrap.
 | `--no-auth` | `false` (auth enabled) | Disable Bearer token authentication on the REST API |
 
 **Authentication:** when auth is enabled, a token is auto-generated on every startup and printed to `stderr`. Use it as `Authorization: Bearer <token>` on REST requests. The MCP server (stdio) does not require the token — it is only for REST.
+
+---
+
+### 2.6 Model-Agnostic Embeddings
+
+Cynapx's semantic layer (vector search, `find_similar_symbols`, and the optional `semantic: true` mode of `search_symbols`) is **pluggable**. The embedding provider is chosen at runtime so Cynapx can serve any AI agent model — Claude, ChatGPT Codex, local LLMs, and future models — without vendor lock-in. If no provider is configured, the bundled Jina code-embeddings sidecar is used.
+
+**Provider selection via environment variables:**
+
+| Env var | Purpose | Example |
+|---------|---------|---------|
+| `CYNAPX_EMBED_PROVIDER` | `openai` \| `ollama` \| `jina-sidecar` \| `null` | `openai` |
+| `CYNAPX_EMBED_MODEL` | Model name for the chosen provider | `text-embedding-3-small` |
+| `CYNAPX_EMBED_API_KEY` | API key (OpenAI-compatible providers) | `sk-...` |
+| `CYNAPX_EMBED_ENDPOINT` | Base URL override (Azure / vLLM / LM Studio / self-hosted) | `https://api.openai.com` |
+| `CYNAPX_EMBED_DIMENSIONS` | Embedding dimensionality | `1536` |
+
+**Supported providers:**
+
+| Provider | Transport | Default model | Notes |
+|----------|-----------|---------------|-------|
+| `openai` | native `fetch` → `/v1/embeddings` | `text-embedding-3-small` (1536) | Compatible with OpenAI, Azure OpenAI, vLLM, LM Studio |
+| `ollama` | native `fetch` → `localhost:11434/api/embed` | `nomic-embed-text` (768) | Fully local |
+| `jina-sidecar` | Python sidecar | `jina-code-embeddings` (896) | Bundled default |
+| `null` | — | — | No-op fallback; disables semantic features |
+
+**Per-project override.** A project profile may set an `embedding` block to pin a provider for a single project, overriding the environment default.
+
+**Query-time pass-through.** Agents that already compute embeddings with their own model can pass a pre-computed `query_embedding` array to `search_symbols`. The server skips re-embedding and searches directly with the supplied vector — keeping the query in the agent's own model space and avoiding cross-model mismatch. Supplying a vector enables semantic search even without `semantic: true`.
+
+> **Re-indexing after a provider change.** Stored embeddings are produced by whichever provider was active at index time. If you switch providers (or dimensions), run `purge_index` then `initialize_project` to regenerate embeddings consistently.
 
 ---
 
@@ -295,6 +329,43 @@ Registered projects (3):
   • my-project       /home/user/my-project        nodes: 4821  edges: 18302
   • api-service      /home/user/api-service        nodes: 2104  edges: 7891
   • legacy-monolith  /home/user/legacy-monolith    nodes: 9340  edges: 41200
+```
+
+---
+
+#### `get_project_overview`
+
+Return a token-efficient, whole-project briefing — the fastest way for an agent to bootstrap context on an unfamiliar codebase. Summarizes scale, language mix, the busiest modules, and top symbols by `fan_in` without dumping the full graph.
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `top_n` | number | `10` | How many top symbols / modules to include in each ranked list |
+
+**Returns:** Formatted text briefing — node/edge totals, language breakdown, entry points, and the most-depended-upon symbols.
+
+**Example call:**
+
+```
+Tool: get_project_overview
+top_n: 10
+```
+
+**Example output:**
+
+```
+Project: my-project  (4,821 symbols · 18,302 edges)
+Languages: TypeScript 78% · Python 14% · Go 8%
+
+Most-depended-upon symbols (by fan_in):
+  1. Logger.log              fan_in: 142
+  2. Database.query          fan_in:  97
+  3. UserService.authenticate fan_in: 41
+
+Busiest modules:
+  • src/db/database.ts        symbols: 38
+  • src/server/api-server.ts  symbols: 31
 ```
 
 ---
@@ -423,13 +494,13 @@ Duration: 14.7s
 
 ---
 
-### 4.2 Symbol Navigation
+### 4.2 Symbol Navigation & Semantic Search
 
 ---
 
 #### `search_symbols`
 
-Search the knowledge graph for symbols by name or description. Supports exact prefix matching (default) or vector similarity search when the Python sidecar is running.
+Search the knowledge graph for symbols by name or description. Supports exact prefix matching (default), vector similarity search when an embedding provider is configured, and **query-time vector pass-through** for model-agnostic queries.
 
 **Parameters:**
 
@@ -438,9 +509,10 @@ Search the knowledge graph for symbols by name or description. Supports exact pr
 | `query` | string | required | Search term — matched against qualified names and descriptions |
 | `symbol_type` | string | — | Filter by type: `class`, `method`, `function`, `field`, `interface`, `enum`, `module` |
 | `limit` | number | `10` | Maximum number of results to return |
-| `semantic` | boolean | `false` | Enable vector similarity search (requires Python ML sidecar to be running) |
+| `semantic` | boolean | `false` | Enable vector similarity search (requires a configured embedding provider) |
+| `query_embedding` | number[] | — | Pre-computed query vector. When supplied, the server skips re-embedding and searches with this vector directly — enables semantic search even without `semantic: true`. See [2.6](#26-model-agnostic-embeddings) |
 
-**Returns:** Array of `{ qname, type, file, line, tags }`.
+**Returns:** Array of `{ qname, type, file, signature, docstring_snippet, tags, fan_in, score }`. The `score` field exposes hybrid (RRF) or positional relevance so agents can rank and filter.
 
 **Example call:**
 
@@ -468,6 +540,42 @@ Found 3 results for "authenticate" (type: method):
 3. BasicAuthMiddleware.authenticate
    Type: method | File: src/middleware/BasicAuth.ts:15
    Tags: layer:api, role:middleware
+```
+
+---
+
+#### `find_similar_symbols`
+
+Find symbols that are **semantically similar** to a given symbol via K-nearest-neighbor search over stored embeddings. Useful for duplicate detection, surfacing repeated patterns, and finding refactoring candidates. The query symbol itself is excluded from results.
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `qualified_name` | string | required | The symbol to find neighbors for — must already be indexed and embedded |
+| `limit` | number | `10` | Maximum number of similar symbols to return |
+
+**Returns:** Array of `{ qname, type, file, signature, docstring_snippet, tags, fan_in, score }`, sorted by descending similarity. `score` is normalized as `1 / (1 + distance)` (1.0 = identical, → 0 as distance grows).
+
+> Requires a configured embedding provider and embeddings generated at index time. If the symbol has no stored embedding, an empty result is returned.
+
+**Example call:**
+
+```
+Tool: find_similar_symbols
+qualified_name: "UserService.authenticate"
+limit: 5
+```
+
+**Example output:**
+
+```
+Symbols similar to UserService.authenticate (4):
+
+1. AdminService.authenticate    score: 0.91  src/services/AdminService.ts:51
+2. OAuthProvider.authenticate   score: 0.84  src/auth/OAuthProvider.ts:88
+3. LegacyAuth.verifyUser        score: 0.77  src/legacy/LegacyAuth.ts:203
+4. ApiKeyValidator.validate     score: 0.69  src/auth/ApiKeyValidator.ts:34
 ```
 
 ---
@@ -626,7 +734,152 @@ Related tests for UserService.authenticate (3):
 
 ---
 
-### 4.3 Architecture Analysis
+### 4.3 Temporal Context & Agent Memory
+
+These tools answer *"what changed recently"* and *"why does this exist"*, and let agents write durable notes back into the knowledge graph so future sessions inherit hard-won context.
+
+---
+
+#### `get_recent_changes`
+
+List symbols that changed recently, derived from Git history mapped onto the graph. Use it to orient at the start of a session or to scope a review.
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `limit` | number | `20` | Maximum number of changed symbols to return |
+| `since` | string | — | Optional ISO date or Git revision lower bound (e.g. `2026-06-01`, `HEAD~20`) |
+
+**Returns:** Array of `{ qname, file, last_commit, commit_date, message }`, newest first.
+
+**Example call:**
+
+```
+Tool: get_recent_changes
+limit: 10
+```
+
+**Example output:**
+
+```
+Recently changed symbols (10):
+
+1. UserService.authenticate   a1b2c3d  2026-06-18  "fix: token expiry edge case"
+2. TokenValidator.verify      a1b2c3d  2026-06-18  "fix: token expiry edge case"
+3. ApiGateway.handleRequest   d4e5f6a  2026-06-15  "feat: add rate-limit headers"
+```
+
+---
+
+#### `get_symbol_history`
+
+Return the change history and rationale for a single symbol — every commit that touched it, in order. Answers *"why does this exist / why is it shaped this way?"*
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `qualified_name` | string | required | The symbol whose history you want |
+| `limit` | number | `20` | Maximum number of commits to return |
+
+**Returns:** Array of `{ commit, date, author, message }`, newest first.
+
+**Example call:**
+
+```
+Tool: get_symbol_history
+qualified_name: "UserService.authenticate"
+```
+
+**Example output:**
+
+```
+History for UserService.authenticate (3 commits):
+
+a1b2c3d  2026-06-18  Jane Dev   "fix: token expiry edge case in authenticate"
+d4e5f6a  2026-03-28  Jane Dev   "refactor: extract TokenValidator from authenticate"
+b7c8d9e  2026-03-01  Sam Lead   "feat: add MFA support to authenticate"
+```
+
+---
+
+#### `add_annotation`
+
+Persist an agent-authored note onto a symbol. Annotations survive across sessions and models — they are how the knowledge base *learns* from the agents that use it.
+
+**Parameters:**
+
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `qualified_name` | string | required | The symbol to annotate |
+| `kind` | `"decision"` \| `"gotcha"` \| `"todo"` \| `"rationale"` | required | The category of note |
+| `text` | string | required | The annotation body |
+
+**Returns:** Confirmation with the stored annotation ID.
+
+**Example call:**
+
+```
+Tool: add_annotation
+qualified_name: "UserService.authenticate"
+kind: "gotcha"
+text: "Token TTL is read from env at call time, not cached — changing AUTH_TTL takes effect immediately."
+```
+
+---
+
+#### `get_annotations`
+
+Retrieve all agent-authored annotations for a symbol.
+
+**Parameters:**
+
+| Name | Type | Description |
+|------|------|-------------|
+| `qualified_name` | string | The symbol whose annotations you want |
+
+**Returns:** Array of `{ id, kind, text, created_at }`.
+
+**Example output:**
+
+```
+Annotations for UserService.authenticate (2):
+
+[gotcha]    Token TTL is read from env at call time, not cached.
+[decision]  MFA enforced here rather than in the controller so CLI clients are covered too.
+```
+
+---
+
+### 4.4 Architecture Analysis
+
+---
+
+#### `get_architecture`
+
+Report the project's **declared architecture intent** (from `cynapx.architecture.json`) alongside a **drift report** comparing it against the real graph — which intended layers/dependencies exist, and which actual edges violate the declared design.
+
+**Parameters:** none
+
+**Returns:** Formatted text — declared layers/rules, satisfied intents, and detected drift.
+
+**Example call:**
+
+```
+Tool: get_architecture
+(no parameters)
+```
+
+**Example output:**
+
+```
+Declared architecture (cynapx.architecture.json):
+  Layers: api → service → db   (downward-only)
+
+Drift detected (1):
+  ✗ db/Database.ts imports service/UserService.ts  (upward dependency)
+```
 
 ---
 
@@ -763,7 +1016,7 @@ Latent policies discovered (2):
 
 ---
 
-### 4.4 Quality & Risk
+### 4.5 Quality & Risk
 
 ---
 
@@ -938,7 +1191,7 @@ Distance 3:
 
 ---
 
-### 4.5 Refactoring & Export
+### 4.6 Refactoring & Export
 
 ---
 

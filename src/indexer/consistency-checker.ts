@@ -9,13 +9,17 @@ import { NodeRepository } from '../db/node-repository';
 import { GitService } from './git-service';
 import { UpdatePipeline } from './update-pipeline';
 import { FileFilter } from '../utils/file-filter';
+import { loadProfile } from '../utils/profile';
 import { calculateFileChecksum } from '../utils/checksum';
 import { LanguageRegistry } from './language-registry';
 import { SecurityProvider } from '../utils/security';
 import { FileChangeEvent } from './types';
 import * as fs from 'fs';
 import * as path from 'path';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('ConsistencyChecker');
 /**
  * ConsistencyChecker validates the integrity of the knowledge graph against the file system and Git.
  */
@@ -42,7 +46,7 @@ export class ConsistencyChecker {
         outdatedFiles: string[];
         orphanedNodes: string[];
     }> {
-        console.log(`Starting Consistency Check (Repair: ${repair}, Force: ${force})...`);
+        log.info(`Starting Consistency Check (Repair: ${repair}, Force: ${force})...`);
         
         const results = {
             totalFiles: 0,
@@ -51,7 +55,13 @@ export class ConsistencyChecker {
             orphanedNodes: [] as string[]
         };
 
-        const fileFilter = new FileFilter(this.projectPath);
+        // A-6: honour the project profile's excludePatterns / maxFileSize here
+        // too, so file discovery and the watcher apply the same filter set.
+        const profile = loadProfile(this.projectPath);
+        const fileFilter = new FileFilter(this.projectPath, {
+            excludePatterns: profile.excludePatterns,
+            maxFileSize: profile.maxFileSize,
+        });
         const allPhysicalFiles = await this.getFiles(this.projectPath, true, fileFilter);
         results.totalFiles = allPhysicalFiles.length;
 
@@ -107,10 +117,11 @@ export class ConsistencyChecker {
             }
         }
 
-        console.log(`Consistency Check Results:
-- Missing: ${results.missingFiles.length}
-- Outdated: ${results.outdatedFiles.length}
-- Orphaned: ${results.orphanedNodes.length}`);
+        log.info('Consistency check results', {
+            missing: results.missingFiles.length,
+            outdated: results.outdatedFiles.length,
+            orphaned: results.orphanedNodes.length
+        });
 
         if (repair) {
             await this.repair(results);
@@ -124,7 +135,7 @@ export class ConsistencyChecker {
         outdatedFiles: string[];
         orphanedNodes: string[];
     }): Promise<void> {
-        console.log('Repairing inconsistencies...');
+        log.info('Repairing inconsistencies...');
         const version = Date.now();
 
         // Fetch all latest commits in parallel
@@ -141,9 +152,9 @@ export class ConsistencyChecker {
 
         if (events.length > 0) {
             await this.pipeline.processBatch(events, version);
-            console.log(`Repair complete. Processed ${events.length} files.`);
+            log.info(`Repair complete. Processed ${events.length} files.`);
         } else {
-            console.log('Nothing to repair.');
+            log.info('Nothing to repair.');
         }
     }
 
@@ -155,13 +166,14 @@ export class ConsistencyChecker {
         
         const extensions = LanguageRegistry.getInstance().getAllExtensions();
         if (directory === this.projectPath) {
-            console.error(`Scanning directory: ${directory}`);
-            console.error(`Supported extensions: ${extensions.join(', ')}`);
+            log.error(`Scanning directory: ${directory}`);
+            log.error(`Supported extensions: ${extensions.join(', ')}`);
         }
         
         const files = fs.readdirSync(directory);
         for (const file of files) {
             const fullPath = path.resolve(directory, file);
+            // Pattern-level prune for both dirs and files (cheap, no stat).
             if (filter && filter.isIgnored(fullPath)) continue;
             const stat = fs.statSync(fullPath);
             if (stat.isDirectory()) {
@@ -172,6 +184,8 @@ export class ConsistencyChecker {
             } else {
                 const ext = file.split('.').pop()?.toLowerCase();
                 if (ext && LanguageRegistry.getInstance().getAllExtensions().includes(ext)) {
+                    // A-6: honour the profile's maxFileSize during discovery.
+                    if (filter && filter.shouldIgnoreFile(fullPath)) continue;
                     results.push(fullPath);
                 }
             }

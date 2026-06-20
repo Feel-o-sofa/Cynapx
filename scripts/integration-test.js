@@ -77,6 +77,44 @@ function banner(text) {
     console.log(`\n${B}── ${text} ──${X}`);
 }
 
+// P13-9: run an external child command (script) as an integration phase.
+// Records PASS (exit 0), SKIP (exit 0 with a "SKIP" marker in output, e.g.
+// docker-smoke when no daemon), or FAIL (non-zero exit). Skips never fail the
+// run — they are expected when the host environment lacks Docker.
+function runChildPhase(label, command, args, opts = {}) {
+    return new Promise((resolve) => {
+        const { spawn } = require('child_process');
+        const t0 = Date.now();
+        const child = spawn(command, args, { cwd: ROOT, env: { ...process.env, ...(opts.env || {}) } });
+        let out = '';
+        child.stdout.on('data', d => { const s = d.toString(); out += s; process.stdout.write(s); });
+        child.stderr.on('data', d => { const s = d.toString(); out += s; process.stderr.write(s); });
+        const timer = opts.timeoutMs ? setTimeout(() => { try { child.kill('SIGKILL'); } catch {} }, opts.timeoutMs) : null;
+        child.on('error', (e) => {
+            if (timer) clearTimeout(timer);
+            results.push({ label, toolName: command, status: 'FAIL', error: e.message, ms: Date.now() - t0 });
+            console.log(fail(`${label}  [${command}]  spawn error: ${e.message}`));
+            resolve();
+        });
+        child.on('exit', (code) => {
+            if (timer) clearTimeout(timer);
+            const ms = Date.now() - t0;
+            const skipped = code === 0 && /\bSKIP\b/.test(out);
+            if (code === 0 && skipped) {
+                results.push({ label, toolName: command, status: 'WARN', ms });
+                console.log(`${Y}⏭️  SKIP${X}  ${label}  [${command}]  (environment unavailable) [${ms}ms]`);
+            } else if (code === 0) {
+                results.push({ label, toolName: command, status: 'PASS', ms });
+                console.log(ok(`${label}  [${command}]  exit 0 [${ms}ms]`));
+            } else {
+                results.push({ label, toolName: command, status: 'FAIL', error: `exit ${code}`, ms });
+                console.log(fail(`${label}  [${command}]  exit ${code} [${ms}ms]`));
+            }
+            resolve();
+        });
+    });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 async function main() {
     console.log(`\n${B}${C}╔════════════════════════════════════════════════╗${X}`);
@@ -127,6 +165,8 @@ async function main() {
         ctx.gitService      = gitService;
         ctx.updatePipeline  = updatePipeline;
         ctx.securityProvider = new SecurityProvider(projectPath);
+        // H-6: attach the worker pool so onPurge -> unmountProject can dispose it.
+        ctx.workerPool      = _workerPool;
 
         // 6. Run actual indexing
         console.log(info(`  Running syncWithGit — indexing ${projectPath}...`));
@@ -143,7 +183,13 @@ async function main() {
         workspaceManager:    wm,
         remediationEngine:   new RemediationEngine(),
         onInitialize,
-        onPurge:             undefined,
+        // H-6: wire onPurge to WorkspaceManager.unmountProject (as bootstrap.ts
+        // does) so purge_index tears the engine down in order and nulls every
+        // field, letting a subsequent initialize_project rebuild it cleanly.
+        onPurge:             async (hash) => {
+            await wm.unmountProject(hash);
+            _workerPool = null; // unmount disposed it; re-init builds a fresh pool
+        },
         markReady:           (v) => { initialized = v; },
         getIsInitialized:    ()  => initialized,
         setIsInitialized:    (v) => { initialized = v; },
@@ -175,8 +221,12 @@ async function main() {
     await runTool('SQL_INJECT_METRIC', 'get_hotspots', { metric: "loc; DROP TABLE--", threshold: 5 }, deps, { expectError: true });
     // Invalid mode
     await runTool('INVALID_MODE', 'initialize_project', { path: ROOT, mode: 'hacker' }, deps, { expectError: true });
-    // Path outside boundary (using 'path' field — correct schema key)
-    await runTool('PATH_OUTSIDE_BOUNDARY', 'initialize_project', { path: 'C:\\Windows\\System32', mode: 'current' }, deps, { expectError: true });
+    // Path outside boundary (using 'path' field — correct schema key).
+    // Phase 12-8 fix: 'C:\Windows\System32' is a *relative* path on POSIX and
+    // resolved under cwd (passing the boundary check + creating a junk dir in
+    // the repo). Use a filesystem-root path that is absolute on every platform.
+    const outsideBoundaryPath = path.join(path.parse(ROOT).root, 'cynapx-outside-boundary-test');
+    await runTool('PATH_OUTSIDE_BOUNDARY', 'initialize_project', { path: outsideBoundaryPath, mode: 'current' }, deps, { expectError: true });
     // NaN min_confidence (pre-init → null guard fires first, that's fine)
     await runTool('NaN_CONFIDENCE', 'discover_latent_policies', { min_confidence: NaN }, deps, { expectError: true });
     // Negative max_policies
@@ -493,6 +543,143 @@ async function main() {
             results.push({ label: 'RESTORE_DRYRUN', status: acceptable ? 'WARN' : 'FAIL', ms: 0 });
         }
     }
+
+    // ══ Phase 24: Concurrency (Phase 12-8) ════════════════════════════════════
+    // diagnostic-v9 §5 "통합 테스트 동시성": 5 parallel search_symbols calls +
+    // a tool call issued during the failover not-ready window (H-1 scenario).
+    banner('Phase 24: Concurrency — parallel search_symbols + failover window (H-1)');
+
+    // 24a. Five parallel search_symbols calls — all must settle successfully
+    // against the same engine context with no crash or isError.
+    {
+        const queries = ['WorkspaceManager', 'executeTool', 'GraphEngine', 'UpdatePipeline', 'LockManager'];
+        const t0 = Date.now();
+        const settled = await Promise.allSettled(
+            queries.map(q => executeTool('search_symbols', { query: q, limit: 5 }, deps))
+        );
+        const ms = Date.now() - t0;
+        const failures = settled.filter(s => s.status === 'rejected' || s.value?.isError);
+        const allOk = failures.length === 0;
+        console.log(allOk
+            ? ok(`PARALLEL_SEARCH_5  [search_symbols]  5/5 parallel calls succeeded [${ms}ms total]`)
+            : fail(`PARALLEL_SEARCH_5  [search_symbols]  ${failures.length}/5 parallel calls failed`));
+        results.push({ label: 'PARALLEL_SEARCH_5', toolName: 'search_symbols', status: allOk ? 'PASS' : 'FAIL', ms });
+    }
+
+    // 24b. H-1 failover window — markReady(false) analog.
+    // NOTE: this harness runs a single process without a real Host/Terminal IPC
+    // pair, so a true mid-flight Host promotion cannot be exercised here. We
+    // faithfully simulate the window attemptFailover() opens in bootstrap.ts:
+    // markReady(false) resets readyPromise to pending, so waitUntilReady()
+    // must block the tool call until markReady(true) fires after
+    // startHostServices() completes.
+    {
+        let releaseGate;
+        const gate = new Promise(res => { releaseGate = res; });
+        const failoverDeps = { ...deps, waitUntilReady: () => gate };
+        let settledEarly = false;
+        const t0 = Date.now();
+        const pending = executeTool('search_symbols', { query: 'WorkspaceManager', limit: 3 }, failoverDeps)
+            .then(r => { settledEarly = true; return r; })
+            .catch(e => { settledEarly = true; return { isError: true, content: [{ type: 'text', text: e.message }] }; });
+        await new Promise(r => setTimeout(r, 200));
+        const blockedDuringWindow = !settledEarly;
+        releaseGate(); // markReady(true) — host services finished
+        const res24 = await pending;
+        const ms = Date.now() - t0;
+        const passed = blockedDuringWindow && res24 && !res24.isError;
+        console.log(passed
+            ? ok(`FAILOVER_BLOCK  [search_symbols]  call blocked during not-ready window, succeeded after markReady(true) [${ms}ms]`)
+            : fail(`FAILOVER_BLOCK  [search_symbols]  blocked=${blockedDuringWindow} isError=${res24?.isError ?? 'n/a'}`));
+        results.push({ label: 'FAILOVER_BLOCK', toolName: 'search_symbols', status: passed ? 'PASS' : 'FAIL', ms });
+    }
+
+    // 24c. H-1 engine guard — if a handler does run against a context whose
+    // engines have not been constructed yet (the post-promotion window before
+    // startHostServices() attaches optEngine etc.), requireEngine() must
+    // surface a structured isError result via EngineNotReadyError instead of
+    // crashing on undefined.
+    {
+        const halfReadyCtx = { projectPath: ctx.projectPath }; // engines absent
+        const halfReadyDeps = { ...deps, getContext: () => halfReadyCtx };
+        const r = await runTool('FAILOVER_ENGINE_GUARD', 'find_dead_code', {}, halfReadyDeps, { expectError: true });
+        if (r && r.isError) {
+            const txt = r.content?.[0]?.text ?? '';
+            const structured = /not ready|initializing|retry/i.test(txt);
+            console.log(structured
+                ? ok('FAILOVER_GUARD_MSG — EngineNotReadyError surfaced as retryable isError ✓')
+                : fail(`FAILOVER_GUARD_MSG — unexpected error text: ${txt.slice(0, 100)}`));
+            results.push({ label: 'FAILOVER_GUARD_MSG', toolName: 'find_dead_code', status: structured ? 'PASS' : 'FAIL', ms: 0 });
+        }
+    }
+
+    // ══ Phase 25: purge → re-initialize → search (H-6) ════════════════════════
+    // diagnostic-v10 §5 "purge → 재초기화" gap: purge_index must unmount the
+    // project (dispose watcher/worker-pool/dbManager + null engine fields) so a
+    // following initialize_project rebuilds a LIVE engine — not a zombie context
+    // whose closed DB handle yields "database connection is not open" errors.
+    banner('Phase 25: purge_index → initialize_project → search_symbols (H-6)');
+    {
+        const beforeHash = wm.getActiveContext()?.projectHash;
+
+        // 25a. Purge the live index (confirm: true triggers onPurge -> unmount).
+        const purgeRes = await runTool('PURGE_LIVE', 'purge_index', { confirm: true }, deps);
+
+        // 25b. The context's engine fields must be nulled (no zombie).
+        {
+            const ctxAfter = wm.getContextByHash(beforeHash);
+            const cleaned = !!ctxAfter
+                && ctxAfter.dbManager == null
+                && ctxAfter.graphEngine == null
+                && ctxAfter.updatePipeline == null
+                && ctxAfter.workerPool == null;
+            console.log(cleaned
+                ? ok('PURGE_UNMOUNT_CLEAN — engine fields nulled after purge (no zombie context)')
+                : fail(`PURGE_UNMOUNT_CLEAN — engine fields not fully cleared: dbManager=${ctxAfter?.dbManager}`));
+            results.push({ label: 'PURGE_UNMOUNT_CLEAN', toolName: 'purge_index', status: cleaned ? 'PASS' : 'FAIL', ms: 0 });
+        }
+
+        // 25c. Re-initialize the same project — must pass the dbManager guard and
+        // fully re-index (this would silently no-op against a zombie context).
+        const reinitRes = await runTool('REINIT_AFTER_PURGE', 'initialize_project', { path: ROOT, mode: 'current' }, deps);
+
+        // 25d. search_symbols must work correctly against the rebuilt engine.
+        if (reinitRes && !reinitRes.isError) {
+            const reCtx = wm.getActiveContext();
+            const liveDb = !!reCtx?.dbManager && reCtx.dbManager.getDb().open === true;
+            console.log(liveDb
+                ? ok('REINIT_LIVE_DB — rebuilt engine has a live, open DB handle')
+                : fail('REINIT_LIVE_DB — rebuilt context has no live DB handle'));
+            results.push({ label: 'REINIT_LIVE_DB', toolName: 'initialize_project', status: liveDb ? 'PASS' : 'FAIL', ms: 0 });
+
+            const reSearch = await runTool('SEARCH_AFTER_REINIT', 'search_symbols', { query: 'WorkspaceManager', limit: 5 }, deps);
+            const found = reSearch && !reSearch.isError && (reSearch.content?.[0]?.text ?? '').length > 0;
+            if (!found) {
+                console.log(fail('SEARCH_AFTER_REINIT — search returned empty/error after re-init'));
+            }
+        } else {
+            console.log(fail('REINIT_AFTER_PURGE — re-initialization failed; cannot verify search'));
+        }
+
+        void purgeRes;
+    }
+
+    // ══ Phase 26: IPC 2-process e2e (C-3 / H-8 / H-1) ═════════════════════════
+    // diagnostic-v10 §5 "IPC 2-프로세스 e2e" gap. Spawns real separate
+    // Host/Terminal/attacker OS processes over a real 127.0.0.1 socket:
+    //   - malicious echo client without the HMAC nonce is rejected (C-3)
+    //   - sustained > 1 MB traffic over many small messages stays connected (H-8)
+    //   - killing the Host process triggers Terminal disconnect/failover (H-1)
+    banner('Phase 26: IPC 2-process e2e (echo-auth reject / 1MB+ traffic / host-kill failover)');
+    await runChildPhase('IPC_E2E', process.execPath, [path.join(ROOT, 'scripts/ipc-e2e-test.js')], { timeoutMs: 90_000 });
+
+    // ══ Phase 27: Docker build/startup smoke (C-1) ════════════════════════════
+    // diagnostic-v10 §5 "Docker 빌드/기동" gap. Wired here so the full deploy
+    // path (image build + boot + /healthz 200) is exercised when a Docker daemon
+    // is present. Gracefully SKIPs (does NOT fail) when Docker is unavailable —
+    // docker-smoke.sh prints "SKIP" and exits 0 in that case.
+    banner('Phase 27: Docker build + startup smoke (skips gracefully without Docker)');
+    await runChildPhase('DOCKER_SMOKE', 'bash', [path.join(ROOT, 'scripts/docker-smoke.sh')], { timeoutMs: 600_000 });
 
     printSummary();
     if (_workerPool) _workerPool.dispose();

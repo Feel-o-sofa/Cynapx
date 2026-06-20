@@ -46,18 +46,31 @@ export class MarkdownParser implements CodeParser {
             const title = header[1].trim();
             const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)/g, '');
             const qname = `${fileQname}#${slug}`;
+            // Capture the section body: all lines until the next H1/H2 or EOF.
+            const bodyLines: string[] = [];
+            let j = i + 1;
+            while (j < lines.length) {
+                const nextLine = lines[j];
+                if (nextLine.match(/^#{1,2}\s/)) break;  // stop at next H1/H2
+                bodyLines.push(nextLine);
+                j++;
+            }
+            const bodyText = bodyLines.join('\n').trim();
+
             nodes.push({
                 qualified_name: qname,
                 symbol_type: 'section',
                 language: 'markdown',
                 file_path: filePath,
                 start_line: i + 1,
-                end_line: i + 1,
+                end_line: j,  // section spans until the next header (or EOF)
                 visibility: 'public',
                 is_generated: false,
                 last_updated_commit: commit,
                 version,
-                signature: title
+                signature: title,
+                // Store the non-empty body as docstring (max 2000 chars to avoid bloat)
+                docstring: bodyText ? bodyText.slice(0, 2000) : undefined
             });
             edges.push({ from_qname: fileQname, to_qname: qname, edge_type: 'contains' as const, dynamic: false });
         }

@@ -35,8 +35,11 @@ src-native/index.d.ts
 *temp_*
 *verify_*
 *coverage_*
-scripts/
+scripts/*
 !scripts/integration-test.js
+!scripts/build-copy.js
+!scripts/docker-smoke.sh
+!scripts/ipc-e2e-test.js
 switch-env.js
 
 # AI Agent Context & Internal Docs (Exempt from Repo)

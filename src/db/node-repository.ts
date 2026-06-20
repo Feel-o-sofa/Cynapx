@@ -3,11 +3,22 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { Database } from 'better-sqlite3';
+import { Database, Statement } from 'better-sqlite3';
 import { CodeNode, CodeEdge, SymbolType, Visibility } from '../types';
 
 /** Raw SQLite row from the nodes table (all columns, JSON fields as strings) */
 type NodeRow = Record<string, unknown>;
+
+/**
+ * A-4: extracts the bare symbol name from a qualified_name. qualified_name uses
+ * a single '#' separator (`${file}#${parts}`), so the bare name is everything
+ * after the first '#'. Names with no '#' (e.g. `package:foo`, file nodes) are
+ * returned unchanged. This mirrors the SQL backfill in migration 2 → 3.
+ */
+export function extractSymbolName(qualifiedName: string): string {
+    const idx = qualifiedName.indexOf('#');
+    return idx === -1 ? qualifiedName : qualifiedName.slice(idx + 1);
+}
 
 /**
  * Safely parses a JSON string, returning a fallback value on parse failure or empty input.
@@ -25,31 +36,98 @@ function safeJsonParse<T>(value: string | null | undefined, fallback: T): T {
  * NodeRepository handles CRUD operations for the 'nodes' table.
  */
 export class NodeRepository {
+    // A-5: cached prepared statements for hot paths. better-sqlite3 re-uses a
+    // compiled statement across calls, so caching avoids re-parsing SQL on every
+    // createNode()/replaceTags()/etc. Mirrors EdgeRepository's pattern.
+    private _upsertStmt?: Statement;
+    private _deleteTagsStmt?: Statement;
+    private _insertTagStmt?: Statement;
+    private _updateTagsStmt?: Statement;
+    private _bySymbolNameStmt?: Statement;
+    private _updateClusterStmt?: Statement;
+
     constructor(public db: Database) { }
 
     public getDb(): Database {
         return this.db;
     }
 
+    /**
+     * A-5/A-11: drops all cached prepared statements so they get re-prepared
+     * against the current schema. Call after running migrations on a database
+     * whose NodeRepository was constructed beforehand (the symbol_name column
+     * added by migration 2 → 3 changes the createNode() statement shape).
+     */
+    public invalidateStatementCache(): void {
+        this._upsertStmt = undefined;
+        this._deleteTagsStmt = undefined;
+        this._insertTagStmt = undefined;
+        this._updateTagsStmt = undefined;
+        this._bySymbolNameStmt = undefined;
+        this._updateClusterStmt = undefined;
+    }
+
     public createNode(node: CodeNode): number {
-        const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO nodes (
-        qualified_name, symbol_type, language, file_path, start_line, end_line,
+        // A-1: explicit UPSERT on qualified_name instead of INSERT OR REPLACE.
+        // INSERT OR REPLACE deletes the conflicting row and inserts a new one,
+        // which (a) allocates a fresh id — silently breaking every edge in
+        // other files that referenced the old id via the FK ON DELETE CASCADE,
+        // and (b) fires nodes_ad/nodes_ai instead of nodes_au. ON CONFLICT DO
+        // UPDATE keeps the existing id and fires nodes_au (which keeps
+        // fts_symbols in sync), so cross-file edges and the FTS index survive a
+        // re-index of the same symbol. RETURNING id works for both the INSERT
+        // and the UPDATE branch (lastInsertRowid is not set on a pure UPDATE).
+        // A-5: cache the upsert statement across calls.
+        if (!this._upsertStmt) {
+            this._upsertStmt = this.db.prepare(`
+      INSERT INTO nodes (
+        qualified_name, symbol_name, symbol_type, language, file_path, start_line, end_line,
         visibility, is_generated, last_updated_commit, version,
         checksum, modifiers, signature, return_type, field_type,
         loc, cyclomatic, fan_in, fan_out, fan_in_dynamic, fan_out_dynamic,
-        cluster_id, remote_project_path, tags, history
+        cluster_id, remote_project_path, tags, history, docstring
       ) VALUES (
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?
+        ?, ?, ?, ?, ?
       )
+      ON CONFLICT(qualified_name) DO UPDATE SET
+        symbol_name = excluded.symbol_name,
+        symbol_type = excluded.symbol_type,
+        language = excluded.language,
+        file_path = excluded.file_path,
+        start_line = excluded.start_line,
+        end_line = excluded.end_line,
+        visibility = excluded.visibility,
+        is_generated = excluded.is_generated,
+        last_updated_commit = excluded.last_updated_commit,
+        version = excluded.version,
+        checksum = excluded.checksum,
+        modifiers = excluded.modifiers,
+        signature = excluded.signature,
+        return_type = excluded.return_type,
+        field_type = excluded.field_type,
+        loc = excluded.loc,
+        cyclomatic = excluded.cyclomatic,
+        fan_in = excluded.fan_in,
+        fan_out = excluded.fan_out,
+        fan_in_dynamic = excluded.fan_in_dynamic,
+        fan_out_dynamic = excluded.fan_out_dynamic,
+        cluster_id = excluded.cluster_id,
+        remote_project_path = excluded.remote_project_path,
+        tags = excluded.tags,
+        history = excluded.history,
+        docstring = excluded.docstring
+      RETURNING id
     `);
+        }
+        const stmt = this._upsertStmt;
 
-        const result = stmt.run(
+        const row = stmt.get(
             node.qualified_name,
+            extractSymbolName(node.qualified_name),
             node.symbol_type,
             node.language,
             node.file_path,
@@ -73,10 +151,44 @@ export class NodeRepository {
             node.cluster_id || null,
             node.remote_project_path || null,
             node.tags ? JSON.stringify(node.tags) : null,
-            node.history ? JSON.stringify(node.history) : null
-        );
+            node.history ? JSON.stringify(node.history) : null,
+            node.docstring || null
+        ) as { id: number };
 
-        return result.lastInsertRowid as number;
+        const nodeId = row.id;
+
+        // A-2/A-1: keep node_tags in sync with the nodes.tags JSON column. On a
+        // DO UPDATE branch the node id is preserved, so stale tags from a prior
+        // index of this symbol would otherwise remain — clear them first, then
+        // re-insert the current tag set.
+        if (!this._deleteTagsStmt) this._deleteTagsStmt = this.db.prepare('DELETE FROM node_tags WHERE node_id = ?');
+        this._deleteTagsStmt.run(nodeId);
+        if (node.tags && node.tags.length > 0) {
+            if (!this._insertTagStmt) this._insertTagStmt = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
+            for (const tag of node.tags) {
+                this._insertTagStmt.run(nodeId, tag);
+            }
+        }
+
+        return nodeId;
+    }
+
+    /**
+     * M2: Replaces a node's tags, keeping the node_tags mirror table in sync
+     * with the nodes.tags JSON column (invariant established by migration 2).
+     * Callers performing bulk updates should wrap calls in a transaction.
+     */
+    public replaceTags(nodeId: number, tags: string[]): void {
+        if (!this._updateTagsStmt) this._updateTagsStmt = this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?');
+        this._updateTagsStmt.run(JSON.stringify(tags), nodeId);
+        if (!this._deleteTagsStmt) this._deleteTagsStmt = this.db.prepare('DELETE FROM node_tags WHERE node_id = ?');
+        this._deleteTagsStmt.run(nodeId);
+        if (tags.length > 0) {
+            if (!this._insertTagStmt) this._insertTagStmt = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
+            for (const tag of tags) {
+                this._insertTagStmt.run(nodeId, tag);
+            }
+        }
     }
 
     public getNodeById(id: number): CodeNode | null {
@@ -99,8 +211,28 @@ export class NodeRepository {
     }
 
     public deleteNodesByFilePath(filePath: string): void {
+        // O-9: node_embeddings is a vec0 virtual table without FK support, so
+        // orphaned embedding rows aren't cleaned up by ON DELETE CASCADE.
+        const ids = this.getNodeIdsByFilePath(filePath);
+        this.purgeEmbeddings(ids);
         const stmt = this.db.prepare('DELETE FROM nodes WHERE file_path = ?');
         stmt.run(filePath);
+    }
+
+    /**
+     * Removes node_embeddings rows for the given node ids. node_embeddings
+     * is a vec0 virtual table that may not exist in environments where the
+     * sqlite-vec extension isn't loaded (e.g. in-memory test databases) —
+     * "no such table" is silently ignored in that case.
+     */
+    public purgeEmbeddings(nodeIds: number[]): void {
+        if (nodeIds.length === 0) return;
+        try {
+            const placeholders = nodeIds.map(() => '?').join(',');
+            this.db.prepare(`DELETE FROM node_embeddings WHERE rowid IN (${placeholders})`).run(...nodeIds);
+        } catch (err) {
+            if (!(err instanceof Error) || !err.message.includes('no such table')) throw err;
+        }
     }
 
     public getNodesByFilePath(filePath: string): CodeNode[] {
@@ -121,9 +253,20 @@ export class NodeRepository {
         return rows.map(row => this.mapRowToNode(row));
     }
 
+    /**
+     * Returns the total node count via a single COUNT(*) probe, without
+     * materializing the node array. Used by the count-first clustering guard
+     * (M-4, Phase 15-1) to short-circuit before getAllNodes() loads the full set.
+     */
+    public countNodes(): number {
+        const row = this.db.prepare('SELECT COUNT(*) AS n FROM nodes').get() as { n: number };
+        return row.n;
+    }
+
     public updateCluster(id: number, clusterId: number | null): void {
-        const stmt = this.db.prepare('UPDATE nodes SET cluster_id = ? WHERE id = ?');
-        stmt.run(clusterId, id);
+        // A-5: cached — persistClusters() calls this once per clustered node.
+        if (!this._updateClusterStmt) this._updateClusterStmt = this.db.prepare('UPDATE nodes SET cluster_id = ? WHERE id = ?');
+        this._updateClusterStmt.run(clusterId, id);
     }
 
     public updateMetrics(id: number, metrics: { loc?: number, cyclomatic?: number, fan_in?: number, fan_out?: number, fan_in_dynamic?: number, fan_out_dynamic?: number }): void {
@@ -209,10 +352,82 @@ export class NodeRepository {
         }
     }
 
+    /**
+     * A-3/A-2: Finds dead-code candidates for a given confidence tier.
+     * Moved from OptimizationEngine.findDeadCode() and rewritten to use the
+     * node_tags JOIN table instead of `tags LIKE '%...%'` on the JSON column.
+     *
+     * Common filter (applied to all tiers):
+     *   - fan_in = 0
+     *   - Exclude files, tests, packages, constructors
+     *   - Exclude entrypoints and abstract symbols (via node_tags)
+     *   - Exclude methods whose containing class implements an interface (interface dispatch)
+     *   - Exclude methods whose containing class inherits from a parent (polymorphic override)
+     *
+     * HIGH   : private symbols — likely genuine dead code
+     * MEDIUM : public symbols (non class/interface/function) — internal but exposed
+     * LOW    : public symbols (non class/interface/function) without trait:internal — may be external API surface
+     */
+    public findDeadCodeCandidates(tier: 'high' | 'medium' | 'low'): CodeNode[] {
+        const COMMON_FILTER = `
+            WHERE n.fan_in = 0
+            AND n.symbol_type NOT IN ('file', 'test', 'package')
+            AND n.qualified_name NOT LIKE '%#constructor'
+            AND NOT EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = 'trait:entrypoint')
+            AND NOT EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = 'trait:abstract')
+            AND NOT EXISTS (
+                SELECT 1 FROM edges cont
+                JOIN edges impl ON impl.from_id = cont.from_id
+                WHERE cont.to_id = n.id
+                AND cont.edge_type = 'contains'
+                AND impl.edge_type = 'implements'
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM edges cont
+                JOIN edges inh ON inh.from_id = cont.from_id
+                WHERE cont.to_id = n.id
+                AND cont.edge_type = 'contains'
+                AND inh.edge_type = 'inherits'
+            )
+        `;
+
+        let tierFilter: string;
+        switch (tier) {
+            case 'high':
+                tierFilter = `AND n.visibility = 'private'`;
+                break;
+            case 'medium':
+                tierFilter = `AND n.visibility = 'public' AND n.symbol_type NOT IN ('class', 'interface', 'function')`;
+                break;
+            case 'low':
+                tierFilter = `AND n.visibility = 'public'
+                    AND n.symbol_type NOT IN ('class', 'interface', 'function')
+                    AND NOT EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = 'trait:internal')`;
+                break;
+        }
+
+        const rows = this.db.prepare(`SELECT n.* FROM nodes n ${COMMON_FILTER} ${tierFilter}`).all() as NodeRow[];
+        return rows.map(row => this.mapRowToNode(row));
+    }
+
     public findNodesBySymbolName(name: string): CodeNode[] {
-        const stmt = this.db.prepare("SELECT * FROM nodes WHERE qualified_name = ? COLLATE NOCASE OR qualified_name LIKE ? COLLATE NOCASE");
-        // Match exact name (if global) or suffixed name
-        const rows = stmt.all(name, `%#${name}`);
+        // A-4: probe the indexed symbol_name column (the bare name after '#'),
+        // replacing the unindexable `qualified_name LIKE '%#name'` full scan.
+        // createNode() sets symbol_name = extractSymbolName(qualified_name), so a
+        // GLOBAL symbol (no '#') has symbol_name == qualified_name — a single
+        // equality probe on symbol_name therefore covers both suffixed and
+        // global forms, and an OR on qualified_name would be redundant.
+        //
+        // idx_nodes_symbol_name is declared COLLATE NOCASE so this
+        // case-insensitive equality resolves to an indexed SEARCH rather than a
+        // full SCAN. A `... COLLATE NOCASE` query against a BINARY index cannot
+        // use the index, so the index collation MUST match the query collation.
+        if (!this._bySymbolNameStmt) {
+            this._bySymbolNameStmt = this.db.prepare(
+                'SELECT * FROM nodes WHERE symbol_name = ? COLLATE NOCASE'
+            );
+        }
+        const rows = this._bySymbolNameStmt.all(name);
         return rows.map(row => this.mapRowToNode(row));
     }
 
@@ -243,7 +458,8 @@ export class NodeRepository {
             cluster_id: row.cluster_id,
             remote_project_path: row.remote_project_path,
             tags: row.tags ? safeJsonParse<string[]>(row.tags, []) : undefined,
-            history: row.history ? safeJsonParse<{ hash: string; message: string; author: string; date: string }[]>(row.history, []) : undefined
+            history: row.history ? safeJsonParse<{ hash: string; message: string; author: string; date: string }[]>(row.history, []) : undefined,
+            docstring: row.docstring ?? undefined
         };
     }
 }

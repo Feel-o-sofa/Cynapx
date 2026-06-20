@@ -1,0 +1,16 @@
+# P13-1 (C-1): keep the Docker build context minimal.
+# The build needs: package.json, package-lock.json, tsconfig.json,
+# src/, scripts/build-copy.js, schema/.
+node_modules
+dist
+.git
+.github
+agent_docs
+tests
+coverage
+src-native/target
+src-native/node_modules
+*.log
+*.tgz
+Dockerfile
+.dockerignore

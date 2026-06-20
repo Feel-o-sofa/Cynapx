@@ -4,7 +4,10 @@
  * See LICENSE in the project root for license information.
  */
 import { Database } from 'better-sqlite3';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('VectorRepo');
 export interface VectorSearchResult {
     id: number;
     distance: number;
@@ -26,7 +29,7 @@ export class VectorRepository {
             if (schema && schema.sql) {
                 const match = schema.sql.match(/float\[(\d+)\]/);
                 if (match && parseInt(match[1]) !== embedding.length) {
-                    console.error(`[VectorRepo] Dimension mismatch: DB expects ${match[1]}, query has ${embedding.length}. Skipping vector search.`);
+                    log.error(`[VectorRepo] Dimension mismatch: DB expects ${match[1]}, query has ${embedding.length}. Skipping vector search.`);
                     return [];
                 }
             }
@@ -46,5 +49,20 @@ export class VectorRepository {
         // Note: ORDER BY is implied by distance in vec0
         const rows = stmt.all(buffer, limit) as VectorSearchResult[];
         return rows;
+    }
+
+    /**
+     * Retrieves a stored embedding vector by node id (rowid).
+     * Returns null if no embedding exists for the node or on any error
+     * (e.g. the node_embeddings table does not exist).
+     */
+    public getEmbedding(nodeId: number): number[] | null {
+        try {
+            const row = this.db.prepare('SELECT embedding FROM node_embeddings WHERE rowid = ?').get(nodeId) as { embedding: Buffer } | undefined;
+            if (!row || !row.embedding) return null;
+            return Array.from(new Float32Array(row.embedding.buffer, row.embedding.byteOffset, row.embedding.byteLength / 4));
+        } catch {
+            return null;
+        }
     }
 }

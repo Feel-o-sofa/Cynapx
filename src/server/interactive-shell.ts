@@ -18,7 +18,7 @@ export class InteractiveShell {
         'get_remediation_strategy', 'export_graph', 're_tag_project',
         'discover_latent_policies', 'check_consistency', 'backfill_history',
         'purge_index', 'initialize_project', 'get_setup_context',
-        'get_callers', 'get_callees', 'get_related_tests', 'perform_clustering',
+        'get_callers', 'get_callees', 'get_related_tests',
         'get_risk_profile', 'get_hotspots'
     ];
 

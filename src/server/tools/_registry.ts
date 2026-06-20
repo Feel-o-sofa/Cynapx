@@ -24,11 +24,20 @@ import { purgeIndexHandler } from './purge-index.js';
 import { reTagProjectHandler } from './re-tag-project.js';
 import { backfillHistoryHandler } from './backfill-history.js';
 import { discoverLatentPoliciesHandler } from './discover-latent-policies.js';
+import { getProjectOverviewHandler } from './get-project-overview.js';
+import { getRecentChangesHandler } from './get-recent-changes.js';
+import { getSymbolHistoryHandler } from './get-symbol-history.js';
+import { addAnnotationHandler } from './add-annotation.js';
+import { getAnnotationsHandler } from './get-annotations.js';
+import { getArchitectureHandler } from './get-architecture.js';
+import { findSimilarSymbolsHandler } from './find-similar-symbols.js';
 
 export const toolRegistry = new Map<string, ToolHandler>([
     ['get_setup_context', getSetupContextHandler],
+    ['get_project_overview', getProjectOverviewHandler],
     ['initialize_project', initializeProjectHandler],
     ['search_symbols', searchSymbolsHandler],
+    ['find_similar_symbols', findSimilarSymbolsHandler],
     ['get_symbol_details', getSymbolDetailsHandler],
     ['analyze_impact', analyzeImpactHandler],
     ['get_callers', getCallersHandler],
@@ -46,4 +55,9 @@ export const toolRegistry = new Map<string, ToolHandler>([
     ['re_tag_project', reTagProjectHandler],
     ['backfill_history', backfillHistoryHandler],
     ['discover_latent_policies', discoverLatentPoliciesHandler],
+    ['get_recent_changes', getRecentChangesHandler],
+    ['get_symbol_history', getSymbolHistoryHandler],
+    ['add_annotation', addAnnotationHandler],
+    ['get_annotations', getAnnotationsHandler],
+    ['get_architecture', getArchitectureHandler],
 ]);

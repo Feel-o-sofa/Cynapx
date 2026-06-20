@@ -11,6 +11,16 @@ import * as crypto from 'crypto';
 import rateLimit from 'express-rate-limit';
 import { z, ZodSchema } from 'zod';
 import swaggerUi from 'swagger-ui-express';
+// P14-1 (N-1): the HTTP surface here is our own express@4 app (see `express`
+// import above) wired to the SDK's transport-agnostic Server via
+// StreamableHTTPServerTransport / Stdio. The SDK ALSO ships a hono + express@5
+// based reference server (`@hono/node-server`, hono, express@5) which carries
+// several MODERATE advisories — but Cynapx never imports or loads that server,
+// so those transitive packages are unreachable at runtime. They are pinned to
+// patched versions via package.json `overrides` (fast-uri/qs) where a fix
+// exists; hono is overridden to a patched line as well. Upstream tracking:
+// modelcontextprotocol/typescript-sdk#2042. Do not switch to the SDK's
+// hono/express@5 server without re-running the audit gate.
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { Server as SdkMcpServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { TraversalResult } from '../graph/graph-engine';
@@ -22,6 +32,40 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { getCentralStorageDir } from '../utils/paths';
+import { getVersion } from '../utils/version';
+import { Logger } from '../utils/logger';
+
+const log = new Logger('API');
+
+// O-12: redact sensitive fields before logging request payloads.
+// L4: standalone `auth` keys (underscore-delimited, so `author` is NOT
+// redacted) plus passwd/credential/cookie/session variants.
+const SENSITIVE_FIELD_PATTERN = /(^|_)auth($|_)|token|secret|passwd|password|apikey|api_key|authorization|credential|cookie|session/i;
+
+// Exported for direct testing (M5/O-12).
+export function redactSensitiveFields(value: unknown): unknown {
+    if (Array.isArray(value)) {
+        return value.map(redactSensitiveFields);
+    }
+    if (value && typeof value === 'object') {
+        const result: Record<string, unknown> = {};
+        for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+            result[key] = SENSITIVE_FIELD_PATTERN.test(key) ? '[REDACTED]' : redactSensitiveFields(val);
+        }
+        return result;
+    }
+    return value;
+}
+
+// A-3: constant-time string comparison. Hashes both inputs to a fixed-length
+// SHA-256 digest so crypto.timingSafeEqual never sees mismatched buffer lengths
+// (it throws otherwise) and no early length check leaks timing information.
+// Exported for direct unit testing.
+export function timingSafeEqualStr(a: string, b: string): boolean {
+    const da = crypto.createHash('sha256').update(a, 'utf8').digest();
+    const db = crypto.createHash('sha256').update(b, 'utf8').digest();
+    return crypto.timingSafeEqual(da, db);
+}
 
 // --- Zod Schemas (M-4) ---
 const SymbolRefSchema = z.object({
@@ -92,12 +136,42 @@ const analyzeLimiter = rateLimit({
 interface McpSession {
     transport: StreamableHTTPServerTransport;
     sdkServer: SdkMcpServer;
+    // A-2: last time this session was touched (ms epoch) — drives idle eviction.
+    lastAccess: number;
+}
+
+// A-2: idle TTL and hard cap for the MCP session map. Without these the map
+// grew unbounded (a session is only removed on transport.onclose), so an
+// authenticated client sending fresh `mcp-session-id` headers could exhaust
+// memory. Sessions idle longer than the TTL are swept; once the cap is hit new
+// sessions are rejected.
+const MCP_SESSION_IDLE_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const MCP_SESSION_MAX = 100;
+const MCP_SESSION_SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+
+// A-2: mask a sessionId for logging — keep only a short prefix so logs remain
+// correlatable without persisting the full credential-equivalent value.
+// Exported for direct unit testing.
+export function maskSessionId(id: string): string {
+    if (!id) return id;
+    return id.length <= 8 ? '***' : `${id.slice(0, 8)}***`;
+}
+
+// A-2: redact the `sessionId` query parameter out of a request URL before
+// logging. The sessionId doubles as a bearer-equivalent for GET /mcp reconnects
+// (see SEC-H-1), so it must not be written to log aggregators.
+// Exported for direct unit testing.
+export function maskSessionInUrl(url: string): string {
+    return url.replace(/([?&]sessionId=)([^&]+)/gi, (_m, p1, val) => `${p1}${maskSessionId(decodeURIComponent(val))}`);
 }
 
 export class ApiServer {
     private app: express.Application;
     private mcpServer?: McpServer;
     private mcpSessions: Map<string, McpSession> = new Map();
+    // A-2: periodic idle-session sweeper (mirrors HealthMonitor's setInterval
+    // pattern). unref()'d so it never keeps the process alive on its own.
+    private sessionSweeper?: NodeJS.Timeout;
 
     constructor(private httpsOptions?: https.ServerOptions) {
         this.app = express();
@@ -106,6 +180,33 @@ export class ApiServer {
         this.app.use(globalLimiter);
         this.setupMiddleware();
         this.setupRoutes();
+        this.startSessionSweeper();
+    }
+
+    // A-2: evict MCP sessions idle longer than the TTL. Runs on a timer and is
+    // also invoked lazily from handleMcp() so eviction happens even if the timer
+    // is unref()'d and the loop is otherwise idle.
+    private sweepIdleSessions(now: number = Date.now()): void {
+        for (const [sid, session] of this.mcpSessions) {
+            if (now - session.lastAccess > MCP_SESSION_IDLE_TTL_MS) {
+                this.mcpSessions.delete(sid);
+                try { session.transport.close?.(); } catch { /* ignore */ }
+                session.sdkServer.close().catch(() => {});
+            }
+        }
+    }
+
+    private startSessionSweeper(): void {
+        this.sessionSweeper = setInterval(() => this.sweepIdleSessions(), MCP_SESSION_SWEEP_INTERVAL_MS);
+        this.sessionSweeper.unref?.();
+    }
+
+    // Stop the sweeper — used by tests and graceful shutdown.
+    public stopSessionSweeper(): void {
+        if (this.sessionSweeper) {
+            clearInterval(this.sessionSweeper);
+            this.sessionSweeper = undefined;
+        }
     }
 
     private setupMiddleware(): void {
@@ -115,8 +216,18 @@ export class ApiServer {
             AUTH_TOKEN = envToken;
         } else {
             const generatedToken = crypto.randomBytes(32).toString('hex');
-            console.error('[cynapx] WARNING: No KNOWLEDGE_TOOL_TOKEN set. Generated temporary token:', generatedToken);
             AUTH_TOKEN = generatedToken;
+
+            // Persist the generated token to a file (not stderr) so it isn't
+            // captured by log aggregators. Permissions restrict it to the owner.
+            const tokenFile = path.join(getCentralStorageDir(), 'api-token');
+            try {
+                fs.mkdirSync(path.dirname(tokenFile), { recursive: true });
+                fs.writeFileSync(tokenFile, generatedToken, { encoding: 'utf8', mode: 0o600 });
+                log.warn('No KNOWLEDGE_TOOL_TOKEN set — generated a temporary token', { tokenFile });
+            } catch (err) {
+                log.warn('No KNOWLEDGE_TOOL_TOKEN set — failed to persist generated token', { detail: String(err) });
+            }
         }
         
         // Advanced Request Logger Restoration
@@ -128,10 +239,11 @@ export class ApiServer {
             res.on('finish', () => {
                 const duration = Date.now() - start;
                 const status = res.statusCode;
-                console.error(`[${new Date().toISOString()}] ${method} ${url} from ${remoteAddr} - Status: ${status} (${duration}ms)`);
+                // A-2: mask the sessionId query param so it never lands in logs.
+                log.info('request', { method, url: maskSessionInUrl(url), remoteAddr, status, durationMs: duration });
                 if (method === 'POST' && body && Object.keys(body).length > 0) {
                     if (process.env.CYNAPX_LOG_PAYLOADS === '1') {
-                        console.error(`  Payload: ${JSON.stringify(body).substring(0, 200)}`);
+                        log.debug('request payload', { payload: JSON.stringify(redactSensitiveFields(body)).substring(0, 200) });
                     }
                 }
             });
@@ -140,6 +252,10 @@ export class ApiServer {
 
         this.app.use((req, res, next) => {
             if (req.path.startsWith('/api/docs')) return next();
+            // P13-1 (C-1/v9 A-8): /healthz is a liveness probe for Docker/k8s —
+            // it must be reachable without a Bearer token (it exposes no
+            // project data beyond readiness/version).
+            if (req.path === '/healthz' && req.method === 'GET') return next();
             if (req.path === '/mcp' && req.method === 'GET') {
                 // Allow if no-auth mode, or if a valid (known) sessionId is present
                 // (MCP Streamable HTTP uses sessionId for reconnection)
@@ -149,7 +265,12 @@ export class ApiServer {
                 // Otherwise fall through to auth check below
             }
             const authHeader = req.headers.authorization;
-            if (!authHeader || authHeader !== `Bearer ${AUTH_TOKEN}`) {
+            // A-3: constant-time Bearer comparison. We SHA-256 both the provided
+            // header and the expected value, then timingSafeEqual on the fixed-
+            // length (32-byte) digests. Hashing avoids timingSafeEqual throwing on
+            // length mismatch and avoids a length-based early exit leaking the
+            // token length via timing.
+            if (!authHeader || !timingSafeEqualStr(authHeader, `Bearer ${AUTH_TOKEN}`)) {
                 return res.status(401).json({ error_code: 'UNAUTHORIZED', message: 'Invalid or missing Bearer Token' });
             }
             next();
@@ -170,16 +291,22 @@ export class ApiServer {
     private setupRoutes(): void {
         // P10-L-4: Health check endpoint — no auth required, used by Docker/k8s probes
         this.app.get('/healthz', (req: Request, res: Response) => {
-            const ctx = this.mcpServer?.workspaceManager?.getActiveContext?.();
+            // P13-9: a liveness probe must never 500 — if the workspace lookup
+            // throws transiently (e.g. mid-failover), degrade to "pending" (503)
+            // rather than letting the error bubble to the 500 handler, which
+            // would make orchestrators flap the instance unnecessarily.
+            let ctx: EngineContext | null | undefined;
+            try {
+                ctx = this.mcpServer?.workspaceManager?.getActiveContext?.();
+            } catch {
+                ctx = undefined;
+            }
             const dbOk = !!(ctx?.dbManager);
-            res.json({
+            // v9 A-8 잔존 (P13-1): report 503 while the engine is still pending
+            // so orchestrators don't route traffic to a not-yet-ready instance.
+            res.status(dbOk ? 200 : 503).json({
                 status: dbOk ? 'ok' : 'pending',
-                version: ((): string => {
-                    try {
-                        const pkgPath = path.join(__dirname, '..', '..', 'package.json');
-                        return JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version ?? 'unknown';
-                    } catch { return 'unknown'; }
-                })(),
+                version: getVersion(),
                 indexed: dbOk,
                 project: ctx?.projectPath ?? null,
                 uptime: Math.floor(process.uptime()),
@@ -205,30 +332,72 @@ export class ApiServer {
 
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         this.app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
-            console.error('[API] Unhandled error:', err?.message ?? err);
+            log.error('Unhandled error', { detail: err?.message ?? String(err) });
             if (!res.headersSent) {
                 res.status(500).json({ error_code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.' });
             }
         });
     }
 
+    // M-1 (Phase 15-3) — session-id vs. stateless transport design memo.
+    //
+    // handleMcp() below is built on the MCP 2025-11-25 session model: it derives a
+    // `sessionId` from `?sessionId=` / the `mcp-session-id` header (else mints a
+    // UUID), keys a per-session `mcpSessions` map (SEC-H-1: one fresh
+    // SdkMcpServer + StreamableHTTPServerTransport pair per session), and supports
+    // reconnection by re-resolving the same `sessionId`. The TTL/cap/sweep
+    // hardening from earlier phases (A-2) all hangs off this session key.
+    //
+    // The 2026-07-28 spec RC moves toward a STATELESS transport: it removes the
+    // `initialize`/`initialized` handshake and the `Mcp-Session-Id` header, so any
+    // request can land on any server instance (client identity travels in each
+    // request's `_meta` instead of a sticky session). That directly conflicts with
+    // the session-keyed map, reconnection logic, and the `mcp-session-id`/sessionId
+    // plumbing here — under a stateless transport there is no session id to key on,
+    // and the per-session transport pairing / idle-sweep machinery would need to be
+    // redesigned (or removed) at the transport layer.
+    //
+    // NO code change now: the CURRENT SDK (`latest` is 1.x) is still session-id
+    // based and the stateless RC is NOT yet reflected in it, so this session model
+    // remains correct. This memo flags handleMcp() as the transport-layer redesign
+    // point for the SDK v2 upgrade. Verdict: DEFERRED until SDK v2 stable.
+    // Refs:
+    //   - 2026-07-28 RC: https://blog.modelcontextprotocol.io/posts/2026-07-28-release-candidate/
+    //   - SEP-1686 (Tasks): https://github.com/modelcontextprotocol/modelcontextprotocol/issues/1686
+    //   - typescript-sdk#2042: https://github.com/modelcontextprotocol/typescript-sdk/issues/2042
     private async handleMcp(req: Request, res: Response) {
         if (!this.mcpServer) return res.status(503).json({ error: "MCP Server not initialized" });
+
+        // A-2: opportunistically evict idle sessions on every /mcp request.
+        const now = Date.now();
+        this.sweepIdleSessions(now);
 
         const querySid = req.query.sessionId as string;
         const headerSid = req.headers['mcp-session-id'] as string;
         const sessionId = querySid || headerSid || crypto.randomUUID();
 
-        if (this.mcpSessions.has(sessionId)) {
-            await this.mcpSessions.get(sessionId)!.transport.handleRequest(req, res, req.body);
+        const existing = this.mcpSessions.get(sessionId);
+        if (existing) {
+            existing.lastAccess = now; // A-2: refresh idle timer on access
+            await existing.transport.handleRequest(req, res, req.body);
             return;
+        }
+
+        // A-2: enforce the hard cap. After sweeping idle sessions, if we are
+        // still at the limit, reject new session creation rather than growing
+        // unbounded. 429 (rather than 503) signals a retriable capacity limit.
+        if (this.mcpSessions.size >= MCP_SESSION_MAX) {
+            return res.status(429).json({
+                error_code: 'SESSION_LIMIT_REACHED',
+                message: 'Maximum number of concurrent MCP sessions reached. Retry later.'
+            });
         }
 
         // H-1: create a fresh SdkMcpServer per session — SDK only allows connect() once per instance
         // M-4: track both transport and sdkServer together; clean up both on session end
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => sessionId });
         const sdkServer = this.mcpServer.createSdkServerForSession();
-        const session: McpSession = { transport, sdkServer };
+        const session: McpSession = { transport, sdkServer, lastAccess: now };
         this.mcpSessions.set(sessionId, session);
 
         transport.onclose = () => {
@@ -441,16 +610,20 @@ export class ApiServer {
         };
     }
 
-    public start(port: number = 3000, bindAddress: string = '127.0.0.1'): void {
+    // P13-1: returns the server handle so callers (and tests) can close it.
+    public start(port: number = 3000, bindAddress: string = '127.0.0.1'): http.Server | https.Server {
         const server = this.httpsOptions ? https.createServer(this.httpsOptions, this.app) : http.createServer(this.app);
         server.listen(port, bindAddress, () => {
             const protocol = this.httpsOptions ? 'HTTPS' : 'HTTP';
-            console.log(`API Server listening on ${bindAddress}:${port} (${protocol})`);
+            log.info('API server listening', { bindAddress, port, protocol });
             // SEC-M-3: store port file in central storage dir (~/.cynapx/) instead of cwd to avoid git exposure
             try {
                 const portFile = path.join(getCentralStorageDir(), 'api-server.port');
-                fs.writeFileSync(portFile, String(port), { mode: 0o600 });
+                const addr = server.address();
+                const actualPort = typeof addr === 'object' && addr ? addr.port : port;
+                fs.writeFileSync(portFile, String(actualPort), { mode: 0o600 });
             } catch(e) {}
         });
+        return server;
     }
 }

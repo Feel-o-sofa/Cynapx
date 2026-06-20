@@ -50,6 +50,7 @@ vi.mock('../src/db/database', () => {
     const DatabaseManager = vi.fn(function (this: any) {
         this.getDb = mockGetDb;
         this.dispose = mockDispose;
+        this.onMigration = vi.fn();
     });
     return { DatabaseManager };
 });
@@ -412,6 +413,40 @@ describe('Process crash guard (bootstrap handlers)', () => {
 // ============================================================================
 // P10-H-1: Express global error handler
 // ============================================================================
+
+// ============================================================================
+// C-2: API auth token must not be logged to stderr
+// ============================================================================
+
+describe('ApiServer — generated auth token handling (C-2)', () => {
+    afterEach(() => {
+        delete process.env.KNOWLEDGE_TOOL_TOKEN;
+        const tokenFile = '/tmp/cynapx-test/api-token';
+        const fs = require('fs');
+        if (fs.existsSync(tokenFile)) fs.unlinkSync(tokenFile);
+    });
+
+    it('does not print the generated token to stderr, and persists it to a file instead', async () => {
+        delete process.env.KNOWLEDGE_TOOL_TOKEN;
+
+        const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+        const { ApiServer } = await import('../src/server/api-server');
+        new ApiServer();
+        errorSpy.mockRestore();
+
+        const fs = require('fs');
+        const tokenFile = '/tmp/cynapx-test/api-token';
+        expect(fs.existsSync(tokenFile)).toBe(true);
+        const token = fs.readFileSync(tokenFile, 'utf8');
+        expect(token).toMatch(/^[0-9a-f]{64}$/);
+
+        // None of the logged messages should contain the token value.
+        for (const call of errorSpy.mock.calls) {
+            const joined = call.map(String).join(' ');
+            expect(joined).not.toContain(token);
+        }
+    });
+});
 
 describe('ApiServer — global error handler', () => {
     it('registers a 4-argument error-handler middleware layer', async () => {

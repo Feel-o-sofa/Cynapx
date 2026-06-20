@@ -8,7 +8,7 @@ import * as path from 'path';
 import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
 import { MetadataRepository } from '../db/metadata-repository';
-import { GitService } from './git-service';
+import { GitService, DiffFailedError } from './git-service';
 import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
 import { WorkerPool } from './worker-pool';
 import { toCanonical } from '../utils/paths';
@@ -18,7 +18,10 @@ import { EmbeddingManager } from './embedding-manager';
 import { CodeNode } from '../types';
 import { GraphEngine } from '../graph/graph-engine';
 import { FullScanStrategy, IncrementalSyncStrategy } from './sync-strategies';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('UpdatePipeline');
 /**
  * UpdatePipeline manages the incremental update process for the knowledge graph.
  */
@@ -58,13 +61,15 @@ export class UpdatePipeline {
         await previousLock;
 
         try {
-            // Wrap the entire 5-pass propagation + persist in a single atomic
-            // transaction.  better-sqlite3 is fully synchronous, so no await /
-            // setImmediate is needed (or permitted) inside the transaction body.
+            // A-4: dirty-set worklist propagation. Wrap baseline tagging +
+            // propagation + persist in a single atomic transaction.
+            // better-sqlite3 is fully synchronous, so no await / setImmediate
+            // is needed (or permitted) inside the transaction body.
             const txn = this.db.transaction(() => {
                 const nodes = this.nodeRepo.getAllNodes();
 
-                // Pass 0: build node map with baseline tags
+                // Pass 0: build node map with baseline tags (full run seeds
+                // every node with its recomputed structural tags).
                 const nodeMap = new Map<number, { node: CodeNode, tags: string[] }>();
                 for (const node of nodes) {
                     if (node.id) {
@@ -73,41 +78,86 @@ export class UpdatePipeline {
                     }
                 }
 
-                // Passes 1-5: propagate tags through inheritance / implements edges
-                const MAX_PASSES = 5;
-                for (let i = 0; i < MAX_PASSES; i++) {
-                    let changed = false;
-                    for (const [id, data] of nodeMap.entries()) {
-                        const outgoing = this.edgeRepo.getOutgoingEdges(id).filter(
-                            e => e.edge_type === 'inherits' || e.edge_type === 'implements'
-                        );
+                // Build the propagation adjacency once with a single edge scan
+                // (previously: one getOutgoingEdges() query per node per pass).
+                //   parentsOf[child]   → nodes the child inherits / implements from
+                //   childrenOf[parent] → dependents to re-enqueue when parent tags change
+                const parentsOf = new Map<number, number[]>();
+                const childrenOf = new Map<number, number[]>();
+                for (const edge of this.edgeRepo.getEdgesByTypes(['inherits', 'implements'])) {
+                    if (!nodeMap.has(edge.from_id) || !nodeMap.has(edge.to_id)) continue;
+                    let parents = parentsOf.get(edge.from_id);
+                    if (!parents) { parents = []; parentsOf.set(edge.from_id, parents); }
+                    parents.push(edge.to_id);
+                    let children = childrenOf.get(edge.to_id);
+                    if (!children) { children = []; childrenOf.set(edge.to_id, children); }
+                    children.push(edge.from_id);
+                }
 
-                        for (const edge of outgoing) {
-                            const parentData = nodeMap.get(edge.to_id);
-                            if (parentData && parentData.tags.length > 0) {
-                                const newTags = StructuralTagger.mergeRoles(data.tags, parentData.tags);
-                                if (newTags.length !== data.tags.length || !newTags.every(t => data.tags.includes(t))) {
-                                    data.tags = newTags;
-                                    changed = true;
-                                }
+                // Dirty-set worklist: seed with every node that has at least one
+                // parent — only those can gain tags via propagation. When a node's
+                // tags change, re-enqueue only its direct children (the nodes whose
+                // merged tags depend on it) instead of rescanning the whole graph.
+                const queue: number[] = Array.from(parentsOf.keys());
+                const inQueue = new Set<number>(queue);
+                let head = 0; // index-based FIFO — avoids O(n) Array.shift()
+                // Safety bound against pathological merge oscillation; mirrors the
+                // old MAX_PASSES=5 cap at worklist granularity.
+                const maxIterations = Math.max(nodeMap.size, 1) * 5;
+                let iterations = 0;
+                while (head < queue.length) {
+                    if (++iterations > maxIterations) {
+                        log.error(`[UpdatePipeline] reTagAllNodes: worklist exceeded safety bound (${maxIterations}); stopping propagation early.`);
+                        break;
+                    }
+                    const id = queue[head++];
+                    inQueue.delete(id);
+                    const data = nodeMap.get(id)!;
+
+                    let merged = data.tags;
+                    for (const parentId of parentsOf.get(id)!) {
+                        const parentData = nodeMap.get(parentId);
+                        if (parentData && parentData.tags.length > 0) {
+                            merged = StructuralTagger.mergeRoles(merged, parentData.tags);
+                        }
+                    }
+
+                    if (!UpdatePipeline.sameTagSet(merged, data.tags)) {
+                        data.tags = merged;
+                        for (const childId of childrenOf.get(id) ?? []) {
+                            if (!inQueue.has(childId)) {
+                                inQueue.add(childId);
+                                queue.push(childId);
                             }
                         }
                     }
-                    if (!changed) break;
                 }
 
-                // Final: persist all updated tags
-                const updateStmt = this.db.prepare('UPDATE nodes SET tags = ? WHERE id = ?');
+                // Final: persist only nodes whose computed tags actually differ
+                // from what is stored. M2: replaceTags() keeps the node_tags
+                // mirror table in sync with nodes.tags (we're already inside
+                // one transaction here).
                 for (const [id, data] of nodeMap.entries()) {
-                    updateStmt.run(JSON.stringify(data.tags), id);
+                    if (!UpdatePipeline.sameTagSet(data.tags, data.node.tags ?? [])) {
+                        this.nodeRepo.replaceTags(id, data.tags);
+                    }
                 }
             });
             txn();
-        } catch (e) {
-            throw e;
         } finally {
             resolveLock!();
         }
+    }
+
+    /** Order-insensitive tag-set equality (A-4 dirty check). */
+    private static sameTagSet(a: string[], b: string[]): boolean {
+        const setA = new Set(a);
+        const setB = new Set(b);
+        if (setA.size !== setB.size) return false;
+        for (const t of setA) {
+            if (!setB.has(t)) return false;
+        }
+        return true;
     }
 
     public async mapHistoryToProject(): Promise<void> {
@@ -115,7 +165,7 @@ export class UpdatePipeline {
         const filePaths = this.nodeRepo.getAllFilePaths();
         if (filePaths.length === 0) return;
 
-        console.error(`[UpdatePipeline] Fetching git history for ${filePaths.length} files...`);
+        log.error(`[UpdatePipeline] Fetching git history for ${filePaths.length} files...`);
 
         // Parallel fetch in chunks of 20 to avoid spawning too many git processes
         const CHUNK_SIZE = 20;
@@ -151,14 +201,48 @@ export class UpdatePipeline {
             resolveLock!();
         }
 
-        console.error(`[UpdatePipeline] History backfill complete.`);
+        log.error(`[UpdatePipeline] History backfill complete.`);
+    }
+
+    /**
+     * H-4: Pre-fetches git history for the given file paths BEFORE any
+     * transaction is opened, using the same chunked-parallel pattern as
+     * mapHistoryToProject() (CHUNK_SIZE=20). Returns a Map keyed by file path.
+     *
+     * This is the mechanism that lets the transaction body in processBatch()
+     * and applyDelta() be purely synchronous: all `await`-ing git subprocess
+     * work happens here, outside BEGIN/COMMIT, so the open SQLite transaction
+     * never yields the event loop (which previously allowed a background
+     * embeddingManager.refreshAll() write to join the outer transaction).
+     */
+    private async prefetchHistories(filePaths: string[]): Promise<Map<string, any[]>> {
+        const result = new Map<string, any[]>();
+        if (!this.gitService || filePaths.length === 0) return result;
+
+        // De-duplicate so the same file isn't fetched twice within one batch.
+        const unique = Array.from(new Set(filePaths));
+        const CHUNK_SIZE = 20;
+        for (let i = 0; i < unique.length; i += CHUNK_SIZE) {
+            const chunk = unique.slice(i, i + CHUNK_SIZE);
+            const fetched = await Promise.all(
+                chunk.map(fp =>
+                    this.gitService!.getHistoryForFile(fp)
+                        .then(history => ({ filePath: fp, history }))
+                        .catch(() => ({ filePath: fp, history: [] as any[] }))
+                )
+            );
+            for (const { filePath, history } of fetched) {
+                result.set(filePath, history);
+            }
+        }
+        return result;
     }
 
     public async processChangeEvent(event: FileChangeEvent, version: number): Promise<void> {
         const { event: type, file_path, commit } = event;
 
         try {
-            console.error(`Processing ${type} for ${file_path}`);
+            log.error(`Processing ${type} for ${file_path}`);
 
             let delta: DeltaGraph;
             if (type === 'ADD' || type === 'MODIFY') {
@@ -176,13 +260,13 @@ export class UpdatePipeline {
                 this.metadataRepo.setLastIndexedCommit(commit);
             }
         } catch (error) {
-            console.error(`Failed to process ${file_path}:`, error);
+            log.error(`Failed to process ${file_path}:`, { detail: error });
             throw error;
         }
     }
 
-    public async processBatch(events: FileChangeEvent[], version: number): Promise<void> {
-        console.error(`Processing batch of ${events.length} files...`);
+    public async processBatch(events: FileChangeEvent[], version: number, targetCommit?: string): Promise<void> {
+        log.error(`Processing batch of ${events.length} files...`);
 
         type BatchResult =
             | { event: FileChangeEvent; delta: DeltaGraph; status: 'success' }
@@ -203,7 +287,7 @@ export class UpdatePipeline {
                         : await this.parser.parse(event.file_path, event.commit, version);
                     return { event, delta, status: 'success' as const };
                 } catch (error) {
-                    console.error(`Failed to parse ${event.file_path}:`, error);
+                    log.error(`Failed to parse ${event.file_path}:`, { detail: error });
                     return { event, status: 'error' as const, error: (error as Error).message ?? String(error) };
                 }
             }));
@@ -212,16 +296,30 @@ export class UpdatePipeline {
 
         const results = allResults;
 
+        // H-4: pre-fetch git history for every non-DELETE file BEFORE opening
+        // the transaction, so the transaction body below contains zero `await`
+        // (no git subprocess spawn while BEGIN is held).
+        const historyFiles = results
+            .filter(r => r.status === 'success' && r.event.event !== 'DELETE')
+            .map(r => r.event.file_path);
+        const historyByFile = await this.prefetchHistories(historyFiles);
+
         const previousLock = this.writeLock;
         let resolveLock: () => void;
         this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
         await previousLock;
 
         const symbolCache = new Map<string, number>();
+        // A-4: node ids touched by this batch (created/replaced nodes + endpoints
+        // of edges created here) so fan-metric reconciliation is scoped to them.
+        const changedNodeIds = new Set<number>();
+        // O-3: keep remote DB connections open for the duration of this batch
+        // instead of opening/closing one per cross-project symbol resolution.
+        this.crossProjectResolver?.beginBatch();
 
         try {
             this.db.prepare('BEGIN').run();
-            
+
             // Pass 1: Definitions
             for (const res of results) {
                 if (res.status === 'success') {
@@ -232,12 +330,13 @@ export class UpdatePipeline {
                     }
                     this.nodeRepo.deleteNodesByFilePath(res.event.file_path);
                     if (res.event.event !== 'DELETE') {
-                        const history = this.gitService ? await this.gitService.getHistoryForFile(res.event.file_path) : undefined;
+                        const history = this.gitService ? historyByFile.get(res.event.file_path) : undefined;
                         for (const node of res.delta.nodes) {
                             node.tags = StructuralTagger.tagNode(node);
                             if (history) node.history = history;
                             const nodeId = this.nodeRepo.createNode(node);
                             symbolCache.set(toCanonical(node.qualified_name), nodeId);
+                            changedNodeIds.add(nodeId);
                         }
                     }
                 }
@@ -252,30 +351,56 @@ export class UpdatePipeline {
 
                         if (fromId !== undefined && toId !== undefined) {
                             this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
+                            // A-4: the edge's endpoints may live in files outside
+                            // this batch (cross-file calls) but their fan metrics
+                            // still change, so include them in the reconcile set.
+                            changedNodeIds.add(fromId);
+                            changedNodeIds.add(toId);
                         }
                     }
                 }
             }
 
-            // Recompute fan_in / fan_out for all nodes based on actual edge counts
-            this.recomputeFanMetrics();
+            // A-4: reconcile fan_in / fan_out for the batch's changed nodes only
+            // (the triggers already maintained them incrementally).
+            this.recomputeFanMetrics(changedNodeIds);
 
             this.db.prepare('COMMIT').run();
             this.graphEngine?.invalidateCache();
 
+            // H-7: only advance the watermark once the transaction has committed
+            // successfully, and only if every file in the batch was processed.
+            // Failed files are left out of the new watermark so the next
+            // syncWithGit() retries them via the same diff range.
+            const failedFiles = results.filter((r): r is Extract<BatchResult, { status: 'error' }> => r.status === 'error');
+            if (targetCommit && this.metadataRepo) {
+                if (failedFiles.length === 0) {
+                    this.metadataRepo.setLastIndexedCommit(targetCommit);
+                } else {
+                    log.error(`[UpdatePipeline] Skipping lastIndexedCommit advance to ${targetCommit}: ${failedFiles.length} file(s) failed and will be retried — ${failedFiles.map(f => f.event.file_path).join(', ')}`);
+                }
+            }
+
             // Trigger embedding update in background
             this.embeddingManager.refreshAll().catch(err => {
-                console.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
+                log.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
             });
         } catch (error) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
             throw error;
         } finally {
+            this.crossProjectResolver?.endBatch();
             resolveLock!();
         }
     }
 
     public async applyDelta(filePath: string, delta: DeltaGraph, type: ChangeType): Promise<void> {
+        // H-4: pre-fetch git history BEFORE opening the transaction so the
+        // transaction body below is purely synchronous (no await under BEGIN).
+        const history = this.gitService
+            ? (await this.prefetchHistories([filePath])).get(filePath)
+            : undefined;
+
         const previousLock = this.writeLock;
         let resolveLock: () => void;
         this.writeLock = new Promise((resolve) => { resolveLock = resolve; });
@@ -292,13 +417,14 @@ export class UpdatePipeline {
                 this.nodeRepo.deleteNodesByFilePath(filePath);
             }
 
-            const history = this.gitService ? await this.gitService.getHistoryForFile(filePath) : undefined;
             const symbolCache = new Map<string, number>();
+            const changedNodeIds = new Set<number>();
             for (const node of delta.nodes) {
                 node.tags = StructuralTagger.tagNode(node);
                 if (history) node.history = history;
                 const nodeId = this.nodeRepo.createNode(node);
                 symbolCache.set(toCanonical(node.qualified_name), nodeId);
+                changedNodeIds.add(nodeId);
             }
 
             for (const edge of delta.edges) {
@@ -306,18 +432,36 @@ export class UpdatePipeline {
                 const toId = this.resolveNodeId(edge, 'to', symbolCache);
                 if (fromId !== undefined && toId !== undefined) {
                     this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
+                    changedNodeIds.add(fromId);
+                    changedNodeIds.add(toId);
                 }
             }
 
-            // Recompute fan_in / fan_out for all nodes based on actual edge counts
-            this.recomputeFanMetrics();
+            // A-4: reconcile fan_in / fan_out for the changed nodes only
+            // (the triggers already maintained them incrementally).
+            this.recomputeFanMetrics(changedNodeIds);
+
+            // P7: replace this file's test specs with the freshly-parsed set.
+            // On MODIFY we always clear first so specs deleted from the source
+            // (e.g. a removed it() block) don't linger; on ADD the delete is a no-op.
+            if (type === 'MODIFY' || (delta.testSpecs && delta.testSpecs.length > 0)) {
+                this.db.prepare('DELETE FROM test_specs WHERE file_path = ?').run(filePath);
+            }
+            if (delta.testSpecs && delta.testSpecs.length > 0) {
+                const insertSpec = this.db.prepare(
+                    'INSERT INTO test_specs (test_qname, title, target_qname, assertions, file_path, start_line) VALUES (?, ?, ?, ?, ?, ?)'
+                );
+                for (const spec of delta.testSpecs) {
+                    insertSpec.run(spec.testQname, spec.title, spec.targetQname ?? null, JSON.stringify(spec.assertions), spec.filePath, spec.startLine);
+                }
+            }
 
             this.db.prepare('COMMIT').run();
             this.graphEngine?.invalidateCache();
 
             // Trigger embedding update in background
             this.embeddingManager.refreshAll().catch(err => {
-                console.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
+                log.error(`[UpdatePipeline] Background embedding refresh failed: ${err}`);
             });
         } catch (e) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
@@ -340,6 +484,8 @@ export class UpdatePipeline {
                 this.edgeRepo.deleteEdgesByNodeId(id);
             }
             this.nodeRepo.deleteNodesByFilePath(filePath);
+            // P7: drop any test specs captured from the deleted file.
+            this.db.prepare('DELETE FROM test_specs WHERE file_path = ?').run(filePath);
             this.db.prepare('COMMIT').run();
         } catch (e) {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
@@ -358,22 +504,72 @@ export class UpdatePipeline {
         // Already up to date — nothing to do
         if (lastCommit && lastCommit === currentHead) return;
 
-        const strategy = lastCommit
-            ? new IncrementalSyncStrategy(this.gitService, lastCommit, currentHead)
-            : new FullScanStrategy(this.gitService);
+        // H-3: if a prior watermark exists but its commit was rewritten away
+        // (rebase/force-push/shallow fetch), an incremental diff against it
+        // would fail and the watermark would never advance again. Detect that
+        // up front and fall back to a full scan to recover the watermark.
+        let useFullScan = !lastCommit;
+        if (lastCommit && !(await this.gitService.commitExists(lastCommit))) {
+            log.error(`[UpdatePipeline] lastIndexedCommit ${lastCommit} is missing from the repo (rebase/force-push?); falling back to full scan to recover.`);
+            useFullScan = true;
+        }
 
-        const result = await strategy.buildEvents(projectPath);
+        let result;
+        if (useFullScan) {
+            result = await new FullScanStrategy(this.gitService).buildEvents(projectPath);
+        } else {
+            try {
+                result = await new IncrementalSyncStrategy(this.gitService, lastCommit!, currentHead).buildEvents(projectPath);
+            } catch (err) {
+                if (err instanceof DiffFailedError) {
+                    // Secondary safety net: the diff failed for a reason the
+                    // up-front commitExists() check didn't catch. Recover via
+                    // full scan rather than stalling.
+                    log.error(`[UpdatePipeline] Incremental diff failed (${err.message}); falling back to full scan.`);
+                    result = await new FullScanStrategy(this.gitService).buildEvents(projectPath);
+                } else {
+                    throw err;
+                }
+            }
+        }
         if (!result) return;
 
-        await this.processBatch(result.events, Date.now());
+        await this.processBatch(result.events, Date.now(), result.head);
     }
 
-    private recomputeFanMetrics(): void {
-        this.db.prepare(
+    /**
+     * A-4: reconciles fan_in / fan_out for the nodes touched by this batch only.
+     *
+     * The schema's edges_ai/ad/au_metrics triggers already maintain fan_in /
+     * fan_out incrementally on every edge insert/delete/update, so the previous
+     * full-table correlated-subquery UPDATE (over EVERY node, on every watcher
+     * flush) was duplicate work that scaled with graph size rather than batch
+     * size. We keep a bounded reconciliation pass as a safety net against any
+     * drift, but scope it to the changed node set (the nodes created/replaced in
+     * this batch plus the endpoints of edges created in this batch). When the
+     * set is empty there is nothing to reconcile.
+     */
+    private recomputeFanMetrics(changedNodeIds?: Iterable<number>): void {
+        if (changedNodeIds === undefined) {
+            // Backward-compatible full reconciliation (used outside batch paths).
+            this.db.prepare(
+                'UPDATE nodes SET ' +
+                'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = ?), ' +
+                'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = ?)'
+            ).run('calls', 'calls');
+            return;
+        }
+
+        const ids = Array.from(new Set(changedNodeIds));
+        if (ids.length === 0) return;
+
+        const stmt = this.db.prepare(
             'UPDATE nodes SET ' +
-            'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = ?), ' +
-            'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = ?)'
-        ).run('calls', 'calls');
+            'fan_in  = (SELECT COUNT(*) FROM edges WHERE to_id   = nodes.id AND edge_type = \'calls\'), ' +
+            'fan_out = (SELECT COUNT(*) FROM edges WHERE from_id = nodes.id AND edge_type = \'calls\') ' +
+            'WHERE nodes.id = ?'
+        );
+        for (const id of ids) stmt.run(id);
     }
 
     private resolveNodeId(edge: any, side: 'from' | 'to', internalMap: Map<string, number>): number | undefined {
@@ -385,12 +581,10 @@ export class UpdatePipeline {
             qname = parts.slice(1).join(':');
         }
 
+        // O-2: internalMap (symbolCache) is keyed by canonical qualified names,
+        // so a direct lookup is sufficient — no need to re-scan the whole map.
         const canonicalQName = toCanonical(qname);
         if (internalMap.has(canonicalQName)) return internalMap.get(canonicalQName);
-        
-        for (const [key, value] of internalMap.entries()) {
-            if (toCanonical(key) === canonicalQName) return value;
-        }
 
         const existingNode = this.nodeRepo.getNodeByQualifiedName(qname);
         if (existingNode) return existingNode.id;

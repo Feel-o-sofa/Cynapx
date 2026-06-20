@@ -3,34 +3,23 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { LanguageProvider, RawCodeEdge } from '../types';
-import { SymbolType } from '../../types';
-// @ts-ignore
-import GDScript from 'tree-sitter-gdscript';
-import Parser from 'tree-sitter';
-import * as fs from 'fs';
-import * as path from 'path';
+import { LanguageDescriptor } from './descriptor';
 
-export class GdscriptProvider implements LanguageProvider {
-    public extensions = ['gd'];
-    public languageName = 'gdscript';
-
-    public getLanguage() {
-        return GDScript;
-    }
-
-    public getQuery(): string {
-        const queryPath = path.resolve(__dirname, './queries/gdscript.scm');
-        return fs.readFileSync(queryPath, 'utf8');
-    }
-
-    public mapCaptureToSymbolType(captureName: string): SymbolType {
-        if (captureName.startsWith('class')) return 'class';
-        if (captureName.startsWith('event')) return 'field';
-        return 'function';
-    }
-
-    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+export const gdscriptDescriptor: LanguageDescriptor = {
+    name: 'gdscript',
+    extensions: ['gd'],
+    grammarModule: 'tree-sitter-gdscript',
+    queryFile: 'gdscript.scm',
+    captureMap: [
+        ['class', 'class'],
+        ['event', 'field']
+    ],
+    defaultSymbolType: 'function',
+    decisionPoints: ['if_statement', 'for_statement', 'while_statement', 'match_arm'],
+    normalizeDocstring(raw: string): string {
+        return raw.replace(/^\s*##\s?/gm, '').trim();
+    },
+    resolveImport(node, fromQName, edges) {
         const parentNode = node.descendantsOfType('identifier')[0];
         if (parentNode) {
             edges.push({
@@ -41,8 +30,4 @@ export class GdscriptProvider implements LanguageProvider {
             });
         }
     }
-
-    public getDecisionPoints(): string[] {
-        return ['if_statement', 'for_statement', 'while_statement', 'match_arm'];
-    }
-}
+};

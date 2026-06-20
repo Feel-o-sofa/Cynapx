@@ -17,8 +17,17 @@ export const purgeIndexHandler: ToolHandler = {
             return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
         }
         const dbPath = getDatabasePath(ctx.projectPath);
-        if (deps.onPurge) await deps.onPurge();
-        ctx.dbManager?.dispose();
+        // H-6: onPurge wires WorkspaceManager.unmountProject(hash) — it disposes
+        // the watcher/worker-pool/dbManager in order and nulls every engine
+        // field so no closed-handle reference survives and re-initialization is
+        // not short-circuited by a disposed-but-non-null dbManager. Fall back to
+        // a bare dbManager dispose only when onPurge is unwired (e.g. tests).
+        if (deps.onPurge) {
+            await deps.onPurge(ctx.projectHash);
+        } else {
+            ctx.dbManager?.dispose();
+            ctx.dbManager = undefined;
+        }
         deps.setIsInitialized(false);
         [dbPath, `${dbPath}-wal`, `${dbPath}-shm`].forEach(f => { if (fs.existsSync(f)) fs.unlinkSync(f); });
         const auditPurge = getAuditLogger();

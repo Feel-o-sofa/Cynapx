@@ -8,7 +8,10 @@ import * as readline from 'readline';
 import * as crypto from 'crypto';
 import { McpServer } from './mcp-server';
 import { EventEmitter } from 'events';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('IPC');
 export interface IpcRequest {
     id: string;
     method: 'executeTool';
@@ -25,6 +28,87 @@ export interface IpcResponse {
 }
 
 const MAX_MSG_BYTES = 1 * 1024 * 1024; // 1 MB
+
+/**
+ * A-12: per-tool IPC timeouts. A single global 30s timeout is wrong for both
+ * ends of the latency spectrum: quick metadata reads should fail fast if the
+ * Host is wedged, while whole-project operations (initial index, re-tag,
+ * history backfill, consistency repair, clustering) legitimately run for
+ * minutes on a large repo and must not be aborted prematurely.
+ *
+ * Values are deliberately generous on the long-running side — the Host keepalive
+ * ping (below) keeps the connection alive across the gap, and the operations are
+ * bounded by their own internal limits. Tools not listed use DEFAULT_IPC_TIMEOUT_MS.
+ *
+ * NOTE (A-4 / Phase 14-5): minimal MCP `notifications/progress` emission is now
+ * wired for the long-running tools (initialize_project, backfill_history,
+ * re_tag_project, check_consistency) — see src/server/tools/_progress.ts. When a
+ * caller supplies a `_meta.progressToken`, the Host MCP session streams coarse
+ * progress at stage boundaries via the request-scoped sendNotification; without a
+ * token nothing is emitted (spec compliance).
+ *
+ * Relaying that progress across THIS Host↔Terminal IPC boundary is intentionally
+ * NOT done (A-4(2)): the framing here is strict request/response correlated by
+ * `id`, and interleaving out-of-band progress lines would require a demux +
+ * back-correlation into the Terminal's MCP request context — meaningful added
+ * complexity in a security-sensitive layer. The keepalive ping (above) already
+ * keeps Terminal-forwarded long calls connected, so Terminal-mode tools simply
+ * report no progress.
+ *
+ * M-1 (Phase 15-3) — spec tracking. The 2026-07-28 spec RC demotes Tasks
+ * (SEP-1686) from the core spec to an extension with a server-directed lifecycle:
+ * the server returns a task handle from the `tools/call` response and the client
+ * drives it via `tasks/get`/`tasks/update`/`tasks/cancel` (`tasks/list` is
+ * removed). The progress-token opt-in wired in P14-5 is RETAINED in the RC and is
+ * NOT deprecated. IPC progress relay across this Host↔Terminal boundary remains a
+ * documented future direction; if/when a full task lifecycle is adopted it must
+ * target the 2026-07-28 extension model (not the 2025-11-25 core API). Verdict:
+ * DEFERRED until SDK v2 stable (current SDK `latest` is 1.x, session-id model).
+ * Refs: see src/server/tools/_progress.ts (RC blog, SEP-1686, sdk#2042).
+ */
+const DEFAULT_IPC_TIMEOUT_MS = 30_000;
+const IPC_TOOL_TIMEOUTS_MS: Record<string, number> = {
+    // Whole-project, potentially multi-minute operations.
+    initialize_project: 30 * 60_000, // full index of a fresh repo
+    re_tag_project: 15 * 60_000,
+    backfill_history: 30 * 60_000,   // walks git history
+    check_consistency: 15 * 60_000,  // full FS/DB/git reconciliation (+ repair)
+    purge_index: 5 * 60_000,
+    export_graph: 5 * 60_000,        // can serialise a large graph
+    // Embedding-heavy / analysis tools that may invoke the ML sidecar.
+    discover_latent_policies: 5 * 60_000,
+    propose_refactor: 3 * 60_000,
+    analyze_impact: 2 * 60_000,
+    // Everything else (quick metadata reads: search_symbols, get_callers, …)
+    // falls back to DEFAULT_IPC_TIMEOUT_MS.
+};
+
+/** A-12: resolves the IPC timeout for a tool name. */
+export function getIpcTimeoutMs(toolName: string): number {
+    return IPC_TOOL_TIMEOUTS_MS[toolName] ?? DEFAULT_IPC_TIMEOUT_MS;
+}
+
+/**
+ * A-12: Host -> Terminal keepalive ping interval. Sent on otherwise idle
+ * connections so a long-running tool call (which may produce no traffic for
+ * minutes) does not get reaped by an OS/intermediary idle timeout. The Terminal
+ * ignores ping lines (they carry no `id`). Overridable via env for tests.
+ */
+const IPC_KEEPALIVE_INTERVAL_MS = (() => {
+    const v = Number(process.env.CYNAPX_IPC_KEEPALIVE_MS);
+    return Number.isFinite(v) && v > 0 ? v : 15_000;
+})();
+
+/**
+ * C-3 (diagnostic-v10): computes the authentication response for the IPC
+ * challenge-response handshake. The shared secret (the lock-file nonce) is
+ * never sent on the wire in either direction — the Host sends a random
+ * one-time challenge and the Terminal proves knowledge of the nonce by
+ * returning HMAC-SHA256(key = nonce, msg = challenge).
+ */
+export function computeAuthResponse(nonce: string, challenge: string): string {
+    return crypto.createHmac('sha256', nonce).update(challenge).digest('hex');
+}
 
 /**
  * Coordinates communication between Host and Terminal sessions.
@@ -54,34 +138,78 @@ export class IpcCoordinator extends EventEmitter {
             this.server = net.createServer((socket) => {
                 socket.on('error', (err) => {
                     // Ignore common disconnect errors
-                    console.error('[IPC Host] Socket error:', err.message);
+                    log.error('[IPC Host] Socket error:', { detail: err.message });
                 });
 
-                // SEC-H-3: Track cumulative received bytes and enforce 1 MB limit.
-                let totalBytes = 0;
+                // SEC-H-3 / H-8 (diagnostic-v10): enforce the 1 MB limit per
+                // MESSAGE (line), not cumulatively over the socket lifetime —
+                // long-lived Terminal sessions legitimately exceed 1 MB of
+                // total traffic. Only the current (unterminated) line buffer
+                // and each completed line are checked.
+                let currentLineBytes = 0;
                 socket.on('data', (chunk) => {
-                    totalBytes += chunk.length;
-                    if (totalBytes > MAX_MSG_BYTES) {
+                    let start = 0;
+                    while (start <= chunk.length) {
+                        const nl = chunk.indexOf(0x0a, start); // '\n'
+                        if (nl === -1) {
+                            currentLineBytes += chunk.length - start;
+                            break;
+                        }
+                        currentLineBytes += nl - start;
+                        if (currentLineBytes > MAX_MSG_BYTES) {
+                            socket.destroy(new Error('IPC message size limit exceeded'));
+                            return;
+                        }
+                        currentLineBytes = 0; // message boundary — reset counter
+                        start = nl + 1;
+                    }
+                    if (currentLineBytes > MAX_MSG_BYTES) {
                         socket.destroy(new Error('IPC message size limit exceeded'));
                     }
                 });
 
-                // SEC-C-1: Send challenge immediately on connection.
-                socket.write(JSON.stringify({ challenge: nonce }) + '\n');
+                // SEC-C-1 / C-3 (diagnostic-v10): send a random ONE-TIME
+                // challenge (unrelated to the nonce). The nonce itself must
+                // never travel on the wire — any local user can connect to
+                // this 127.0.0.1 port.
+                const challenge = crypto.randomBytes(32).toString('hex');
+                const expectedAuth = computeAuthResponse(nonce, challenge);
+                socket.write(JSON.stringify({ challenge }) + '\n');
 
                 let authenticated = false;
 
+                // A-12: keepalive ping on idle connections. A long-running tool
+                // call can leave the socket silent for minutes; periodic pings
+                // keep it from being reaped. The interval is unref()'d so it
+                // never holds the process open, and cleared on close/error.
+                const keepalive = setInterval(() => {
+                    if (!authenticated) return;
+                    try {
+                        socket.write(JSON.stringify({ ping: true, ts: Date.now() }) + '\n');
+                    } catch {
+                        clearInterval(keepalive);
+                    }
+                }, IPC_KEEPALIVE_INTERVAL_MS);
+                if (typeof keepalive.unref === 'function') keepalive.unref();
+                socket.on('close', () => clearInterval(keepalive));
+                socket.on('error', () => clearInterval(keepalive));
+
                 const rl = readline.createInterface({ input: socket });
                 rl.on('error', (err) => {
-                    console.error('[IPC Host] Readline error:', err.message);
+                    log.error('[IPC Host] Readline error:', { detail: err.message });
                 });
                 rl.on('line', async (line) => {
                     try {
-                        // SEC-C-1: If not yet authenticated, expect auth response first.
+                        // SEC-C-1 / C-3: if not yet authenticated, expect an
+                        // HMAC-SHA256(key=nonce, msg=challenge) response first.
                         if (!authenticated) {
                             const msg: { auth?: string } = JSON.parse(line);
-                            if (msg.auth !== nonce) {
-                                console.error('[IPC Host] Authentication failed — closing socket.');
+                            const provided = typeof msg.auth === 'string' ? Buffer.from(msg.auth) : Buffer.alloc(0);
+                            const expected = Buffer.from(expectedAuth);
+                            const valid = provided.length === expected.length
+                                && crypto.timingSafeEqual(provided, expected);
+                            if (!valid) {
+                                log.error('[IPC Host] Authentication failed — closing socket.');
                                 socket.destroy();
                                 return;
                             }
@@ -94,12 +222,13 @@ export class IpcCoordinator extends EventEmitter {
                             try {
                                 const result = await this.mcpServer.executeTool(req.params.name, req.params.args);
                                 socket.write(JSON.stringify({ id: req.id, result }) + '\n');
-                            } catch (err: any) {
-                                socket.write(JSON.stringify({ id: req.id, error: err.message }) + '\n');
+                            } catch (err: unknown) {
+                                const message = err instanceof Error ? err.message : String(err);
+                                socket.write(JSON.stringify({ id: req.id, error: message }) + '\n');
                             }
                         }
                     } catch (err) {
-                        console.error('[IPC Host] Failed to process line:', err);
+                        log.error('[IPC Host] Failed to process line:', { detail: err });
                     }
                 });
             });
@@ -107,7 +236,7 @@ export class IpcCoordinator extends EventEmitter {
             this.server.on('error', reject);
             this.server.listen(0, '127.0.0.1', () => {
                 const port = (this.server!.address() as net.AddressInfo).port;
-                console.error(`[IPC Host] Server listening on port ${port}`);
+                log.error(`[IPC Host] Server listening on port ${port}`);
                 resolve(port);
             });
         });
@@ -123,40 +252,50 @@ export class IpcCoordinator extends EventEmitter {
             this.client = net.createConnection({ port, host: '127.0.0.1' });
 
             this.client.on('error', (err) => {
-                console.error('[IPC Terminal] Connection error:', err);
+                log.error('[IPC Terminal] Connection error:', { detail: err });
                 reject(err);
             });
 
             this.client.on('close', () => {
-                console.error('[IPC Terminal] Connection closed.');
+                log.error('[IPC Terminal] Connection closed.');
+                // A-9: reject any in-flight requests so callers don't hang forever.
+                for (const pending of this.pendingRequests.values()) {
+                    pending.reject(new Error('IPC connection closed'));
+                }
+                this.pendingRequests.clear();
                 this.emit('disconnected');
             });
 
             let authResolved = false;
             const rl = readline.createInterface({ input: this.client });
             rl.on('error', (err) => {
-                console.error('[IPC Terminal] Readline error:', err.message);
+                log.error('[IPC Terminal] Readline error:', { detail: err.message });
             });
             rl.on('line', (line) => {
                 try {
-                    // SEC-C-1: First message from Host is the challenge; respond with nonce.
+                    // SEC-C-1 / C-3: first message from Host is a random
+                    // one-time challenge; prove knowledge of the lock-file
+                    // nonce with HMAC-SHA256(key=nonce, msg=challenge).
+                    // The nonce itself is never written to the socket.
                     if (!authResolved) {
                         const msg: { challenge?: string } = JSON.parse(line);
-                        if (msg.challenge === undefined) {
+                        if (typeof msg.challenge !== 'string') {
                             const err = new Error('[IPC Terminal] Expected challenge from Host but got unexpected message.');
                             reject(err);
                             this.client?.destroy();
                             return;
                         }
-                        // Send auth response with the nonce from lock file.
-                        this.client!.write(JSON.stringify({ auth: nonce }) + '\n');
+                        this.client!.write(JSON.stringify({ auth: computeAuthResponse(nonce, msg.challenge) }) + '\n');
                         authResolved = true;
-                        console.error(`[IPC Terminal] Connected to Host on port ${port}`);
+                        log.error(`[IPC Terminal] Connected to Host on port ${port}`);
                         resolve();
                         return;
                     }
 
-                    const res: IpcResponse = JSON.parse(line);
+                    const parsed = JSON.parse(line);
+                    // A-12: keepalive pings from the Host carry no `id` — ignore.
+                    if (parsed && parsed.ping === true) return;
+                    const res: IpcResponse = parsed;
                     const pending = this.pendingRequests.get(res.id);
                     if (pending) {
                         if (res.error) {
@@ -167,7 +306,7 @@ export class IpcCoordinator extends EventEmitter {
                         this.pendingRequests.delete(res.id);
                     }
                 } catch (err) {
-                    console.error('[IPC Terminal] Failed to process line:', err);
+                    log.error('[IPC Terminal] Failed to process line:', { detail: err });
                 }
             });
         });
@@ -186,11 +325,12 @@ export class IpcCoordinator extends EventEmitter {
             params: { name, args }
         };
 
+        const timeoutMs = getIpcTimeoutMs(name);
         return new Promise((resolve, reject) => {
             const timeout = setTimeout(() => {
                 this.pendingRequests.delete(id);
-                reject(new Error(`IPC request '${name}' timed out after 30s`));
-            }, 30_000);
+                reject(new Error(`IPC request '${name}' timed out after ${Math.round(timeoutMs / 1000)}s`));
+            }, timeoutMs);
 
             this.pendingRequests.set(id, {
                 resolve: (v: any) => { clearTimeout(timeout); resolve(v); },
