@@ -7,5 +7,6 @@
 (trait_item name: (type_identifier) @interface.name) @interface.def
 (impl_item type: (_) @class.name) @class.def
 (mod_item name: (identifier) @module.name) @module.def
+(mod_item name: (identifier) @import.modname) @import.moddecl
 (call_expression function: (_) @call.name) @call.expr
 (use_declaration) @import.def

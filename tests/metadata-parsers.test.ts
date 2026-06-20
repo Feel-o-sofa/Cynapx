@@ -83,6 +83,136 @@ describe('YamlParser', () => {
             fs.unlinkSync(tmpFile);
         }
     });
+
+    // -- js-yaml migration: regression equivalence on the canonical simple workflow.
+    it('equivalence regression: simple workflow node/edge set + line numbers unchanged', async () => {
+        const content = `name: my-workflow\non: push\njobs:\n  build:\n    runs-on: ubuntu-latest\n  test:\n    runs-on: ubuntu-latest\n`;
+        const tmpFile = writeTmp('.yml', content);
+        try {
+            const delta = await parser.parse(tmpFile, COMMIT, VERSION);
+            // Node set (type + name + start line) — must match the old line parser.
+            const got = delta.nodes
+                .map(n => `${n.symbol_type}:${n.qualified_name.split('#')[1] ?? '(file)'}@${n.start_line}`)
+                .sort();
+            expect(got).toEqual([
+                'config_key:jobs@3',
+                'config_key:name@1',
+                'config_key:on@2',
+                'file:(file)@1',
+                'function:job:build@4',
+                'function:job:test@6',
+            ].sort());
+            // Edge set.
+            const edges = delta.edges
+                .map(e => `${e.edge_type}:${e.from_qname.split('#')[1] ?? '(file)'}->${e.to_qname.split('#')[1]}`)
+                .sort();
+            expect(edges).toEqual([
+                'contains:(file)->jobs',
+                'contains:(file)->job:build',
+                'contains:(file)->job:test',
+                'contains:(file)->name',
+                'contains:(file)->on',
+            ].sort());
+        } finally {
+            fs.unlinkSync(tmpFile);
+        }
+    });
+
+    it('handles block scalars (| and >) without spurious nodes', async () => {
+        const content = `description: |\n  line one\n  line two\nsummary: >\n  folded\n  text\njobs:\n  build:\n    runs-on: ubuntu-latest\n`;
+        const tmpFile = writeTmp('.yml', content);
+        try {
+            const delta = await parser.parse(tmpFile, COMMIT, VERSION);
+            const keyNames = delta.nodes.filter(n => n.symbol_type === 'config_key').map(n => n.qualified_name.split('#')[1]);
+            // Only the three real top-level keys — block scalar bodies must not leak.
+            expect(keyNames.sort()).toEqual(['description', 'jobs', 'summary']);
+            const jobs = delta.nodes.filter(n => n.symbol_type === 'function').map(n => n.qualified_name.split('#')[1]);
+            expect(jobs).toEqual(['job:build']);
+        } finally {
+            fs.unlinkSync(tmpFile);
+        }
+    });
+
+    it('handles flow-style jobs mapping (jobs: {build: ...})', async () => {
+        const content = `name: ci\njobs: {build: {runs-on: ubuntu-latest}, test: {runs-on: ubuntu-latest}}\n`;
+        const tmpFile = writeTmp('.yml', content);
+        try {
+            const delta = await parser.parse(tmpFile, COMMIT, VERSION);
+            const jobs = delta.nodes.filter(n => n.symbol_type === 'function').map(n => n.qualified_name.split('#')[1]).sort();
+            // The old line parser missed flow-style entirely; js-yaml extracts both.
+            expect(jobs).toEqual(['job:build', 'job:test']);
+        } finally {
+            fs.unlinkSync(tmpFile);
+        }
+    });
+
+    it('handles YAML anchors and aliases (merge keys)', async () => {
+        const content = `defaults: &d\n  runs-on: ubuntu-latest\njobs:\n  build:\n    <<: *d\n  test:\n    <<: *d\n`;
+        const tmpFile = writeTmp('.yml', content);
+        try {
+            const delta = await parser.parse(tmpFile, COMMIT, VERSION);
+            const keyNames = delta.nodes.filter(n => n.symbol_type === 'config_key').map(n => n.qualified_name.split('#')[1]).sort();
+            expect(keyNames).toEqual(['defaults', 'jobs']);
+            const jobs = delta.nodes.filter(n => n.symbol_type === 'function').map(n => n.qualified_name.split('#')[1]).sort();
+            expect(jobs).toEqual(['job:build', 'job:test']);
+        } finally {
+            fs.unlinkSync(tmpFile);
+        }
+    });
+
+    it('extracts reusable workflow references (jobs.<id>.uses) as calls edges', async () => {
+        const content = `jobs:\n  call:\n    uses: ./.github/workflows/reusable.yml\n`;
+        const tmpFile = writeTmp('.yml', content);
+        try {
+            const delta = await parser.parse(tmpFile, COMMIT, VERSION);
+            const callsEdge = delta.edges.find(e => e.edge_type === 'calls');
+            expect(callsEdge).toBeDefined();
+            expect(callsEdge?.from_qname).toContain('#job:call');
+            expect(callsEdge?.to_qname).toBe('./.github/workflows/reusable.yml');
+        } finally {
+            fs.unlinkSync(tmpFile);
+        }
+    });
+
+    it('degrades gracefully on tab-indented (YAML-invalid) input — file node only', async () => {
+        // Tabs are not legal YAML indentation; js-yaml throws, parser must not.
+        const content = "name: ci\njobs:\n  build:\n\t\trun: echo hi\n";
+        const tmpFile = writeTmp('.yml', content);
+        try {
+            const delta = await parser.parse(tmpFile, COMMIT, VERSION);
+            expect(delta.nodes.length).toBe(1);
+            expect(delta.nodes[0].symbol_type).toBe('file');
+            expect(delta.edges.length).toBe(0);
+        } finally {
+            fs.unlinkSync(tmpFile);
+        }
+    });
+
+    it('handles malformed YAML gracefully — returns file node only, no throw', async () => {
+        const content = `name: ci\n  bad: : :\n: nope\n  - broken: [unclosed`;
+        const tmpFile = writeTmp('.yml', content);
+        try {
+            const delta = await parser.parse(tmpFile, COMMIT, VERSION);
+            expect(delta.nodes.length).toBe(1);
+            expect(delta.nodes[0].symbol_type).toBe('file');
+            expect(delta.edges.length).toBe(0);
+        } finally {
+            fs.unlinkSync(tmpFile);
+        }
+    });
+
+    it('returns only a file node for an empty / non-mapping document', async () => {
+        const content = `# just a comment\n`;
+        const tmpFile = writeTmp('.yml', content);
+        try {
+            const delta = await parser.parse(tmpFile, COMMIT, VERSION);
+            expect(delta.nodes.length).toBe(1);
+            expect(delta.nodes[0].symbol_type).toBe('file');
+            expect(delta.edges.length).toBe(0);
+        } finally {
+            fs.unlinkSync(tmpFile);
+        }
+    });
 });
 
 // ---------------------------------------------------------------------------

@@ -4,35 +4,33 @@
  * See LICENSE in the project root for license information.
  */
 import { LanguageProvider } from './types';
+import { LanguageDescriptor, LANGUAGE_DESCRIPTORS, createLanguageProvider } from './languages';
 import * as path from 'path';
 import * as fs from 'fs';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('LanguageRegistry');
 export class LanguageRegistry {
     private static instance: LanguageRegistry;
     private providers: Map<string, LanguageProvider> = new Map();
-    private pluginDirs: string[] = [path.resolve(__dirname, 'languages')];
-    
-    // Map extensions to provider module names for lazy loading
-    private extensionMap: Map<string, string> = new Map([
-        ['py', './languages/python'],
-        ['ts', './languages/typescript'],
-        ['js', './languages/javascript'],
-        ['c', './languages/c'],
-        ['h', './languages/c'],
-        ['cpp', './languages/cpp'],
-        ['cc', './languages/cpp'],
-        ['hpp', './languages/cpp'],
-        ['rs', './languages/rust'],
-        ['go', './languages/go'],
-        ['gd', './languages/gdscript'],
-        ['java', './languages/java'],
-        ['kt', './languages/kotlin'],
-        ['kts', './languages/kotlin'],
-        ['cs', './languages/csharp'],
-        ['php', './languages/php']
-    ]);
+    private pluginDirs: string[] = [];
+
+    /**
+     * Extension → descriptor map for the built-in languages, derived from the
+     * declarative LANGUAGE_DESCRIPTORS array (single source of truth).
+     * Providers are still instantiated lazily on first lookup so that the
+     * native grammar of a language is only loaded when actually needed.
+     */
+    private extensionMap: Map<string, LanguageDescriptor> = new Map();
 
     private constructor() {
+        for (const descriptor of LANGUAGE_DESCRIPTORS) {
+            for (const ext of descriptor.extensions) {
+                this.extensionMap.set(ext.toLowerCase(), descriptor);
+            }
+        }
+
         // Automatically scan ~/.cynapx/plugins if it exists
         const userPluginDir = path.join(process.env.USERPROFILE || process.env.HOME || '', '.cynapx', 'plugins');
         if (fs.existsSync(userPluginDir)) {
@@ -51,9 +49,6 @@ export class LanguageRegistry {
     private scanPlugins(): void {
         for (const dir of this.pluginDirs) {
             if (!fs.existsSync(dir)) continue;
-            
-            // Skip the internal 'languages' dir for dynamic scanning as it's handled by extensionMap lazy loading
-            if (dir === path.resolve(__dirname, 'languages')) continue;
 
             try {
                 const files = fs.readdirSync(dir);
@@ -64,7 +59,7 @@ export class LanguageRegistry {
                     }
                 }
             } catch (err) {
-                console.error(`LanguageRegistry: Error scanning directory ${dir}: ${err}`);
+                log.error(`LanguageRegistry: Error scanning directory ${dir}: ${err}`);
             }
         }
     }
@@ -90,16 +85,16 @@ export class LanguageRegistry {
                 }
             }
             if (registeredCount > 0) {
-                console.error(`LanguageRegistry: Registered ${registeredCount} provider(s) from ${fullPath}`);
+                log.error(`LanguageRegistry: Registered ${registeredCount} provider(s) from ${fullPath}`);
             }
         } catch (err) {
-            console.error(`LanguageRegistry: Failed to load plugin ${fullPath}: ${err}`);
+            log.error(`LanguageRegistry: Failed to load plugin ${fullPath}: ${err}`);
         }
     }
 
     private isLanguageProvider(obj: any): obj is LanguageProvider {
-        return obj && 
-               Array.isArray(obj.extensions) && 
+        return obj &&
+               Array.isArray(obj.extensions) &&
                typeof obj.languageName === 'string' &&
                typeof obj.getLanguage === 'function' &&
                typeof obj.getQuery === 'function';
@@ -121,18 +116,19 @@ export class LanguageRegistry {
             return this.providers.get(ext);
         }
 
-        // Try to load from internal extension map
-        const modulePath = this.extensionMap.get(ext);
-        if (modulePath) {
+        // Lazily instantiate the built-in provider from its descriptor
+        const descriptor = this.extensionMap.get(ext);
+        if (descriptor) {
             try {
-                const fullPath = path.resolve(__dirname, modulePath);
-                const module = require(fullPath);
-                const className = modulePath.split('/').pop()!.charAt(0).toUpperCase() + modulePath.split('/').pop()!.slice(1) + 'Provider';
-                const provider = new module[className]();
+                const provider = createLanguageProvider(descriptor);
+                // Force the grammar load now so a broken/missing native module
+                // degrades gracefully (getProvider → undefined) instead of
+                // throwing later during parsing.
+                provider.getLanguage();
                 this.register(provider);
                 return provider;
             } catch (err) {
-                console.error(`LanguageRegistry: Failed to lazy load provider for .${ext}: ${err}`);
+                log.error(`LanguageRegistry: Failed to lazy load provider for .${ext}: ${err}`);
             }
         }
 

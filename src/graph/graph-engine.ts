@@ -6,8 +6,62 @@
 import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
 import { CodeNode, CodeEdge, EdgeType } from '../types';
+import { Logger } from '../utils/logger';
+
+const log = new Logger('GraphEngine');
 
 export type TraversalStrategy = 'DFS' | 'BFS';
+
+const DEFAULT_CLUSTER_MAX_NODES = 200_000;
+
+/** Parse CYNAPX_CLUSTER_SEED into a finite seed, or undefined when unset/invalid. */
+export function parseClusterSeed(raw: string | undefined): number | undefined {
+    if (raw === undefined || raw.trim() === '') return undefined;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return undefined;
+    // mulberry32 seeds on a uint32; truncate to an integer for stability.
+    return Math.trunc(n);
+}
+
+/** Parse CYNAPX_CLUSTER_MAX_NODES; falls back to the default for unset/invalid values. */
+export function parseClusterMaxNodes(raw: string | undefined): number {
+    if (raw === undefined || raw.trim() === '') return DEFAULT_CLUSTER_MAX_NODES;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return DEFAULT_CLUSTER_MAX_NODES;
+    return Math.trunc(n);
+}
+
+/**
+ * mulberry32 — a tiny, fast, well-distributed 32-bit seeded PRNG.
+ * Returns a function producing floats in [0, 1). Used to make clustering
+ * deterministic when CYNAPX_CLUSTER_SEED is set (A-5, Phase 14-4).
+ */
+export function mulberry32(seed: number): () => number {
+    let a = seed >>> 0;
+    return function () {
+        a |= 0;
+        a = (a + 0x6d2b79f5) | 0;
+        let t = Math.imul(a ^ (a >>> 15), 1 | a);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+/**
+ * In-place Fisher-Yates (Knuth) shuffle — produces a uniform permutation.
+ * Replaces the biased `sort(() => Math.random() - 0.5)` (A-5/O-4, Phase 14-4).
+ * `rng` defaults to Math.random (non-deterministic); pass a seeded PRNG for
+ * reproducible ordering. Mutates and returns `arr`.
+ */
+export function fisherYatesShuffle<T>(arr: T[], rng: () => number = Math.random): T[] {
+    for (let i = arr.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        const tmp = arr[i];
+        arr[i] = arr[j];
+        arr[j] = tmp;
+    }
+    return arr;
+}
 
 export interface TraversalPathStep {
     nodeId: number;
@@ -166,9 +220,38 @@ export class GraphEngine {
      * Groups symbols into logical clusters and saves results to DB.
      */
     public async performClustering(): Promise<{ clusterCount: number, nodesClustered: number }> {
+        // A-2 (Phase 14-4): large-graph guard. performClustering() loads the full
+        // node/edge set plus adjacency + label maps into memory; on very large
+        // monorepos (hundreds of thousands of symbols) this risks RSS blow-up / GC
+        // pressure. Until the proper subgraph-partitioning approach (O-5, deferred)
+        // lands, skip clustering above a threshold with a warning rather than risk
+        // an OOM. Threshold is configurable via CYNAPX_CLUSTER_MAX_NODES (default 200k).
+        //
+        // M-4 (Phase 15-1): count-first guard. Probe the node count with a single
+        // COUNT(*) BEFORE getAllNodes()/getAllEdges() materialize the full set, so
+        // the guard's OOM defense triggers without first loading hundreds of MB of
+        // node objects. Same return shape and warning as the P14-4 guard.
+        const maxNodes = parseClusterMaxNodes(process.env.CYNAPX_CLUSTER_MAX_NODES);
+        const nodeCount = this.nodeRepo.countNodes();
+        if (nodeCount > maxNodes) {
+            log.warn('Skipping clustering: node count exceeds CYNAPX_CLUSTER_MAX_NODES guard', {
+                nodeCount,
+                maxNodes,
+                note: 'full subgraph partitioning is deferred (O-5)',
+            });
+            return { clusterCount: 0, nodesClustered: 0 };
+        }
+
         const nodes = this.nodeRepo.getAllNodes();
         const edges = this._edgeRepo.getAllEdges();
         if (nodes.length === 0) return { clusterCount: 0, nodesClustered: 0 };
+
+        // A-5 (Phase 14-4): optional deterministic clustering. When
+        // CYNAPX_CLUSTER_SEED is set to a finite number, use a seeded PRNG so the
+        // same input graph yields identical cluster assignments across runs.
+        // Unset → Math.random() (non-deterministic, original behavior).
+        const seed = parseClusterSeed(process.env.CYNAPX_CLUSTER_SEED);
+        const rng: () => number = seed === undefined ? Math.random : mulberry32(seed);
 
         // Build adjacency (undirected) — O(E)
         const adjacency = new Map<number, number[]>();
@@ -190,10 +273,9 @@ export class GraphEngine {
             let changed = false;
 
             // Shuffle node order each iteration to avoid label propagation bias.
-            // Note: non-deterministic by design — results vary between runs, which
-            // is acceptable for exploratory clustering. Use a seeded PRNG if
-            // reproducibility is required.
-            const order = [...nodes].sort(() => Math.random() - 0.5);
+            // Uses an unbiased Fisher-Yates shuffle (A-5/O-4). `rng` is seeded when
+            // CYNAPX_CLUSTER_SEED is set (deterministic) and Math.random otherwise.
+            const order = fisherYatesShuffle([...nodes], rng);
 
             for (const node of order) {
                 const neighbors = adjacency.get(node.id!) || [];
@@ -246,60 +328,66 @@ export class GraphEngine {
 
     private async persistClusters(clusters: number[][], nodeMap: Map<number, CodeNode>): Promise<void> {
         const db = this.nodeRepo.getDb();
+        // A-5: wrap the FULL persist (reset + cluster INSERTs + per-node
+        // updateCluster() calls) in a single transaction. Previously only the
+        // DELETE/reset was transactional and the thousands of INSERT/UPDATE
+        // statements ran in auto-commit mode — one WAL fsync per node and a
+        // half-written cluster assignment surviving a mid-run crash.
         db.transaction(() => {
             db.prepare('DELETE FROM logical_clusters').run();
             db.prepare('UPDATE nodes SET cluster_id = NULL').run();
-        })();
 
-        for (let i = 0; i < clusters.length; i++) {
-            const clusterNodes = clusters[i];
-            if (clusterNodes.length < 2) {
-                const node = nodeMap.get(clusterNodes[0]);
-                if (node?.symbol_type !== 'file') continue;
-            }
+            const insertCluster = db.prepare('INSERT INTO logical_clusters (name, cluster_type, avg_complexity, central_symbol_qname) VALUES (?, ?, ?, ?)');
 
-            // Semantic Classification
-            let totalComplexity = 0;
-            let totalFanIn = 0;
-            let totalFanOut = 0;
-            let maxCoreness = -1;
-            let centralSymbol = '';
+            for (let i = 0; i < clusters.length; i++) {
+                const clusterNodes = clusters[i];
+                if (clusterNodes.length < 2) {
+                    const node = nodeMap.get(clusterNodes[0]);
+                    if (node?.symbol_type !== 'file') continue;
+                }
 
-            for (const id of clusterNodes) {
-                const node = nodeMap.get(id);
-                if (node) {
-                    const complexity = node.cyclomatic || 1;
-                    const fanIn = node.fan_in || 0;
-                    const fanOut = node.fan_out || 0;
+                // Semantic Classification
+                let totalComplexity = 0;
+                let totalFanIn = 0;
+                let totalFanOut = 0;
+                let maxCoreness = -1;
+                let centralSymbol = '';
 
-                    totalComplexity += complexity;
-                    totalFanIn += fanIn;
-                    totalFanOut += fanOut;
+                for (const id of clusterNodes) {
+                    const node = nodeMap.get(id);
+                    if (node) {
+                        const complexity = node.cyclomatic || 1;
+                        const fanIn = node.fan_in || 0;
+                        const fanOut = node.fan_out || 0;
 
-                    const coreness = fanOut * complexity;
-                    if (coreness > maxCoreness) {
-                        maxCoreness = coreness;
-                        centralSymbol = node.qualified_name;
+                        totalComplexity += complexity;
+                        totalFanIn += fanIn;
+                        totalFanOut += fanOut;
+
+                        const coreness = fanOut * complexity;
+                        if (coreness > maxCoreness) {
+                            maxCoreness = coreness;
+                            centralSymbol = node.qualified_name;
+                        }
                     }
                 }
+
+                const avgComplexity = clusterNodes.length > 0 ? totalComplexity / clusterNodes.length : 0;
+
+                // Classification heuristic
+                let type: 'core' | 'utility' | 'domain' = 'domain';
+                if (totalFanIn > totalFanOut * 2) type = 'utility';
+                else if (totalFanOut > 5 && avgComplexity > 5) type = 'core';
+
+                const name = `cluster_${i + 1}_${type}`;
+                const result = insertCluster.run(name, type, avgComplexity, centralSymbol);
+                const clusterId = result.lastInsertRowid as number;
+
+                for (const nodeId of clusterNodes) {
+                    this.nodeRepo.updateCluster(nodeId, clusterId);
+                }
             }
-
-            const avgComplexity = clusterNodes.length > 0 ? totalComplexity / clusterNodes.length : 0;
-            
-            // Classification heuristic
-            let type: 'core' | 'utility' | 'domain' = 'domain';
-            if (totalFanIn > totalFanOut * 2) type = 'utility';
-            else if (totalFanOut > 5 && avgComplexity > 5) type = 'core';
-
-            const name = `cluster_${i + 1}_${type}`;
-            const stmt = db.prepare('INSERT INTO logical_clusters (name, cluster_type, avg_complexity, central_symbol_qname) VALUES (?, ?, ?, ?)');
-            const result = stmt.run(name, type, avgComplexity, centralSymbol);
-            const clusterId = result.lastInsertRowid as number;
-
-            for (const nodeId of clusterNodes) {
-                this.nodeRepo.updateCluster(nodeId, clusterId);
-            }
-        }
+        })();
     }
 
     /**
@@ -492,7 +580,10 @@ export class GraphEngine {
     ): void {
         interface BfsEntry { id: number; depth: number; parentIndex: number; edge?: CodeEdge; }
         const entries: BfsEntry[] = [];
+        // O-1: index-pointer queue (head++) instead of Array.shift() to avoid the
+        // O(n) re-index on every dequeue (matches the dfs/reTag pattern in this file).
         const queue: number[] = []; // indices into entries
+        let head = 0;
 
         entries.push({ id: startId, depth: 0, parentIndex: -1 });
         queue.push(0);
@@ -507,8 +598,8 @@ export class GraphEngine {
             return path;
         };
 
-        while (queue.length > 0) {
-            const entryIdx = queue.shift()!;
+        while (head < queue.length) {
+            const entryIdx = queue[head++];
             const entry = entries[entryIdx];
 
             const node = this.getNodeById(entry.id);

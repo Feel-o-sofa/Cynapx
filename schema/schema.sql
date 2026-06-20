@@ -15,6 +15,14 @@ CREATE TABLE IF NOT EXISTS nodes (
     last_updated_commit TEXT NOT NULL,
     version INTEGER NOT NULL,
     
+    -- A-4: the bare symbol name (the suffix after the final '#' in
+    -- qualified_name, or the whole qualified_name when there is no '#').
+    -- Indexed so reverse symbol-name lookups (resolveNodeId fallback) can use
+    -- an equality probe instead of a leading-wildcard `LIKE '%#name'` full scan.
+    -- Maintained by the application layer (createNode) and backfilled by
+    -- migration 2 → 3.
+    symbol_name TEXT,
+
     -- Symbol-specific attributes (logical_scheme_and_indexing_strat.md)
     checksum TEXT,       -- for symbol_type = 'file'
     modifiers TEXT,      -- for class/interface/method/function (JSON array of strings)
@@ -38,6 +46,9 @@ CREATE TABLE IF NOT EXISTS nodes (
 
     -- Historical Evidence Mapping (Task 33)
     history TEXT, -- JSON array of commit objects
+
+    -- Intent Capture (Vision: AI Knowledge Base)
+    docstring TEXT,  -- leading JSDoc/docstring/comment block for this symbol
 
     -- Semantic Clustering (Task 24)
     cluster_id INTEGER,
@@ -72,6 +83,11 @@ CREATE INDEX IF NOT EXISTS idx_nodes_qualified_name ON nodes (qualified_name);
 CREATE INDEX IF NOT EXISTS idx_nodes_file_path ON nodes (file_path);
 CREATE INDEX IF NOT EXISTS idx_nodes_version ON nodes (version);
 CREATE INDEX IF NOT EXISTS idx_nodes_cluster_id ON nodes (cluster_id);
+-- A-4: index for reverse symbol-name lookups (replaces `LIKE '%#name'` scans).
+-- COLLATE NOCASE so the case-insensitive equality probe in
+-- findNodesBySymbolName() (`symbol_name = ? COLLATE NOCASE`) resolves to an
+-- indexed SEARCH; a NOCASE query cannot use a BINARY-collation index.
+CREATE INDEX IF NOT EXISTS idx_nodes_symbol_name ON nodes (symbol_name COLLATE NOCASE);
 
 -- Optimization Indexes (logical_scheme_and_indexing_strat.md Section 5.2)
 CREATE INDEX IF NOT EXISTS idx_edges_from_id ON edges (from_id);
@@ -181,3 +197,52 @@ CREATE TABLE IF NOT EXISTS embedding_metadata (
   model_name TEXT,
   FOREIGN KEY(node_id) REFERENCES nodes(id) ON DELETE CASCADE
 );
+
+-- Tag normalization table (Phase 12-5 / A-2): mirrors nodes.tags (JSON array)
+-- as individual rows so tag-based filters can use a JOIN/EXISTS instead of LIKE.
+CREATE TABLE IF NOT EXISTS node_tags (
+  node_id INTEGER NOT NULL,
+  tag TEXT NOT NULL,
+  PRIMARY KEY (node_id, tag),
+  FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_node_tags_tag ON node_tags (tag);
+
+-- Agent Annotations (Vision: AI agents can write context for future agents)
+CREATE TABLE IF NOT EXISTS annotations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    node_qname TEXT NOT NULL,
+    kind TEXT NOT NULL,  -- 'decision' | 'gotcha' | 'todo' | 'rationale'
+    body TEXT NOT NULL,
+    author TEXT DEFAULT 'agent',
+    created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+    commit_hash TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_annotations_node_qname ON annotations (node_qname);
+
+-- Architecture Intent Model (P6)
+-- Singleton table storing the project's declared architecture intent,
+-- loaded from cynapx.architecture.json. Used for drift detection.
+CREATE TABLE IF NOT EXISTS architecture_intent (
+    id INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton
+    layers TEXT,           -- JSON array of LayerDef
+    rules TEXT,            -- JSON array of ArchRule (with rationale)
+    responsibilities TEXT  -- JSON object { layerName: description }
+);
+
+-- Richer Test Linkage (P7)
+-- Captures it()/test() block titles, their expect() assertions, and links them
+-- to the symbols they verify. Gives AI agents behavioral contracts: not just
+-- "tests exist" but "what the tests verify".
+CREATE TABLE IF NOT EXISTS test_specs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    test_qname TEXT NOT NULL,      -- qualified name of the test file
+    title TEXT NOT NULL,            -- it('title') or test('title')
+    target_qname TEXT,             -- symbol being tested (nullable)
+    assertions TEXT,                -- JSON array of normalized assertion strings
+    file_path TEXT NOT NULL,
+    start_line INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_test_specs_test_qname ON test_specs (test_qname);
+CREATE INDEX IF NOT EXISTS idx_test_specs_target_qname ON test_specs (target_qname);

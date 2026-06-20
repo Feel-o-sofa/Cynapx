@@ -5,7 +5,11 @@
  */
 import { WorkspaceManager } from './workspace-manager';
 import { ConsistencyChecker } from '../indexer/consistency-checker';
+import { requireEngine } from './tools/_utils';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('HealthMonitor');
 /**
  * HealthMonitor runs a periodic consistency check on the active project's
  * knowledge graph and triggers auto-repair when inconsistencies are detected.
@@ -24,19 +28,19 @@ export class HealthMonitor {
                 const ctx = workspaceManager.getActiveContext();
                 if (!ctx) return;
 
-                const stats = ctx.metadataRepo!.getLedgerStats();
+                const stats = requireEngine(ctx, 'metadataRepo').getLedgerStats();
                 const isConsistent =
                     stats.metadata.total_calls_count === stats.actual.sum_fan_in &&
                     stats.metadata.total_calls_count === stats.actual.sum_fan_out;
 
                 if (!isConsistent) {
-                    console.error("[HealthMonitor] Ledger inconsistency detected. Triggering auto-repair...");
+                    log.error("[HealthMonitor] Ledger inconsistency detected. Triggering auto-repair...");
                     this.isChecking = true;
                     try {
                         const checker = new ConsistencyChecker(
-                            ctx.graphEngine!.nodeRepo,
-                            ctx.gitService!,
-                            ctx.updatePipeline!,
+                            requireEngine(ctx, 'graphEngine').nodeRepo,
+                            requireEngine(ctx, 'gitService'),
+                            requireEngine(ctx, 'updatePipeline'),
                             ctx.projectPath
                         );
                         await checker.validate(true, false);
@@ -44,7 +48,7 @@ export class HealthMonitor {
                         this.isChecking = false;
                     }
                 }
-            } catch (e) { console.error('[HealthMonitor] Check failed:', e); }
+            } catch (e) { log.error('[HealthMonitor] Check failed:', { detail: e }); }
         }, 5 * 60 * 1000);
     }
 

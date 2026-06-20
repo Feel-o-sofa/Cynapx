@@ -16,7 +16,8 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [20, 22]
+        # P13-1: Node 20 is EOL (2026-04-30); engines requires >=22
+        node-version: [22, 24]
       fail-fast: false
 
     steps:
@@ -39,17 +40,17 @@ jobs:
         run: npm test
 
   lint:
-    name: Lint (Node 20)
+    name: Lint (Node 22)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -57,6 +58,16 @@ jobs:
 
       - name: Run lint
         run: npm run lint
+
+      # P14-1 (N-1): supply-chain audit gate. Production deps only
+      # (--omit=dev excludes vitest/vite transitive dev-only findings such as
+      # postcss). Baseline after the fast-uri/qs overrides + express-rate-limit
+      # 8.5.x bump is HIGH=0 and MODERATE=0. --audit-level=high fails the job on
+      # any new HIGH/CRITICAL while tolerating dev-only moderates. See
+      # agent_docs/diagnostic-v11.md (N-1) for reachability rationale and
+      # upstream tracking (modelcontextprotocol/typescript-sdk#2042).
+      - name: Audit production dependencies (HIGH gate)
+        run: npm audit --omit=dev --audit-level=high
 
   build-native:
     name: Build Native (${{ matrix.platform }})
@@ -79,10 +90,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies

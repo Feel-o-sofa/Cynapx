@@ -27,56 +27,24 @@ export class OptimizationEngine {
      * LOW    : public symbols without trait:internal — may be external API surface
      */
     public async findDeadCode(): Promise<OptimizationReport> {
-        const db = this.graphEngine.nodeRepo.getDb();
+        const nodeRepo = this.graphEngine.nodeRepo;
+        const db = nodeRepo.getDb();
 
-        const COMMON_FILTER = `
-            WHERE fan_in = 0
-            AND symbol_type NOT IN ('file', 'test', 'package')
-            AND qualified_name NOT LIKE '%#constructor'
-            AND (tags IS NULL OR tags NOT LIKE '%trait:entrypoint%')
-            AND (tags IS NULL OR tags NOT LIKE '%trait:abstract%')
-            AND NOT EXISTS (
-                SELECT 1 FROM edges cont
-                JOIN edges impl ON impl.from_id = cont.from_id
-                WHERE cont.to_id = nodes.id
-                AND cont.edge_type = 'contains'
-                AND impl.edge_type = 'implements'
-            )
-            AND NOT EXISTS (
-                SELECT 1 FROM edges cont
-                JOIN edges inh ON inh.from_id = cont.from_id
-                WHERE cont.to_id = nodes.id
-                AND cont.edge_type = 'contains'
-                AND inh.edge_type = 'inherits'
-            )
-        `;
-
-        const highQuery = `SELECT * FROM nodes ${COMMON_FILTER} AND visibility = 'private'`;
-
-        // H-2: Removed the impossible `tags LIKE '%trait:internal%'` condition.
-        // trait:internal is only set on methods/fields, but symbol_type NOT IN ('class','interface','function')
-        // already restricts to those types — making the previous AND contradictory and always returning 0 rows.
-        // MEDIUM tier now finds public non-class/interface/function symbols with no callers that are not entry points.
-        const mediumQuery = `SELECT * FROM nodes ${COMMON_FILTER}
-            AND visibility = 'public'
-            AND symbol_type NOT IN ('class', 'interface', 'function')
-            AND (tags NOT LIKE '%entry_point%' OR tags IS NULL)`;
-
-        const lowQuery = `SELECT * FROM nodes ${COMMON_FILTER}
-            AND visibility = 'public'
-            AND symbol_type NOT IN ('class', 'interface', 'function')
-            AND (tags IS NULL OR tags NOT LIKE '%trait:internal%')`;
-
-        const mapRow = (row: any): CodeNode => ({
-            ...row,
-            tags: row.tags ? JSON.parse(row.tags) : []
-        });
-
-        const highRows: CodeNode[] = db.prepare(highQuery).all().map(mapRow);
-        const mediumRows: CodeNode[] = db.prepare(mediumQuery).all().map(mapRow);
-        const lowRows: CodeNode[] = db.prepare(lowQuery).all().map(mapRow);
+        // A-3/A-2: dead-code candidate queries now live in
+        // NodeRepository.findDeadCodeCandidates(), using the node_tags JOIN
+        // table instead of `tags LIKE '%...%'` on the JSON column.
+        const highRows: CodeNode[] = nodeRepo.findDeadCodeCandidates('high');
+        const mediumRows: CodeNode[] = nodeRepo.findDeadCodeCandidates('medium');
+        const lowRows: CodeNode[] = nodeRepo.findDeadCodeCandidates('low');
 
         const totalSymbols: number = (db.prepare('SELECT COUNT(*) as count FROM nodes').get() as { count: number }).count;
+
+        // M-2 v20 (Phase 23-2): guard against division-by-zero on an empty graph
+        // (totalSymbols === 0 would yield 0/0 = NaN → "NaN%"). Non-empty behavior is unchanged.
+        const deadCount = highRows.length + mediumRows.length + lowRows.length;
+        const optimizationPotential = totalSymbols === 0
+            ? '0.00%'
+            : `${((deadCount / totalSymbols) * 100).toFixed(2)}%`;
 
         return {
             high: highRows,
@@ -88,8 +56,8 @@ export class OptimizationEngine {
                 highConfidenceDead: highRows.length,
                 mediumConfidenceDead: mediumRows.length,
                 lowConfidenceDead: lowRows.length,
-                deadSymbols: highRows.length + mediumRows.length + lowRows.length,
-                optimizationPotential: `${(((highRows.length + mediumRows.length + lowRows.length) / totalSymbols) * 100).toFixed(2)}%`
+                deadSymbols: deadCount,
+                optimizationPotential
             }
         };
     }

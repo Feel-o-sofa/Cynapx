@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import Database from 'better-sqlite3';
 
 /**
  * Tests for LockManager.
@@ -14,6 +15,7 @@ import * as os from 'os';
 // We need to intercept the `paths` module before importing LockManager.
 // Use vi.mock to redirect getLocksDir and getProjectHash to a temp dir.
 const TEST_LOCKS_DIR = path.join(os.tmpdir(), `cynapx-lock-test-${process.pid}`);
+const TEST_STORAGE_DIR = path.join(os.tmpdir(), `cynapx-lock-storage-${process.pid}`);
 const TEST_PROJECT_PATH = path.join(os.tmpdir(), `cynapx-lock-project-${process.pid}`);
 
 vi.mock('../src/utils/paths', async (importOriginal) => {
@@ -26,10 +28,22 @@ vi.mock('../src/utils/paths', async (importOriginal) => {
             }
             return TEST_LOCKS_DIR;
         },
+        getCentralStorageDir: () => {
+            if (!fs.existsSync(TEST_STORAGE_DIR)) {
+                fs.mkdirSync(TEST_STORAGE_DIR, { recursive: true });
+            }
+            return TEST_STORAGE_DIR;
+        },
     };
 });
 
-import { LockManager } from '../src/utils/lock-manager';
+import {
+    LockManager,
+    LockHeldError,
+    HEARTBEAT_STALE_MS,
+    CONNECT_MAX_RETRIES,
+    decideConnectFailureAction,
+} from '../src/utils/lock-manager';
 
 describe('LockManager', () => {
     let manager: LockManager;
@@ -43,6 +57,12 @@ describe('LockManager', () => {
         if (fs.existsSync(TEST_LOCKS_DIR)) {
             for (const f of fs.readdirSync(TEST_LOCKS_DIR)) {
                 try { fs.unlinkSync(path.join(TEST_LOCKS_DIR, f)); } catch {}
+            }
+        }
+        // Remove all DB/journal files in the test storage dir
+        if (fs.existsSync(TEST_STORAGE_DIR)) {
+            for (const f of fs.readdirSync(TEST_STORAGE_DIR)) {
+                try { fs.unlinkSync(path.join(TEST_STORAGE_DIR, f)); } catch {}
             }
         }
     });
@@ -106,6 +126,79 @@ describe('LockManager', () => {
         });
     });
 
+    describe('atomic acquire (H-4)', () => {
+        it('should throw LockHeldError when another live process holds the lock', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+
+            // Simulate a lock held by another live process (use our own PID,
+            // which is guaranteed to be alive, but a different "process").
+            const liveLock = {
+                pid: process.pid,
+                ipcPort: 4242,
+                lastHeartbeat: new Date().toISOString(),
+                status: 'active',
+                nonce: 'other-process-nonce',
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(liveLock, null, 2), 'utf8');
+
+            await expect(manager.acquire(9999, 'my-nonce')).rejects.toThrow(LockHeldError);
+
+            try {
+                await manager.acquire(9999, 'my-nonce');
+            } catch (err) {
+                expect(err).toBeInstanceOf(LockHeldError);
+                expect((err as LockHeldError).lock.ipcPort).toBe(4242);
+            }
+
+            // currentLock must remain unset since acquisition failed.
+            expect((manager as any).currentLock).toBeNull();
+
+            // The other process's lock file must be left untouched.
+            const onDisk = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(onDisk.ipcPort).toBe(4242);
+
+            // Manually clear the lock file so afterEach's release() (which is a
+            // no-op since currentLock is null) doesn't leave it behind.
+            fs.unlinkSync(lockPath);
+        });
+
+        it('should clean up a stale lock (dead PID) and acquire successfully', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+
+            const staleLock = {
+                pid: 2147483647,
+                ipcPort: 1234,
+                lastHeartbeat: new Date().toISOString(),
+                status: 'active',
+                nonce: 'stale-nonce',
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(staleLock, null, 2), 'utf8');
+
+            await manager.acquire(8888, 'fresh-nonce');
+
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.pid).toBe(process.pid);
+            expect(data.ipcPort).toBe(8888);
+            expect(data.nonce).toBe('fresh-nonce');
+        });
+
+        it('should not allow a second acquire to overwrite an existing live lock (no TOCTOU)', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            await manager.acquire(1111, 'first-nonce');
+
+            const other = new LockManager(TEST_PROJECT_PATH);
+            await expect(other.acquire(2222, 'second-nonce')).rejects.toThrow(LockHeldError);
+
+            // Original lock must remain intact.
+            const lockPath: string = (manager as any).lockPath;
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.ipcPort).toBe(1111);
+            expect(data.nonce).toBe('first-nonce');
+        });
+    });
+
     describe('getValidLock', () => {
         it('should return null when no lock file exists', async () => {
             manager = new LockManager(TEST_PROJECT_PATH);
@@ -152,6 +245,42 @@ describe('LockManager', () => {
             expect(result).toBeNull();
             expect(fs.existsSync(lockPath)).toBe(false);
         });
+
+        it('should preserve the main DB file (and checkpoint WAL) when cleaning up a stale lock (C-1 regression)', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+            const lockHash = path.basename(lockPath, '.lock');
+
+            // Set up a real SQLite DB in WAL mode with a pending WAL file,
+            // mirroring the on-disk state left by a crashed host process.
+            const dbFile = path.join(TEST_STORAGE_DIR, `${lockHash}_v2.db`);
+            const db = new Database(dbFile);
+            db.pragma('journal_mode = WAL');
+            db.exec('CREATE TABLE marker (id INTEGER PRIMARY KEY, value TEXT)');
+            db.prepare('INSERT INTO marker (value) VALUES (?)').run('committed-before-crash');
+            db.close();
+            expect(fs.existsSync(dbFile)).toBe(true);
+
+            // Write a stale lock referencing a dead PID.
+            const staleLock = {
+                pid: 2147483647,
+                ipcPort: 1234,
+                lastHeartbeat: new Date().toISOString(),
+                status: 'active',
+                nonce: 'stale-nonce',
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(staleLock, null, 2), 'utf8');
+
+            const result = await manager.getValidLock();
+            expect(result).toBeNull();
+
+            // The DB file itself must survive cleanup, with its data intact.
+            expect(fs.existsSync(dbFile)).toBe(true);
+            const verifyDb = new Database(dbFile, { readonly: true });
+            const row = verifyDb.prepare('SELECT value FROM marker').get() as { value: string };
+            expect(row.value).toBe('committed-before-crash');
+            verifyDb.close();
+        });
     });
 
     describe('heartbeat', () => {
@@ -186,6 +315,362 @@ describe('LockManager', () => {
             const lockPath: string = (manager as any).lockPath;
             const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
             expect(data.status).toBe('shutting-down');
+        });
+    });
+
+    // H-2 (diagnostic-v10): heartbeat/signalShutdown must be atomic (tmp+rename)
+    // so a concurrent reader never observes a truncated/partial JSON and
+    // mistakes a live lock for a corrupt one (which previously triggered an
+    // immediate delete → split-brain).
+    describe('H-2: atomic heartbeat write', () => {
+        it('should never leave a partial/corrupt lock file under concurrent heartbeat + getValidLock', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            await manager.acquire(6000, 'atomic-nonce');
+            const lockPath: string = (manager as any).lockPath;
+
+            let corruptObservations = 0;
+            // Hammer heartbeat() and getValidLock() interleaved. Because the
+            // write is atomic, getValidLock must always read complete JSON and
+            // return a live lock — never null from a parse failure.
+            for (let i = 0; i < 100; i++) {
+                const hb = manager.heartbeat();
+                const got = await manager.getValidLock();
+                await hb;
+                if (got === null) corruptObservations++;
+            }
+            expect(corruptObservations).toBe(0);
+
+            // The final on-disk file must be valid JSON with our nonce.
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.nonce).toBe('atomic-nonce');
+
+            // No leftover .tmp files in the locks dir.
+            const tmpFiles = fs.readdirSync(TEST_LOCKS_DIR).filter(f => f.includes('.tmp'));
+            expect(tmpFiles).toHaveLength(0);
+        });
+
+        it('should retry once on a transient partial read before deleting the lock', async () => {
+            // Simulate a partial write: the file initially contains truncated
+            // JSON, then is completed (atomic replace) during getValidLock's
+            // ~50ms retry sleep. The lock must survive the retry, not be deleted.
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+
+            // Start with truncated JSON so the first parse fails.
+            fs.writeFileSync(lockPath, '{ "pid": 123, "ipcPo', 'utf8');
+
+            const validLock = {
+                pid: process.pid,
+                ipcPort: 6001,
+                lastHeartbeat: new Date().toISOString(),
+                status: 'active',
+                nonce: 'retry-nonce',
+            };
+            // Complete the write shortly after, before the retry reread (50ms).
+            const t = setTimeout(() => {
+                fs.writeFileSync(lockPath, JSON.stringify(validLock, null, 2), 'utf8');
+            }, 20);
+
+            const result = await manager.getValidLock();
+            clearTimeout(t);
+
+            // After the retry read returned valid JSON for a live PID, the lock
+            // must be preserved (not deleted).
+            expect(result).not.toBeNull();
+            expect(result!.nonce).toBe('retry-nonce');
+            expect(fs.existsSync(lockPath)).toBe(true);
+        });
+    });
+
+    // H-2: release() must verify the on-disk lock still belongs to us (same
+    // nonce) before unlinking — otherwise it could delete a foreign Host's lock
+    // installed after a failover replacement.
+    describe('H-2: release self-nonce verification', () => {
+        it('should NOT delete a lock that was overwritten by another nonce', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            await manager.acquire(6100, 'mine');
+            const lockPath: string = (manager as any).lockPath;
+
+            // Simulate another Host replacing the lock file (different nonce).
+            const foreign = {
+                pid: process.pid,
+                ipcPort: 6101,
+                lastHeartbeat: new Date().toISOString(),
+                status: 'active',
+                nonce: 'foreign',
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(foreign, null, 2), 'utf8');
+
+            await manager.release();
+
+            // Foreign lock must survive untouched.
+            expect(fs.existsSync(lockPath)).toBe(true);
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.nonce).toBe('foreign');
+
+            fs.unlinkSync(lockPath);
+        });
+
+        it('should delete its own lock on release when the nonce still matches', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            await manager.acquire(6200, 'self');
+            const lockPath: string = (manager as any).lockPath;
+
+            await manager.release();
+            expect(fs.existsSync(lockPath)).toBe(false);
+        });
+    });
+
+    // H-1 (diagnostic-v10): heartbeat-age-based staleness detection. PID
+    // liveness alone is insufficient because a reused PID makes a dead Host's
+    // lock look valid forever.
+    describe('H-1: heartbeat-age staleness', () => {
+        it('isHeartbeatStale returns false for a fresh heartbeat', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lock = {
+                pid: process.pid,
+                ipcPort: 7000,
+                lastHeartbeat: new Date().toISOString(),
+                status: 'active' as const,
+                nonce: 'fresh',
+            };
+            expect(manager.isHeartbeatStale(lock)).toBe(false);
+        });
+
+        it('isHeartbeatStale returns true when heartbeat age exceeds the threshold', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const old = new Date(Date.now() - (HEARTBEAT_STALE_MS + 5000)).toISOString();
+            const lock = {
+                pid: process.pid,
+                ipcPort: 7001,
+                lastHeartbeat: old,
+                status: 'active' as const,
+                nonce: 'old',
+            };
+            expect(manager.isHeartbeatStale(lock)).toBe(true);
+        });
+
+        it('isHeartbeatStale returns true for a missing/invalid heartbeat', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lock = {
+                pid: process.pid,
+                ipcPort: 7002,
+                lastHeartbeat: 'not-a-date',
+                status: 'active' as const,
+                nonce: 'bad',
+            };
+            expect(manager.isHeartbeatStale(lock)).toBe(true);
+        });
+
+        it('getValidLock still returns a live lock with a stale heartbeat (staleness is advisory, combined with connect failure by the caller)', async () => {
+            // PID-reuse simulation: the PID is alive (our own), but the heartbeat
+            // is ancient. getValidLock must NOT delete it on its own — the
+            // reclamation decision belongs to bootstrap (connect failure +
+            // stale heartbeat). This documents the contract H-1 relies on.
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+            const stale = {
+                pid: process.pid, // alive
+                ipcPort: 7003,
+                lastHeartbeat: new Date(Date.now() - (HEARTBEAT_STALE_MS + 10000)).toISOString(),
+                status: 'active',
+                nonce: 'reused-pid',
+            };
+            fs.writeFileSync(lockPath, JSON.stringify(stale, null, 2), 'utf8');
+
+            const result = await manager.getValidLock();
+            expect(result).not.toBeNull();
+            expect(manager.isHeartbeatStale(result!)).toBe(true);
+            // File preserved (not auto-deleted by getValidLock).
+            expect(fs.existsSync(lockPath)).toBe(true);
+
+            fs.unlinkSync(lockPath);
+        });
+    });
+
+    // H-1: forceReclaim removes a stale lock only if its nonce still matches the
+    // observed one (guards against deleting a fresh replacement).
+    describe('H-1: forceReclaim', () => {
+        it('reclaims a stale lock when the nonce matches', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+            fs.writeFileSync(lockPath, JSON.stringify({
+                pid: 999999, ipcPort: 7100, lastHeartbeat: new Date().toISOString(),
+                status: 'active', nonce: 'doomed',
+            }, null, 2), 'utf8');
+
+            const reclaimed = manager.forceReclaim('doomed');
+            expect(reclaimed).toBe(true);
+            expect(fs.existsSync(lockPath)).toBe(false);
+        });
+
+        it('refuses to reclaim when a different nonce now owns the lock', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+            fs.writeFileSync(lockPath, JSON.stringify({
+                pid: process.pid, ipcPort: 7101, lastHeartbeat: new Date().toISOString(),
+                status: 'active', nonce: 'newowner',
+            }, null, 2), 'utf8');
+
+            const reclaimed = manager.forceReclaim('oldowner');
+            expect(reclaimed).toBe(false);
+            expect(fs.existsSync(lockPath)).toBe(true);
+
+            fs.unlinkSync(lockPath);
+        });
+    });
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Phase 13-9 (diagnostic-v10 §5 "lock 경합 스트레스"): the integration-level
+    // counterpart of the H-1/H-2 unit checks above. Exercises heavily concurrent
+    // getValidLock()/heartbeat() interleavings for write atomicity, and a
+    // PID-reuse + retry-cap simulation for the connect-failure escalation policy.
+    // ─────────────────────────────────────────────────────────────────────────
+    describe('Phase 13-9: lock contention stress', () => {
+        it('survives many fully-parallel heartbeat + getValidLock calls without ever observing corruption', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            await manager.acquire(6300, 'stress-nonce');
+            const lockPath: string = (manager as any).lockPath;
+
+            // Unlike the serial H-2 interleave test, fire batches with Promise.all
+            // so heartbeat writes (tmp+rename) race in-flight reads. Atomic
+            // replace must guarantee every reader sees complete JSON for a live
+            // PID — never null from a parse failure or a missing file.
+            let nullObservations = 0;
+            for (let batch = 0; batch < 40; batch++) {
+                const ops: Promise<unknown>[] = [];
+                for (let i = 0; i < 8; i++) {
+                    ops.push(manager.heartbeat());
+                    ops.push(manager.getValidLock().then((l) => { if (l === null) nullObservations++; }));
+                }
+                await Promise.all(ops);
+            }
+            expect(nullObservations).toBe(0);
+
+            // The on-disk file is still valid JSON carrying our nonce, and no temp
+            // files leaked from the ~320 atomic writes.
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.nonce).toBe('stress-nonce');
+            const tmpFiles = fs.readdirSync(TEST_LOCKS_DIR).filter(f => f.includes('.tmp'));
+            expect(tmpFiles).toHaveLength(0);
+        });
+
+        it('concurrent acquire() from many managers yields exactly one winner (single host)', async () => {
+            // O_EXCL create must serialize racing acquirers onto one lock file.
+            const managers = Array.from({ length: 12 }, () => new LockManager(TEST_PROJECT_PATH));
+            const results = await Promise.allSettled(
+                managers.map((m, i) => m.acquire(7000 + i, `nonce-${i}`)),
+            );
+            const winners = results.filter(r => r.status === 'fulfilled');
+            const losers = results.filter(r => r.status === 'rejected');
+            expect(winners).toHaveLength(1);
+            // Every loser must see a LockHeldError (not some other failure).
+            expect(losers.length).toBe(11);
+            for (const l of losers) {
+                expect((l as PromiseRejectedResult).reason).toBeInstanceOf(LockHeldError);
+            }
+            // Release whichever manager won so afterEach cleans up.
+            const winnerIdx = results.findIndex(r => r.status === 'fulfilled');
+            await managers[winnerIdx].release();
+        });
+
+        it('PID-reuse simulation: a stale heartbeat + repeated connect failures escalates to reclaim within the retry cap', () => {
+            // Models bootstrap's acquireAndRun loop: a recorded Host whose PID was
+            // reused (alive) but whose heartbeat is ancient. The connect keeps
+            // failing; the decision policy must escalate to 'reclaim' — never loop
+            // forever — and must do so on the FIRST failure because the heartbeat
+            // is stale (the strongest dead-Host signal).
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const reusedPidLock = {
+                pid: process.pid, // PID reuse: alive
+                ipcPort: 7300,
+                lastHeartbeat: new Date(Date.now() - (HEARTBEAT_STALE_MS + 30_000)).toISOString(),
+                status: 'active' as const,
+                nonce: 'reused',
+            };
+            expect(manager.isHeartbeatStale(reusedPidLock)).toBe(true);
+
+            const actions: Array<'retry' | 'reclaim'> = [];
+            let retries = 0;
+            let action: 'retry' | 'reclaim' = 'retry';
+            while (action === 'retry' && retries < 1000) {
+                retries++;
+                action = decideConnectFailureAction(/* stale */ true, retries);
+                actions.push(action);
+            }
+            // Stale heartbeat ⇒ reclaim immediately, no retry spinning.
+            expect(actions).toEqual(['reclaim']);
+        });
+
+        it('fresh-heartbeat connect failures escalate to reclaim only after the retry cap (bounded loop)', () => {
+            // The other branch: heartbeat is fresh, so the Host might just be
+            // briefly unreachable. We retry up to the cap, then reclaim — proving
+            // the loop is bounded even without a staleness signal.
+            let retries = 0;
+            let action: 'retry' | 'reclaim' = 'retry';
+            let retryCount = 0;
+            while (action === 'retry' && retries < 1000) {
+                retries++;
+                action = decideConnectFailureAction(/* stale */ false, retries);
+                if (action === 'retry') retryCount++;
+            }
+            expect(action).toBe('reclaim');
+            expect(retries).toBe(CONNECT_MAX_RETRIES);
+            expect(retryCount).toBe(CONNECT_MAX_RETRIES - 1);
+        });
+
+        it('forceReclaim after escalation removes the stale lock so a fresh acquire succeeds', async () => {
+            manager = new LockManager(TEST_PROJECT_PATH);
+            const lockPath: string = (manager as any).lockPath;
+            // A reused-PID stale lock on disk.
+            fs.writeFileSync(lockPath, JSON.stringify({
+                pid: process.pid, ipcPort: 7400,
+                lastHeartbeat: new Date(Date.now() - (HEARTBEAT_STALE_MS + 60_000)).toISOString(),
+                status: 'active', nonce: 'doomed-stale',
+            }, null, 2), 'utf8');
+
+            // The escalation path: observe staleness, then forceReclaim with the
+            // observed nonce, then acquire cleanly.
+            const observed = await manager.getValidLock();
+            expect(observed).not.toBeNull();
+            expect(manager.isHeartbeatStale(observed!)).toBe(true);
+            expect(manager.forceReclaim('doomed-stale')).toBe(true);
+
+            await manager.acquire(7401, 'fresh-after-reclaim');
+            const data = JSON.parse(fs.readFileSync(lockPath, 'utf8'));
+            expect(data.nonce).toBe('fresh-after-reclaim');
+            expect(data.ipcPort).toBe(7401);
+        });
+    });
+
+    // H-1: connect-failure escalation policy used by acquireAndRun to cap the
+    // unbounded 2s retry loop.
+    describe('H-1: decideConnectFailureAction (retry cap)', () => {
+        it('retries while under the cap with a fresh heartbeat', () => {
+            for (let r = 1; r < CONNECT_MAX_RETRIES; r++) {
+                expect(decideConnectFailureAction(false, r)).toBe('retry');
+            }
+        });
+
+        it('reclaims immediately when the heartbeat is stale (PID reuse), even on the first failure', () => {
+            expect(decideConnectFailureAction(true, 1)).toBe('reclaim');
+        });
+
+        it('reclaims once the retry cap is reached even with a fresh heartbeat', () => {
+            expect(decideConnectFailureAction(false, CONNECT_MAX_RETRIES)).toBe('reclaim');
+            expect(decideConnectFailureAction(false, CONNECT_MAX_RETRIES + 1)).toBe('reclaim');
+        });
+
+        it('does not loop forever — every retry count eventually escalates to reclaim', () => {
+            let action: 'reclaim' | 'retry' = 'retry';
+            let retries = 0;
+            // Simulate the bootstrap loop with a fresh (non-stale) heartbeat.
+            while (action === 'retry' && retries < 1000) {
+                retries++;
+                action = decideConnectFailureAction(false, retries);
+            }
+            expect(action).toBe('reclaim');
+            expect(retries).toBe(CONNECT_MAX_RETRIES);
         });
     });
 });

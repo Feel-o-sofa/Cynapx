@@ -18,10 +18,15 @@ import { EdgeRepository } from '../db/edge-repository';
 import { getDatabasePath, getProjectHash, updateRegistryStats } from '../utils/paths';
 import { loadProfile, ProjectProfile } from '../utils/profile';
 import { getAuditLogger } from '../utils/audit-logger';
+import { getVersion } from '../utils/version';
 import { GitService } from '../indexer/git-service';
 import { UpdatePipeline } from '../indexer/update-pipeline';
 import { SecurityProvider } from '../utils/security';
+import { Disposable } from '../types';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('Workspace');
 export interface EngineContext {
     projectPath: string;
     projectHash: string;
@@ -36,6 +41,14 @@ export interface EngineContext {
     gitService?: GitService;
     updatePipeline?: UpdatePipeline;
     securityProvider?: SecurityProvider;
+    /**
+     * H-6: live host services attached to this context (file watcher, worker
+     * pool). Held so {@link WorkspaceManager.unmountProject} can dispose them in
+     * the correct order before the DB is closed — otherwise a watcher flush or a
+     * queued worker job could write to a closed DB handle after purge.
+     */
+    watcher?: Disposable;
+    workerPool?: Disposable;
     /** Project-specific indexing/analysis profile (loaded from ~/.cynapx/profiles/{hash}.json) */
     profile?: ProjectProfile;
     /** Set to true when a version mismatch auto-reindex was triggered at init */
@@ -93,6 +106,13 @@ export class WorkspaceManager {
 
         const nodeRepo = new NodeRepository(db);
         const edgeRepo = new EdgeRepository(db);
+        // M3/A-11: if runMigrations() is ever invoked again on this connection
+        // (after the constructor-time run), drop EdgeRepository's cached
+        // prepared statements so they get re-prepared against the new schema.
+        dbManager.onMigration(() => {
+            edgeRepo.invalidateStatementCache();
+            nodeRepo.invalidateStatementCache();
+        });
         const metadataRepo = new MetadataRepository(db);
         const graphEngine = new GraphEngine(nodeRepo, edgeRepo);
         const vectorRepo = new VectorRepository(db);
@@ -106,8 +126,7 @@ export class WorkspaceManager {
         // Version mismatch detection (Req-3)
         const audit = getAuditLogger();
         try {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const currentVersion: string = require('../../package.json').version as string;
+            const currentVersion: string = getVersion();
             const storedVersion = metadataRepo.getCynapxVersion();
             if (storedVersion && storedVersion !== '' && storedVersion !== currentVersion) {
                 const storedMajorMinor = storedVersion.split('.').slice(0, 2).join('.');
@@ -122,23 +141,27 @@ export class WorkspaceManager {
                         project: ctx.projectPath,
                         reason: `version mismatch: ${storedVersion} → ${currentVersion}`
                     });
-                    console.error(
-                        `[WorkspaceManager] Version mismatch for ${ctx.projectPath}: ` +
-                        `stored=${storedVersion}, current=${currentVersion}. ` +
-                        `Triggering full reindex.`
-                    );
+                    log.warn('Version mismatch — triggering full reindex', {
+                        project: ctx.projectPath,
+                        storedVersion,
+                        currentVersion
+                    });
                     // Purge existing index data
                     db.transaction(() => {
                         db.prepare('DELETE FROM edges').run();
                         db.prepare('DELETE FROM nodes').run();
                         db.prepare("DELETE FROM index_metadata WHERE key = 'last_indexed_commit'").run();
+                        // O-9: node_embeddings (vec0) has no FK cascade — clear it explicitly.
+                        try { db.prepare('DELETE FROM node_embeddings').run(); } catch (err) {
+                            if (!(err instanceof Error) || !err.message.includes('no such table')) throw err;
+                        }
                     })();
                     ctx.reindexTriggeredByVersion = true;
                 }
             }
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
-            console.error(`[WorkspaceManager] Version check failed (non-fatal): ${msg}`);
+            log.error(`[WorkspaceManager] Version check failed (non-fatal): ${msg}`);
         }
 
         // Load optional custom architecture rules
@@ -148,7 +171,18 @@ export class WorkspaceManager {
                 ctx.archEngine.loadRules(archRulesPath);
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : String(err);
-                console.error(`[WorkspaceManager] Warning: failed to load arch-rules.json: ${msg}`);
+                log.error(`[WorkspaceManager] Warning: failed to load arch-rules.json: ${msg}`);
+            }
+        }
+
+        // Load optional declared architecture intent (P6)
+        const archIntentPath = path.join(ctx.projectPath, 'cynapx.architecture.json');
+        if (fs.existsSync(archIntentPath)) {
+            try {
+                ctx.archEngine.loadIntent(archIntentPath);
+            } catch (err: unknown) {
+                const msg = err instanceof Error ? err.message : String(err);
+                console.error(`[WorkspaceManager] Warning: failed to load cynapx.architecture.json: ${msg}`);
             }
         }
 
@@ -168,8 +202,7 @@ export class WorkspaceManager {
         if (!ctx || !ctx.metadataRepo) return;
 
         try {
-            // eslint-disable-next-line @typescript-eslint/no-var-requires
-            const currentVersion: string = require('../../package.json').version as string;
+            const currentVersion: string = getVersion();
             const now = new Date().toISOString();
             ctx.metadataRepo.setCynapxVersion(currentVersion);
             ctx.metadataRepo.setIndexedAt(now);
@@ -188,7 +221,7 @@ export class WorkspaceManager {
             });
         } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
-            console.error(`[WorkspaceManager] onIndexComplete failed (non-fatal): ${msg}`);
+            log.error(`[WorkspaceManager] onIndexComplete failed (non-fatal): ${msg}`);
         }
     }
 
@@ -211,6 +244,75 @@ export class WorkspaceManager {
 
     public getContextByHash(hash: string): EngineContext | undefined {
         return this.contexts.get(hash);
+    }
+
+    /**
+     * H-6: Tears down all live host services for a project and releases its DB
+     * handle, leaving a "bare" mounted context (path + hash only) that can be
+     * re-initialized via {@link initializeEngine} again.
+     *
+     * Dispose ordering mirrors Phase 12-4 H-5's LifecycleManager reverse order
+     * (watcher → pipeline → worker pool → DB): stop the file watcher first so no
+     * further flushes are scheduled, drop the pipeline (it owns no OS resources
+     * but must not be invoked after the DB closes), terminate the worker pool so
+     * no queued parse job can write to the DB, and only then dispose the
+     * DatabaseManager. Every engine field that wraps the now-closed connection
+     * is nulled out so:
+     *   1. no engine keeps a reference to a closed handle ("database connection
+     *      is not open" on later calls), and
+     *   2. {@link initializeEngine}'s `if (ctx.dbManager) return ctx` guard (and
+     *      bootstrap's `startHostServicesForContext` guard) no longer mistakes a
+     *      disposed-but-non-null dbManager for a live engine and short-circuits
+     *      re-initialization.
+     *
+     * The context entry itself is retained (path/hash) so the project stays
+     * mounted and `initialize_project` can rebuild it; pass `remove: true` to
+     * delete the entry entirely.
+     */
+    public async unmountProject(hash: string, opts: { remove?: boolean } = {}): Promise<void> {
+        const ctx = this.contexts.get(hash);
+        if (!ctx) return;
+
+        // 1. Stop the file watcher (no further debounced flushes).
+        try { ctx.watcher?.dispose(); } catch (err) {
+            log.error(`[WorkspaceManager] watcher dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        }
+
+        // 2. Terminate the worker pool (reject any in-flight/queued parse jobs).
+        try { ctx.workerPool?.dispose(); } catch (err) {
+            log.error(`[WorkspaceManager] workerPool dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        }
+
+        // 3. Close the DB connection LAST — after everything that might write.
+        try { ctx.dbManager?.dispose(); } catch (err) {
+            log.error(`[WorkspaceManager] dbManager dispose failed (non-fatal): ${err instanceof Error ? err.message : err}`);
+        }
+
+        // 4. Null every field that wraps the closed connection / disposed
+        //    services so nothing references a dead handle and the init guards
+        //    correctly see an un-initialized context.
+        ctx.dbManager = undefined;
+        ctx.graphEngine = undefined;
+        ctx.metadataRepo = undefined;
+        ctx.vectorRepo = undefined;
+        ctx.archEngine = undefined;
+        ctx.refactorEngine = undefined;
+        ctx.optEngine = undefined;
+        ctx.policyDiscoverer = undefined;
+        ctx.gitService = undefined;
+        ctx.updatePipeline = undefined;
+        ctx.securityProvider = undefined;
+        ctx.watcher = undefined;
+        ctx.workerPool = undefined;
+        ctx.reindexTriggeredByVersion = undefined;
+
+        if (opts.remove) {
+            this.contexts.delete(hash);
+            if (this.activeProjectId === hash) {
+                const next = this.contexts.keys().next();
+                this.activeProjectId = next.done ? null : next.value;
+            }
+        }
     }
 
     public async dispose() {

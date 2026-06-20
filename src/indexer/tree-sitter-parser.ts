@@ -4,7 +4,7 @@
  * See LICENSE in the project root for license information.
  */
 import Parser from 'tree-sitter';
-import { CodeParser, DeltaGraph, RawCodeEdge, LanguageProvider } from './types';
+import { CodeParser, DeltaGraph, RawCodeEdge, LanguageProvider, TestSpec } from './types';
 import { CodeNode, SymbolType } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -27,6 +27,38 @@ export class TreeSitterParser implements CodeParser {
 
     public supports(filePath: string): boolean {
         return this.registry.getProvider(filePath) !== undefined;
+    }
+
+    /**
+     * Extracts a leading comment (sibling) or a leading string docstring (Python)
+     * for a captured definition node. Captured as "intent" for the knowledge base (P1).
+     */
+    private extractTreeSitterDocstring(captureNode: Parser.SyntaxNode, provider?: LanguageProvider): string | undefined {
+        // Look for an immediately preceding comment node (sibling)
+        const prev = captureNode.previousNamedSibling;
+        if (prev && (prev.type === 'comment' || prev.type === 'block_comment'
+                     || prev.type === 'line_comment' || prev.type === 'doc_comment'
+                     || prev.type === 'documentation_comment')) {
+            let text: string;
+            if (provider?.normalizeDocstring) {
+                text = provider.normalizeDocstring(prev.text);
+            } else {
+                text = prev.text
+                    .replace(/^\/\*\*?|\*\/$|^\/\/\/?|^#+\s?|^\s*\*\s?/gm, '')
+                    .trim();
+            }
+            return text || undefined;
+        }
+        // Python: check first child for string node (docstring)
+        const firstChild = captureNode.firstNamedChild;
+        if (firstChild && (firstChild.type === 'string' || firstChild.type === 'expression_statement')) {
+            const possibleDocstring = firstChild.firstNamedChild ?? firstChild;
+            if (possibleDocstring.type === 'string' || possibleDocstring.type === 'string_content') {
+                const raw = possibleDocstring.text.replace(/^["'`]{1,3}|["'`]{1,3}$/g, '').trim();
+                return raw || undefined;
+            }
+        }
+        return undefined;
     }
 
     public async parse(filePath: string, commit: string, version: number): Promise<DeltaGraph> {
@@ -109,10 +141,11 @@ export class TreeSitterParser implements CodeParser {
                         last_updated_commit: commit,
                         version: version,
                         loc: node.endPosition.row - node.startPosition.row + 1,
-                        cyclomatic: MetricsCalculator.calculateCyclomaticComplexity(node, node.text),
+                        cyclomatic: MetricsCalculator.calculateCyclomaticComplexityTreeSitter(node, provider.getDecisionPoints()),
                         signature: paramsCapture ? `${name}${paramsCapture.node.text}` : undefined,
                         return_type: returnCapture ? returnCapture.node.text.replace(/^[:\s->]+/, '') : undefined,
-                        modifiers: modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : undefined
+                        modifiers: modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : undefined,
+                        docstring: this.extractTreeSitterDocstring(node, provider)
                     });
 
                     edges.push({
@@ -124,6 +157,16 @@ export class TreeSitterParser implements CodeParser {
 
                     nodeToSymbolMap.set(node.id, qname);
                 }
+            }
+        }
+
+        // Build name → qname index for intra-file call resolution (P8-2)
+        const localSymbolMap = new Map<string, string>();
+        for (const [, qname] of nodeToSymbolMap) {
+            const hashIdx = qname.lastIndexOf('#');
+            if (hashIdx >= 0) {
+                const name = qname.slice(hashIdx + 1);
+                localSymbolMap.set(name, qname);
             }
         }
 
@@ -156,23 +199,37 @@ export class TreeSitterParser implements CodeParser {
                         targetName = idNode.text;
                     }
 
+                    // P8-2: resolve intra-file calls to fully qualified names
+                    const resolvedTarget = (!targetName.includes('.') && localSymbolMap.has(targetName))
+                        ? localSymbolMap.get(targetName)!
+                        : targetName;
                     edges.push({
                         from_qname: fromQName,
-                        to_qname: targetName,
+                        to_qname: resolvedTarget,
                         edge_type: 'calls',
-                        dynamic: true,
+                        dynamic: !localSymbolMap.has(targetName) || targetName.includes('.'),
                         call_site_line: node.startPosition.row + 1
                     });
                 } else if (cName.includes('relation') || cName.includes('import')) {
                     // Import or OOP Relation
                     if (provider.resolveImport) {
-                        provider.resolveImport(node, fromQName, edges, cName);
+                        provider.resolveImport(node, fromQName, edges, cName, normalizedFilePath);
                     }
                 }
             }
         }
 
-        return { nodes, edges };
+        // P8-1: Language-specific test-spec extraction (behavioral contracts).
+        let testSpecs: TestSpec[] | undefined;
+        if (provider.extractTestSpecs) {
+            try {
+                testSpecs = provider.extractTestSpecs(tree.rootNode, normalizedFilePath, canonicalFilePath);
+            } catch (err) {
+                // Test-spec extraction is best-effort; never fail the whole parse over it.
+                testSpecs = undefined;
+            }
+        }
+        return testSpecs && testSpecs.length > 0 ? { nodes, edges, testSpecs } : { nodes, edges };
     }
 
 }

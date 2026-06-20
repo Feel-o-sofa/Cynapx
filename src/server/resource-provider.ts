@@ -52,11 +52,13 @@ export function registerResourceHandlers(
             return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify({ by_complexity: topComplexity, by_fan_in: topFanIn, last_updated: new Date().toISOString() }, null, 2) }] };
         }
         if (uri === "graph://clusters") {
-            const clusters = db.prepare("SELECT * FROM logical_clusters").all();
-            const result = (clusters as ClusterRow[]).map((c) => {
-                const count = (db.prepare("SELECT COUNT(*) as count FROM nodes WHERE cluster_id = ?").get(c.id) as CountRow).count;
-                return { ...c, node_count: count };
-            });
+            const clusters = db.prepare("SELECT * FROM logical_clusters").all() as ClusterRow[];
+            // A-1: replace per-cluster COUNT(*) (N+1) with a single GROUP BY query.
+            const counts = db.prepare(
+                "SELECT cluster_id, COUNT(*) as count FROM nodes WHERE cluster_id IS NOT NULL GROUP BY cluster_id"
+            ).all() as { cluster_id: number; count: number }[];
+            const countByCluster = new Map(counts.map((row) => [row.cluster_id, row.count]));
+            const result = clusters.map((c) => ({ ...c, node_count: countByCluster.get(c.id) ?? 0 }));
             return { contents: [{ uri, mimeType: "application/json", text: JSON.stringify(result, null, 2) }] };
         }
         throw new McpError(ErrorCode.InvalidRequest, `Unknown resource: ${uri}`);

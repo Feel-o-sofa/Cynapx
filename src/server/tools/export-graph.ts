@@ -5,7 +5,7 @@
  */
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
-import { escapeXml, escapeDot } from './_utils.js';
+import { escapeXml, escapeDot, requireEngine } from './_utils.js';
 
 export const exportGraphHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -13,16 +13,17 @@ export const exportGraphHandler: ToolHandler = {
         if (!ctx) {
             return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
         }
+        const graphEngine = requireEngine(ctx, 'graphEngine');
         const format = args.format ?? 'json';
         const graphOptions = { rootQName: args.root_qname, maxDepth: args.max_depth || 2 };
 
         if (format === 'json') {
-            const mermaid = await ctx.graphEngine!.exportToMermaid(graphOptions);
-            const data = await ctx.graphEngine!.getGraphData(graphOptions);
+            const mermaid = await graphEngine.exportToMermaid(graphOptions);
+            const data = await graphEngine.getGraphData(graphOptions);
             const summary = `### Graph Export: ${args.root_qname || 'Root'}\n- Nodes: ${data.nodes.length}\n- Edges: ${data.edges.length}\n\n${mermaid}\n`;
             return { content: [{ type: "text", text: summary }] };
         } else if (format === 'graphml') {
-            const data = await ctx.graphEngine!.getGraphData(graphOptions);
+            const data = await graphEngine.getGraphData(graphOptions);
             const nodeMap = new Map<number, string>(
                 data.nodes.map(n => [n.id!, n.qualified_name ?? String(n.id!)])
             );
@@ -40,7 +41,7 @@ export const exportGraphHandler: ToolHandler = {
             xml += '  </graph>\n</graphml>';
             return { content: [{ type: 'text', text: xml }] };
         } else if (format === 'dot') {
-            const data = await ctx.graphEngine!.getGraphData(graphOptions);
+            const data = await graphEngine.getGraphData(graphOptions);
             const nodeMap = new Map<number, string>(
                 data.nodes.map(n => [n.id!, n.qualified_name ?? String(n.id!)])
             );

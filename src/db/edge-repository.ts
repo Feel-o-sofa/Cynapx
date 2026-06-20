@@ -33,6 +33,23 @@ export class EdgeRepository {
 
     constructor(private db: Database) { }
 
+    /**
+     * A-11: drop all cached prepared statements so they get re-prepared
+     * against the current schema. Call this after running migrations on
+     * a database whose EdgeRepository was constructed beforehand.
+     */
+    public invalidateStatementCache(): void {
+        this._insertStmt = undefined;
+        this._allStmt = undefined;
+        this._outAllStmt = undefined;
+        this._outTypedStmt = undefined;
+        this._inAllStmt = undefined;
+        this._inTypedStmt = undefined;
+        this._deleteStmt = undefined;
+        this._inWithCallerStmt = undefined;
+        this._outWithCalleeStmt = undefined;
+    }
+
     public createEdge(edge: CodeEdge): void {
         if (!this._insertStmt) {
             this._insertStmt = this.db.prepare(
@@ -47,6 +64,19 @@ export class EdgeRepository {
             this._allStmt = this.db.prepare('SELECT * FROM edges');
         }
         return (this._allStmt.all() as EdgeRow[]).map(row => this.mapRowToEdge(row));
+    }
+
+    /**
+     * A-4: returns all edges whose edge_type is in the given list, in a single
+     * scan. Used by reTagAllNodes() to build the tag-propagation adjacency
+     * once instead of issuing one getOutgoingEdges() query per node per pass.
+     * Not cached: the placeholder arity varies with the input.
+     */
+    public getEdgesByTypes(types: EdgeType[]): CodeEdge[] {
+        if (types.length === 0) return [];
+        const placeholders = types.map(() => '?').join(', ');
+        const stmt = this.db.prepare(`SELECT * FROM edges WHERE edge_type IN (${placeholders})`);
+        return (stmt.all(...types) as EdgeRow[]).map(row => this.mapRowToEdge(row));
     }
 
     public getOutgoingEdges(nodeId: number, edgeType?: EdgeType): CodeEdge[] {

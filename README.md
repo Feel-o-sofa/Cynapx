@@ -59,7 +59,7 @@ npm run build
 # Entry point: dist/bootstrap.js
 ```
 
-**Prerequisites:** Node.js ≥ 20, Git
+**Prerequisites:** Node.js ≥ 22, Git
 
 ### Step 2 — Register with Claude Code
 
@@ -136,7 +136,7 @@ After indexing completes, all 20 tools are active. Use `get_setup_context` at an
 | Tool | Description |
 |---|---|
 | `propose_refactor` | Risk-aware refactoring proposal anchored to the symbol's actual graph position |
-| `export_graph` | Mermaid diagram + JSON structural summary of the knowledge graph |
+| `export_graph` | Structural summary of the knowledge graph in `json` (with embedded Mermaid), `graphml`, or `dot` (Graphviz) format |
 | `check_consistency` | Verify graph integrity against disk state and Git HEAD |
 
 ---
@@ -156,6 +156,24 @@ The `cynapx-admin` binary provides operational control over all registered proje
 | `compact <hash>` | Run SQLite VACUUM to reclaim disk space |
 | `backup <hash>` | Create a timestamped backup of a project index |
 | `restore <hash> <backup>` | Restore a project index from a backup file |
+
+---
+
+## 🌐 REST API
+
+In addition to the MCP interface, Cynapx can expose its analysis engine over an authenticated HTTP REST API. Start it by passing `--api` at boot (optionally `--api-port <number>`, default `3000`). All `/api/*` routes require a **Bearer token** (constant-time validated) and are protected by per-IP **rate limiting** (heavy analysis routes use a stricter limiter). The full contract is published as an OpenAPI 3.0 spec (`src/server/openapi.ts`), served via Swagger UI at `/api/docs` in non-production environments.
+
+| Route | Description |
+|---|---|
+| `POST /api/symbol/get` | Full details for a single symbol |
+| `POST /api/graph/callers` | Symbols that directly call a given symbol |
+| `POST /api/graph/callees` | Symbols called by a given symbol |
+| `POST /api/analysis/impact` | BFS ripple-effect impact analysis |
+| `POST /api/analysis/hotspots` | Top symbols ranked by a chosen metric |
+| `POST /api/analysis/tests` | Tests linked to a production symbol |
+| `POST /api/search/symbols` | Keyword / semantic symbol search |
+| `POST /api/graph/export` | Export the graph as `json`, `graphml`, or `dot` |
+| `GET /healthz` | Unauthenticated liveness/readiness probe |
 
 ---
 

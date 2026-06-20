@@ -9,18 +9,21 @@ import {
     ErrorCode,
     McpError
 } from "@modelcontextprotocol/sdk/types.js";
-import * as path from 'path';
-import * as fs from 'fs';
 import { RemediationEngine } from '../graph/remediation-engine';
 import { IpcCoordinator } from './ipc-coordinator';
-import { EmbeddingProvider, PythonEmbeddingProvider } from '../indexer/embedding-manager';
+import { EmbeddingProvider } from '../indexer/embedding-manager';
+import { createEmbeddingProviderFromEnv } from '../indexer/embedding-providers/index';
 import { WorkspaceManager, EngineContext } from './workspace-manager';
-import { readRegistry } from '../utils/paths';
+import { readRegistry, isPathInside } from '../utils/paths';
+import { getVersion } from '../utils/version';
 import { registerResourceHandlers } from './resource-provider';
 import { registerPromptHandlers } from './prompt-provider';
 import { HealthMonitor } from './health-monitor';
 import { registerToolHandlers, ToolDeps, executeTool } from './tool-dispatcher';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('MCP');
 const CYNAPX_INSTRUCTIONS = `
 # Cynapx Operator Manual (v1.0.6)
 You are operating the Cynapx high-performance code knowledge engine. Adhere to these protocol invariants:
@@ -43,16 +46,12 @@ export class McpServer {
     private terminalCoordinator?: IpcCoordinator;
 
     private onInitializeCallback?: (newPath: string) => Promise<void>;
-    private onPurgeCallback?: () => Promise<void>;
+    private onPurgeCallback?: (hash: string) => Promise<void>;
     private healthMonitor: HealthMonitor = new HealthMonitor();
     private toolDeps!: ToolDeps;
 
     constructor(workspaceManager?: WorkspaceManager) {
-        let version = "1.0.5";
-        try {
-            const pkgPath = path.join(__dirname, '..', '..', 'package.json');
-            if (fs.existsSync(pkgPath)) version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
-        } catch (e) {}
+        const version = getVersion();
 
         this.sdkServer = new SdkMcpServer({
             name: "cynapx",
@@ -63,7 +62,9 @@ export class McpServer {
         });
 
         this.workspaceManager = workspaceManager || new WorkspaceManager();
-        this.embeddingProvider = new PythonEmbeddingProvider();
+        // P9-0: provider is selected from env vars (CYNAPX_EMBED_*). Absent
+        // config falls back to the jina-sidecar default — unchanged behavior.
+        this.embeddingProvider = createEmbeddingProviderFromEnv();
         this.remediationEngine = new RemediationEngine();
 
         this.readyPromise = new Promise((resolve) => { this.resolveReady = resolve; });
@@ -75,6 +76,8 @@ export class McpServer {
         if (!ctx) throw new McpError(ErrorCode.InvalidRequest, "No active project in workspace.");
         return ctx;
     }
+
+    public getEmbeddingProvider(): EmbeddingProvider { return this.embeddingProvider; }
 
     public get isInTerminalMode(): boolean { return this.isTerminal; }
     public get isReady(): boolean { return this.isInitialized; }
@@ -88,7 +91,7 @@ export class McpServer {
     public promoteToHost() {
         this.isTerminal = false;
         this.terminalCoordinator = undefined;
-        console.error("[McpServer] Promoted to Host mode.");
+        log.error("[McpServer] Promoted to Host mode.");
     }
 
     public markReady(ready: boolean) {
@@ -112,11 +115,17 @@ export class McpServer {
         if (!this.isInitialized) {
             const currentPath = process.cwd();
             const registry = readRegistry();
-            const isRegistered = registry.some(p => currentPath.toLowerCase().startsWith(p.path.toLowerCase()));
+            const isRegistered = registry.some(p => isPathInside(currentPath, p.path));
             if (!isRegistered) {
                 throw new McpError(ErrorCode.InvalidRequest, "Project not initialized. Please use 'initialize_project' first.");
             }
-            this.isInitialized = true;
+            // H-1: Do NOT set isInitialized = true here. The registry check is
+            // only used to produce a helpful error for unregistered projects;
+            // actual readiness is signaled exclusively via markReady(true),
+            // which resolves readyPromise and starts the health monitor.
+            // Setting it here let waitUntilReady() report "ready" while the
+            // engine context (graphEngine, dbManager, etc.) was still being
+            // constructed, exposing a window for `ctx.xxx!` to be undefined.
         }
         await this.readyPromise;
     }
@@ -125,7 +134,7 @@ export class McpServer {
         this.onInitializeCallback = callback;
     }
 
-    public setOnPurge(callback: () => Promise<void>) {
+    public setOnPurge(callback: (hash: string) => Promise<void>) {
         this.onPurgeCallback = callback;
     }
 
@@ -150,11 +159,7 @@ export class McpServer {
      * handlers so each session behaves identically to the singleton stdio server.
      */
     public createSdkServerForSession(): SdkMcpServer {
-        let version = "1.0.5";
-        try {
-            const pkgPath = path.join(__dirname, '..', '..', 'package.json');
-            if (fs.existsSync(pkgPath)) version = JSON.parse(fs.readFileSync(pkgPath, 'utf8')).version;
-        } catch (e) {}
+        const version = getVersion();
 
         const sessionServer = new SdkMcpServer({
             name: "cynapx",
@@ -197,7 +202,7 @@ export class McpServer {
             remediationEngine: this.remediationEngine,
             // Use lazy thunks so callbacks set after construction are picked up
             onInitialize: (p: string) => this.onInitializeCallback ? this.onInitializeCallback(p) : Promise.resolve(),
-            onPurge: () => this.onPurgeCallback ? this.onPurgeCallback() : Promise.resolve(),
+            onPurge: (hash: string) => this.onPurgeCallback ? this.onPurgeCallback(hash) : Promise.resolve(),
             markReady: this.markReady.bind(this),
             getIsInitialized: () => this.isInitialized,
             setIsInitialized: (value: boolean) => {

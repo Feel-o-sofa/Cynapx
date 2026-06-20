@@ -3,35 +3,26 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { LanguageProvider, RawCodeEdge } from '../types';
-import { SymbolType } from '../../types';
-// @ts-ignore
-import TypeScript from 'tree-sitter-typescript';
-import Parser from 'tree-sitter';
-import * as fs from 'fs';
-import * as path from 'path';
+import { LanguageDescriptor } from './descriptor';
 
-export class TypescriptProvider implements LanguageProvider {
-    public extensions = ['ts'];
-    public languageName = 'typescript';
-
-    public getLanguage() {
-        return TypeScript.typescript;
-    }
-
-    public getQuery(): string {
-        const queryPath = path.resolve(__dirname, './queries/typescript.scm');
-        return fs.readFileSync(queryPath, 'utf8');
-    }
-
-    public mapCaptureToSymbolType(captureName: string): SymbolType {
-        if (captureName.startsWith('class')) return 'class';
-        if (captureName.startsWith('function')) return 'function';
-        if (captureName.startsWith('method')) return 'method';
-        return 'field';
-    }
-
-    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+export const typescriptDescriptor: LanguageDescriptor = {
+    name: 'typescript',
+    extensions: ['ts'],
+    grammarModule: 'tree-sitter-typescript',
+    grammarExport: 'typescript',
+    queryFile: 'typescript.scm',
+    captureMap: [
+        ['class', 'class'],
+        ['function', 'function'],
+        ['method', 'method']
+    ],
+    defaultSymbolType: 'field',
+    decisionPoints: [
+        'if_statement', 'for_statement', 'while_statement', 'case_clause',
+        'catch_clause', 'conditional_expression', 'binary_expression',
+        'for_in_statement'
+    ],
+    resolveImport(node, fromQName, edges, captureName) {
         if (captureName?.startsWith('relation')) {
             edges.push({
                 from_qname: fromQName,
@@ -58,12 +49,4 @@ export class TypescriptProvider implements LanguageProvider {
             }
         }
     }
-
-    public getDecisionPoints(): string[] {
-        return [
-            'if_statement', 'for_statement', 'while_statement', 'case_clause',
-            'catch_clause', 'conditional_expression', 'binary_expression',
-            'for_in_statement'
-        ];
-    }
-}
+};

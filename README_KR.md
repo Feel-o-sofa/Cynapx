@@ -59,7 +59,7 @@ npm run build
 # 진입점: dist/bootstrap.js
 ```
 
-**사전 요구사항:** Node.js ≥ 20, Git
+**사전 요구사항:** Node.js ≥ 22, Git
 
 ### 2단계 — Claude Code에 등록
 

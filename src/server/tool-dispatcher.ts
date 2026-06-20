@@ -15,6 +15,8 @@ import { EmbeddingProvider } from '../indexer/embedding-manager.js';
 import { RemediationEngine } from '../graph/remediation-engine.js';
 import { IpcCoordinator } from './ipc-coordinator.js';
 import { toolRegistry } from './tools/_registry.js';
+import { EngineNotReadyError } from './tools/_utils.js';
+import { ProgressReporter, NOOP_PROGRESS, createProgressReporter } from './tools/_progress.js';
 
 export interface ToolDeps {
     waitUntilReady: () => Promise<void>;
@@ -25,7 +27,7 @@ export interface ToolDeps {
     workspaceManager: WorkspaceManager;
     remediationEngine: RemediationEngine;
     onInitialize?: (targetPath: string) => Promise<void>;
-    onPurge?: () => Promise<void>;
+    onPurge?: (hash: string) => Promise<void>;
     markReady: (state: boolean) => void;
     getIsInitialized: () => boolean;
     setIsInitialized: (value: boolean) => void;
@@ -38,6 +40,16 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
                 name: "get_setup_context",
                 description: "Get project initialization status and registry info.",
                 inputSchema: { type: "object", properties: {} }
+            },
+            {
+                name: "get_project_overview",
+                description: "Returns a token-efficient briefing of the indexed project: purpose, tech stack, architecture shape, entry points, hotspots, and documentation headers. Call this first when starting work on an unfamiliar codebase.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        include_clusters: { type: "boolean", default: true }
+                    }
+                }
             },
             {
                 name: "initialize_project",
@@ -61,9 +73,26 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
                         query: { type: "string" },
                         semantic: { type: "boolean" },
                         limit: { type: "number" },
-                        symbol_type: { type: "string" }
+                        symbol_type: { type: "string" },
+                        query_embedding: {
+                            type: "array",
+                            items: { type: "number" },
+                            description: "Pre-computed embedding vector for the query. When provided, skips server-side embedding generation and uses this vector directly for semantic search. Useful when the calling agent has already computed an embedding."
+                        }
                     },
                     required: ["query"]
+                }
+            },
+            {
+                name: "find_similar_symbols",
+                description: "Find symbols semantically similar to a given symbol using vector embeddings. Useful for identifying duplicates, patterns, or related code during refactoring.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        qualified_name: { type: "string" },
+                        limit: { type: "number", default: 10 }
+                    },
+                    required: ["qualified_name"]
                 }
             },
             {
@@ -199,22 +228,110 @@ export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): v
                         min_count: { type: "number", default: 5 }
                     }
                 }
+            },
+            {
+                name: "get_recent_changes",
+                description: "List recent commits across the codebase and which symbols/files each changed (answers 'what changed recently'). Requires backfill_history.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        limit: { type: "number", default: 20 },
+                        since_days: { type: "number" }
+                    }
+                }
+            },
+            {
+                name: "get_symbol_history",
+                description: "Show the full commit history of a single symbol with an intent summary (answers 'why does this exist'). Requires backfill_history.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        qualified_name: { type: "string" }
+                    },
+                    required: ["qualified_name"]
+                }
+            },
+            {
+                name: "add_annotation",
+                description: "Record an agent annotation (decision, gotcha, todo, or rationale) against a symbol for future context.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        qualified_name: { type: "string" },
+                        kind: { type: "string", enum: ["decision", "gotcha", "todo", "rationale"] },
+                        body: { type: "string" },
+                        author: { type: "string", default: "agent" }
+                    },
+                    required: ["qualified_name", "kind", "body"]
+                }
+            },
+            {
+                name: "get_annotations",
+                description: "Retrieve agent annotations for a symbol, or recent annotations across the codebase if no symbol is given.",
+                inputSchema: {
+                    type: "object",
+                    properties: {
+                        qualified_name: { type: "string" },
+                        kind: { type: "string", enum: ["decision", "gotcha", "todo", "rationale"] },
+                        limit: { type: "number", default: 20 }
+                    }
+                }
+            },
+            {
+                name: "get_architecture",
+                description: "Returns declared architecture intent (layers, rules, responsibilities) and drift detection showing where reality diverges from the declared design.",
+                inputSchema: { type: "object", properties: {} }
             }
         ]
     }));
 
-    sdkServer.setRequestHandler(CallToolRequestSchema, async (request) => {
-        return executeTool(request.params.name, request.params.arguments, deps);
+    sdkServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+        // A-4 (Phase 14-5): emit notifications/progress only when the caller
+        // opted in via `_meta.progressToken` on the originating request. The
+        // SDK's request-scoped `extra.sendNotification` correlates the progress
+        // notification with this request. When no token is present we pass a
+        // no-op reporter so handlers can call report() unconditionally.
+        //
+        // M-1 (Phase 15-3) — spec tracking. The 2026-07-28 spec RC demotes Tasks
+        // (SEP-1686) from core to an extension (server-directed handle returned
+        // from this `tools/call` response, then `tasks/get`/`update`/`cancel`;
+        // `tasks/list` removed). The progress-token opt-in used here is RETAINED
+        // in the RC and is NOT deprecated, so this wiring stays compatible. Full
+        // task-lifecycle adoption is DEFERRED until SDK v2 stable. See
+        // src/server/tools/_progress.ts for refs (RC blog, SEP-1686, sdk#2042).
+        const progressToken = request.params?._meta?.progressToken;
+        const progress = createProgressReporter(
+            progressToken,
+            extra.sendNotification as Parameters<typeof createProgressReporter>[1]
+        );
+        return executeTool(request.params.name, request.params.arguments, deps, progress);
     });
 }
 
-export async function executeTool(name: string, args: any, deps: ToolDeps): Promise<any> {
+export async function executeTool(
+    name: string,
+    args: any,
+    deps: ToolDeps,
+    progress: ProgressReporter = NOOP_PROGRESS
+): Promise<any> {
     if (deps.isTerminal() && deps.getTerminalCoordinator()) {
+        // A-4(2): progress is not relayed across the Host↔Terminal IPC boundary
+        // (see ipc-coordinator.ts) — Terminal-forwarded tools report no progress.
         return deps.getTerminalCoordinator()!.forwardExecuteTool(name, args);
     }
     await deps.waitUntilReady();
 
     const handler = toolRegistry.get(name);
     if (!handler) throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
-    return handler.execute(args, deps);
+    try {
+        return await handler.execute(args, deps, progress);
+    } catch (err) {
+        // H-1: the active project's engine context can briefly be incomplete
+        // right after Host promotion, before startHostServices() finishes.
+        // Surface this as a retryable tool error instead of crashing.
+        if (err instanceof EngineNotReadyError) {
+            return { isError: true, content: [{ type: 'text', text: err.message }] };
+        }
+        throw err;
+    }
 }

@@ -17,10 +17,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Set up Node.js 20
+      - name: Set up Node.js 22
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -41,6 +41,7 @@ jobs:
           ARCHIVE="cynapx-${TAG}.tar.gz"
           tar -czf "${ARCHIVE}" \
             dist/ \
+            schema/ \
             src/indexer/languages/queries/ \
             package.json \
             package-lock.json \

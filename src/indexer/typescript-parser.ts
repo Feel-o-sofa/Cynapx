@@ -5,7 +5,7 @@
  */
 import * as ts from 'typescript';
 import * as fs from 'fs';
-import { CodeParser, DeltaGraph, RawCodeEdge } from './types';
+import { CodeParser, DeltaGraph, RawCodeEdge, TestSpec } from './types';
 
 /** Augments ts.Symbol with the optional `parent` property used internally by the TS compiler */
 interface SymbolWithParent extends ts.Symbol {
@@ -16,29 +16,111 @@ import { MetricsCalculator } from './metrics-calculator';
 import { calculateChecksum } from '../utils/checksum';
 import { toCanonical } from '../utils/paths';
 
+/** Compiler options shared by every parse — identical to the former per-file ts.createProgram call. */
+const PARSER_COMPILER_OPTIONS: ts.CompilerOptions = {
+    target: ts.ScriptTarget.Latest,
+    module: ts.ModuleKind.CommonJS,
+    esModuleInterop: true,
+    allowJs: true,
+    skipLibCheck: true,
+    noEmit: true,
+    types: [],
+    lib: ['lib.esnext.d.ts']
+};
+
 export class TypeScriptParser implements CodeParser {
     private program: ts.Program | null = null;
     private typeChecker: ts.TypeChecker | null = null;
+
+    // O-4: a single persistent LanguageService reused across every parse() in an
+    // indexing run. Previously refreshProgram() called ts.createProgram() fresh
+    // per file, which re-read and re-parsed the lib.*.d.ts files (the dominant
+    // cost) every time. The LanguageService caches those between calls and only
+    // rebuilds the program incrementally when a script version changes. The host
+    // exposes exactly the file currently being parsed as the single root script,
+    // so getProgram() yields a program with the same source-file set as the old
+    // single-root createProgram() — parse/type-check output is unchanged.
+    private languageService: ts.LanguageService | null = null;
+    // Current root file (the one being parsed); the only entry in getScriptFileNames().
+    private currentFile: string | null = null;
+    // Per-file script version, bumped whenever a file's on-disk content changes so
+    // the LanguageService invalidates and re-parses that file's SourceFile.
+    private scriptVersions: Map<string, string> = new Map();
+    // Snapshot/content cache keyed by file path for the current root file.
+    private scriptSnapshots: Map<string, ts.IScriptSnapshot> = new Map();
 
     public supports(filePath: string): boolean {
         return filePath.endsWith('.ts') || filePath.endsWith('.js');
     }
 
+    private ensureLanguageService(): ts.LanguageService {
+        if (this.languageService) return this.languageService;
+
+        const host: ts.LanguageServiceHost = {
+            getScriptFileNames: () => (this.currentFile ? [this.currentFile] : []),
+            getScriptVersion: (fileName) => this.scriptVersions.get(fileName) ?? '0',
+            getScriptSnapshot: (fileName) => {
+                const cached = this.scriptSnapshots.get(fileName);
+                if (cached) return cached;
+                if (!fs.existsSync(fileName)) return undefined;
+                try {
+                    const snapshot = ts.ScriptSnapshot.fromString(fs.readFileSync(fileName, 'utf8'));
+                    this.scriptSnapshots.set(fileName, snapshot);
+                    return snapshot;
+                } catch {
+                    return undefined;
+                }
+            },
+            getCurrentDirectory: () => process.cwd(),
+            getCompilationSettings: () => PARSER_COMPILER_OPTIONS,
+            getDefaultLibFileName: (options) => ts.getDefaultLibFilePath(options),
+            fileExists: ts.sys.fileExists,
+            readFile: ts.sys.readFile,
+            readDirectory: ts.sys.readDirectory,
+            directoryExists: ts.sys.directoryExists,
+            getDirectories: ts.sys.getDirectories,
+        };
+
+        this.languageService = ts.createLanguageService(host, ts.createDocumentRegistry());
+        return this.languageService;
+    }
+
     /**
-     * Initializes a TypeScript program for the given file to enable semantic analysis.
+     * O-4: points the persistent LanguageService at `filePath` as its single root
+     * script and refreshes the cached Program/TypeChecker. The script version is
+     * bumped when the file's content changes (or it is first seen) so the
+     * incremental program re-parses only what actually changed.
      */
     private refreshProgram(filePath: string): void {
-        this.program = ts.createProgram([filePath], {
-            target: ts.ScriptTarget.Latest,
-            module: ts.ModuleKind.CommonJS,
-            esModuleInterop: true,
-            allowJs: true,
-            skipLibCheck: true,
-            noEmit: true,
-            types: [],
-            lib: ['lib.esnext.d.ts']
-        });
-        this.typeChecker = this.program.getTypeChecker();
+        const ls = this.ensureLanguageService();
+        this.currentFile = filePath;
+
+        // Drop any cached snapshot for this file and re-read it, bumping the
+        // version iff the content differs from what the service last parsed.
+        this.scriptSnapshots.delete(filePath);
+        let content = '';
+        try {
+            content = fs.readFileSync(filePath, 'utf8');
+        } catch {
+            content = '';
+        }
+        this.scriptSnapshots.set(filePath, ts.ScriptSnapshot.fromString(content));
+        const versionKey = `len:${content.length}:hash:${this.cheapHash(content)}`;
+        if (this.scriptVersions.get(filePath) !== versionKey) {
+            this.scriptVersions.set(filePath, versionKey);
+        }
+
+        this.program = ls.getProgram() ?? null;
+        this.typeChecker = this.program ? this.program.getTypeChecker() : null;
+    }
+
+    /** Small non-cryptographic content hash used only to detect script-version changes. */
+    private cheapHash(s: string): string {
+        let h = 5381;
+        for (let i = 0; i < s.length; i++) {
+            h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+        }
+        return (h >>> 0).toString(36);
     }
 
     public async parse(filePath: string, commit: string, version: number): Promise<DeltaGraph> {
@@ -218,11 +300,12 @@ export class TypeScriptParser implements CodeParser {
 
         visit(sourceFile);
 
+        const testSpecs: TestSpec[] = [];
         if (this.isTestFile(filePath)) {
-            this.emitTestEdges(sourceFile, filePath, canonicalFilePath, edges);
+            this.emitTestEdges(sourceFile, filePath, canonicalFilePath, edges, testSpecs);
         }
 
-        return { nodes, edges };
+        return { nodes, edges, testSpecs };
     }
 
     private isTestFile(filePath: string): boolean {
@@ -346,7 +429,7 @@ export class TypeScriptParser implements CodeParser {
         return null;
     }
 
-    private emitTestEdges(sourceFile: ts.SourceFile, testFilePath: string, testFileQname: string, edges: RawCodeEdge[]): void {
+    private emitTestEdges(sourceFile: ts.SourceFile, testFilePath: string, testFileQname: string, edges: RawCodeEdge[], testSpecs: TestSpec[]): void {
         const candidatePath = this.inferProductionFilePath(testFilePath);
         if (candidatePath === null) return;
 
@@ -403,6 +486,147 @@ export class TypeScriptParser implements CodeParser {
         };
 
         walkForDescribe(sourceFile);
+
+        // P7: Second pass — capture individual it()/test() specs, their assertions,
+        // and the target symbol resolved from the enclosing describe() block name.
+        const walkForSpecs = (node: ts.Node, describeTarget: string | undefined) => {
+            let currentTarget = describeTarget;
+
+            // Track enclosing describe() so nested it()/test() resolve to the right symbol.
+            if (
+                ts.isCallExpression(node) &&
+                ts.isIdentifier(node.expression) &&
+                node.expression.text === 'describe' &&
+                node.arguments.length > 0 &&
+                ts.isStringLiteral(node.arguments[0])
+            ) {
+                const describeName = (node.arguments[0] as ts.StringLiteral).text;
+                // Use the leading PascalCase identifier as the precise symbol name,
+                // mirroring the matching logic in walkForDescribe.
+                const leadingIdent = describeName.match(/^([A-Z][a-zA-Z0-9]+)/)?.[1] ?? describeName;
+                currentTarget = `${prodFileQname}#${leadingIdent}`;
+            }
+
+            // Detect it(...) / test(...) including it.each(...)/test.each(...) forms.
+            const spec = this.extractSpecCall(node);
+            if (spec) {
+                const startLine = sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1;
+                const assertions: string[] = [];
+                this.collectAssertions(node, assertions);
+                testSpecs.push({
+                    testQname: testFileQname,
+                    title: spec.title,
+                    targetQname: currentTarget,
+                    assertions,
+                    filePath: testFilePath,
+                    startLine
+                });
+            }
+
+            ts.forEachChild(node, child => walkForSpecs(child, currentTarget));
+        };
+
+        walkForSpecs(sourceFile, undefined);
+    }
+
+    /**
+     * P7: Recognizes an it()/test() call (and it.each()/test.each() variants) and
+     * extracts the title string from the first argument. Returns null otherwise.
+     */
+    private extractSpecCall(node: ts.Node): { title: string } | null {
+        if (!ts.isCallExpression(node)) return null;
+        const expr = node.expression;
+
+        let isSpec = false;
+        if (ts.isIdentifier(expr) && (expr.text === 'it' || expr.text === 'test')) {
+            isSpec = true;
+        } else if (
+            // it.each(...)(...) / test.each(...)(...) — the outer call's expression
+            // is itself a call to it.each / test.each.
+            ts.isCallExpression(expr) &&
+            ts.isPropertyAccessExpression(expr.expression) &&
+            ts.isIdentifier(expr.expression.expression) &&
+            (expr.expression.expression.text === 'it' || expr.expression.expression.text === 'test') &&
+            expr.expression.name.text === 'each'
+        ) {
+            isSpec = true;
+        } else if (
+            // it.only(...) / it.skip(...) / test.only(...) etc.
+            ts.isPropertyAccessExpression(expr) &&
+            ts.isIdentifier(expr.expression) &&
+            (expr.expression.text === 'it' || expr.expression.text === 'test') &&
+            (expr.name.text === 'only' || expr.name.text === 'skip')
+        ) {
+            isSpec = true;
+        }
+
+        if (!isSpec || node.arguments.length === 0) return null;
+        const titleArg = node.arguments[0];
+        if (!ts.isStringLiteralLike(titleArg)) return null;
+        return { title: titleArg.text };
+    }
+
+    /**
+     * P7: Walks a node subtree collecting normalized expect(...).<matcher>(...)
+     * assertion strings. Skips nested it()/test() bodies so each spec only owns
+     * its own assertions.
+     */
+    private collectAssertions(specNode: ts.Node, out: string[]): void {
+        const walk = (node: ts.Node) => {
+            // Don't descend into nested it()/test() calls — those own their assertions.
+            if (node !== specNode && this.extractSpecCall(node)) return;
+
+            if (ts.isCallExpression(node)) {
+                const normalized = this.normalizeAssertion(node);
+                if (normalized) out.push(normalized);
+            }
+            ts.forEachChild(node, walk);
+        };
+        ts.forEachChild(specNode, walk);
+    }
+
+    /**
+     * P7: Normalizes an expect(subject).<...>.matcher(arg) call expression into a
+     * compact string like "expect(result).toBe(42)" or "expect(fn).not.toThrow()".
+     * Returns null if the call is not a recognizable expect() chain.
+     */
+    private normalizeAssertion(node: ts.CallExpression): string | null {
+        const TRUNC = 80;
+        const truncate = (s: string): string => {
+            const compact = s.replace(/\s+/g, ' ').trim();
+            return compact.length > TRUNC ? compact.slice(0, TRUNC) + '…' : compact;
+        };
+
+        // The matcher call's expression must be a property access whose chain
+        // bottoms out at an expect(...) call.
+        if (!ts.isPropertyAccessExpression(node.expression)) return null;
+        const matcherName = node.expression.name.text;
+
+        // Walk the property-access chain inward, collecting modifier prefixes
+        // (e.g. .not, .resolves, .rejects) until we hit the expect(...) call.
+        const modifiers: string[] = [];
+        let chain: ts.Expression = node.expression.expression;
+        while (ts.isPropertyAccessExpression(chain)) {
+            modifiers.unshift(chain.name.text);
+            chain = chain.expression;
+        }
+
+        if (
+            !ts.isCallExpression(chain) ||
+            !ts.isIdentifier(chain.expression) ||
+            chain.expression.text !== 'expect'
+        ) {
+            return null;
+        }
+
+        // Subject is the first argument to expect(...).
+        const subject = chain.arguments.length > 0 ? truncate(chain.arguments[0].getText()) : '';
+
+        // First argument to the matcher (if any).
+        const arg = node.arguments.length > 0 ? truncate(node.arguments[0].getText()) : '';
+
+        const modifierPrefix = modifiers.length > 0 ? '.' + modifiers.join('.') : '';
+        return `expect(${subject})${modifierPrefix}.${matcherName}(${arg})`;
     }
 
     private getName(symbol: ts.Symbol): string {
@@ -494,6 +718,8 @@ export class TypeScriptParser implements CodeParser {
             }
         }
 
+        const docstring = this.extractDocstring(node, sourceFile);
+
         return {
             qualified_name: qname,
             symbol_type: type,
@@ -510,8 +736,42 @@ export class TypeScriptParser implements CodeParser {
             signature,
             return_type: returnType,
             field_type: fieldType,
-            modifiers
+            modifiers,
+            docstring
         };
+    }
+
+    /**
+     * Extracts the leading JSDoc comment or line-comment block for a node, if any.
+     * Captured as "intent" for the knowledge base (P1).
+     */
+    private extractDocstring(node: ts.Node, sourceFile: ts.SourceFile): string | undefined {
+        // Try TypeScript JSDoc first
+        const jsdocComments = ts.getJSDocCommentsAndTags(node) as ts.JSDoc[];
+        if (jsdocComments.length > 0) {
+            const jsdoc = jsdocComments[0];
+            if (ts.isJSDoc(jsdoc) && jsdoc.comment) {
+                const comment = typeof jsdoc.comment === 'string'
+                    ? jsdoc.comment
+                    : jsdoc.comment.map((n: ts.Node) => n.getText(sourceFile)).join('');
+                if (comment.trim()) return comment.trim();
+            }
+            // Fallback: get the raw JSDoc text
+            const raw = jsdoc.getText(sourceFile).replace(/^\/\*\*|\*\/$|^\s*\*\s?/gm, '').trim();
+            if (raw) return raw;
+        }
+
+        // Fall back to leading line comments
+        const fullStart = node.getFullStart();
+        const nodeStart = node.getStart(sourceFile);
+        const leadingText = sourceFile.getFullText().slice(fullStart, nodeStart);
+        const lineComments = leadingText.match(/\/\/[^\n]*/g);
+        if (lineComments) {
+            const text = lineComments.map(l => l.replace(/^\/\/\s?/, '').trim()).filter(Boolean).join('\n');
+            if (text) return text;
+        }
+
+        return undefined;
     }
 
     private getVisibility(node: ts.Node): Visibility {

@@ -7,7 +7,10 @@ import { CodeParser, DeltaGraph, RawCodeEdge } from './types';
 import { CodeNode } from '../types';
 import * as fs from 'fs';
 import { calculateChecksum } from '../utils/checksum';
+import { Logger } from '../utils/logger';
 
+
+const log = new Logger('DependencyParser');
 export class DependencyParser implements CodeParser {
     public supports(filePath: string): boolean {
         return filePath.endsWith('package.json') || filePath.endsWith('requirements.txt');
@@ -66,7 +69,7 @@ export class DependencyParser implements CodeParser {
                     });
                 }
             } catch (e) {
-                console.error(`Failed to parse package.json: ${e}`);
+                log.error(`Failed to parse package.json: ${e}`);
             }
         } else if (filePath.endsWith('requirements.txt')) {
             // Python requirements parsing (simple line by line)

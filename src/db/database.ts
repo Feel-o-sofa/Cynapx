@@ -16,6 +16,10 @@ import { Disposable } from '../types';
 export class DatabaseManager implements Disposable {
     private db: Database.Database;
     private _closed: boolean = false;
+    // M3/A-11: callbacks fired after runMigrations() actually applied one or
+    // more migrations (e.g. to invalidate prepared-statement caches that were
+    // built against the pre-migration schema).
+    private migrationCallbacks: Array<() => void> = [];
 
     constructor(dbPath: string) {
         // Ensure the database file's directory exists
@@ -33,6 +37,13 @@ export class DatabaseManager implements Disposable {
         this.db.pragma('journal_mode = WAL');
         this.db.pragma('foreign_keys = ON');
         this.db.pragma('synchronous = NORMAL');
+        // A-1: recursive_triggers must be ON so that triggers which themselves
+        // modify tables (e.g. the nodes_au AFTER UPDATE trigger that rewrites
+        // the fts_symbols contentless FTS index) fire correctly during the
+        // ON CONFLICT(qualified_name) DO UPDATE upsert in createNode(). Without
+        // it, an upsert that resolves to an UPDATE could skip the FTS-sync
+        // trigger path and leak orphan fts_symbols rows.
+        this.db.pragma('recursive_triggers = ON');
         // Dynamic cache/mmap sizing based on DB file size
         const dbSizeMB = fs.existsSync(dbPath) ? fs.statSync(dbPath).size / (1024 * 1024) : 0;
         const cacheSizeKB = Math.min(Math.max(Math.ceil(dbSizeMB * 2), 64), 512) * 1024; // 64MB ~ 512MB
@@ -63,7 +74,17 @@ export class DatabaseManager implements Disposable {
     /**
      * Current schema version. Increment this when adding new migrations.
      */
-    public static readonly SCHEMA_VERSION = 1;
+    public static readonly SCHEMA_VERSION = 6;
+
+    /**
+     * M3/A-11: Registers a callback invoked at the end of runMigrations()
+     * whenever at least one migration was applied. Use this to invalidate
+     * caches (e.g. EdgeRepository's prepared statements) that may reference
+     * the pre-migration schema. Not invoked when already at the latest version.
+     */
+    public onMigration(cb: () => void): void {
+        this.migrationCallbacks.push(cb);
+    }
 
     /**
      * Runs pending schema migrations using PRAGMA user_version as the version counter.
@@ -84,8 +105,141 @@ export class DatabaseManager implements Disposable {
                 ).run();
                 this.db.pragma(`user_version = 1`);
             }
+
+            if (current < 2) {
+                // Migration 1 → 2 (A-2): normalize nodes.tags (JSON array) into a
+                // node_tags(node_id, tag) table so dead-code/tag filters can JOIN
+                // instead of using LIKE on the JSON blob.
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS node_tags (
+                        node_id INTEGER NOT NULL,
+                        tag TEXT NOT NULL,
+                        PRIMARY KEY (node_id, tag),
+                        FOREIGN KEY (node_id) REFERENCES nodes(id) ON DELETE CASCADE
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_node_tags_tag ON node_tags (tag);
+                `);
+
+                const rows = this.db.prepare(
+                    "SELECT id, tags FROM nodes WHERE tags IS NOT NULL AND tags != ''"
+                ).all() as { id: number; tags: string }[];
+                const insertTag = this.db.prepare('INSERT OR IGNORE INTO node_tags (node_id, tag) VALUES (?, ?)');
+                for (const row of rows) {
+                    try {
+                        const tags = JSON.parse(row.tags) as string[];
+                        for (const tag of tags) insertTag.run(row.id, tag);
+                    } catch {
+                        // Skip rows with malformed tags JSON.
+                    }
+                }
+
+                this.db.pragma(`user_version = 2`);
+            }
+
+            if (current < 3) {
+                // Migration 2 → 3 (A-4): add a `symbol_name` column holding the
+                // bare symbol name (suffix after the final '#' in qualified_name,
+                // or the whole qualified_name if there is no '#') plus an index,
+                // so resolveNodeId()'s reverse lookup can probe an indexed
+                // equality instead of the unindexable `LIKE '%#name'` full scan.
+                // ALTER TABLE ADD COLUMN is idempotent-safe behind a column check.
+                const cols = this.db.prepare("PRAGMA table_info(nodes)").all() as { name: string }[];
+                if (!cols.some(c => c.name === 'symbol_name')) {
+                    this.db.exec('ALTER TABLE nodes ADD COLUMN symbol_name TEXT');
+                }
+                // COLLATE NOCASE so findNodesBySymbolName()'s case-insensitive
+                // equality probe resolves to an indexed SEARCH (a NOCASE query
+                // cannot use a BINARY index). Drop any pre-existing BINARY index
+                // first so an upgraded DB gets the NOCASE one.
+                this.db.exec('DROP INDEX IF EXISTS idx_nodes_symbol_name');
+                this.db.exec('CREATE INDEX IF NOT EXISTS idx_nodes_symbol_name ON nodes (symbol_name COLLATE NOCASE)');
+
+                // Backfill existing rows. qualified_name uses a single '#'
+                // separator (TypeScriptParser.getName() emits `${file}#${parts}`),
+                // so the bare name is everything after the first '#'. The SUBSTR
+                // mirrors the application-layer extraction in extractSymbolName().
+                this.db.exec(`
+                    UPDATE nodes
+                    SET symbol_name = CASE
+                        WHEN instr(qualified_name, '#') = 0 THEN qualified_name
+                        ELSE substr(qualified_name, instr(qualified_name, '#') + 1)
+                    END
+                    WHERE symbol_name IS NULL
+                `);
+
+                this.db.pragma(`user_version = 3`);
+            }
+
+            if (current < 4) {
+                // Migration 3 → 4: capture intent (docstrings) + agent annotations.
+                // Idempotent: guard the ALTER with a PRAGMA table_info check so re-runs
+                // (or fresh DBs already created from schema.sql) don't error.
+                const columns = this.db.prepare('PRAGMA table_info(nodes)').all() as { name: string }[];
+                const hasDocstring = columns.some(c => c.name === 'docstring');
+                if (!hasDocstring) {
+                    this.db.exec('ALTER TABLE nodes ADD COLUMN docstring TEXT');
+                }
+
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS annotations (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        node_qname TEXT NOT NULL,
+                        kind TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        author TEXT DEFAULT 'agent',
+                        created_at INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                        commit_hash TEXT
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_annotations_node_qname ON annotations (node_qname);
+                `);
+
+                this.db.pragma(`user_version = 4`);
+            }
+
+            if (current < 5) {
+                // Migration 4 → 5: architecture intent model (P6).
+                // Singleton table holding the declared architecture for the project.
+                // CREATE TABLE IF NOT EXISTS keeps this idempotent even if schema.sql
+                // already created it during initializeSchema().
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS architecture_intent (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton
+                        layers TEXT,           -- JSON array of LayerDef
+                        rules TEXT,            -- JSON array of ArchRule (with rationale)
+                        responsibilities TEXT  -- JSON object { layerName: description }
+                    );
+                `);
+                this.db.pragma(`user_version = 5`);
+            }
+
+            if (current < 6) {
+                // Migration 5 → 6: richer test linkage (P7).
+                // Capture it()/test() block titles, their expect() assertions, and
+                // link them to the symbols they verify. CREATE TABLE IF NOT EXISTS
+                // keeps this idempotent even if schema.sql already created it.
+                this.db.exec(`
+                    CREATE TABLE IF NOT EXISTS test_specs (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        test_qname TEXT NOT NULL,      -- qualified name of the test file
+                        title TEXT NOT NULL,            -- it('title') or test('title')
+                        target_qname TEXT,             -- symbol being tested (nullable)
+                        assertions TEXT,                -- JSON array of normalized assertion strings
+                        file_path TEXT NOT NULL,
+                        start_line INTEGER NOT NULL
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_test_specs_test_qname ON test_specs (test_qname);
+                    CREATE INDEX IF NOT EXISTS idx_test_specs_target_qname ON test_specs (target_qname);
+                `);
+                this.db.pragma(`user_version = 6`);
+            }
         });
         migrate();
+
+        // M3/A-11: a migration ran — notify registered listeners so stale
+        // prepared-statement caches can be invalidated.
+        for (const cb of this.migrationCallbacks) {
+            try { cb(); } catch { /* listeners must not break migrations */ }
+        }
     }
 
     /**

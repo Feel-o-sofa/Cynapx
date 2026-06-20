@@ -26,9 +26,23 @@ export interface RawCodeEdge {
     target_file_hint?: string;
 }
 
+/**
+ * P7: A captured test specification — an it()/test() block, its expect()
+ * assertions, and the symbol it verifies. Gives agents behavioral contracts.
+ */
+export interface TestSpec {
+    testQname: string;
+    title: string;
+    targetQname?: string;
+    assertions: string[];
+    filePath: string;
+    startLine: number;
+}
+
 export interface DeltaGraph {
     nodes: CodeNode[];
     edges: RawCodeEdge[];
+    testSpecs?: TestSpec[];  // P7
 }
 
 /**
@@ -48,6 +62,8 @@ export interface LanguageProvider {
     getLanguage(): any;
     getQuery(): string;
     mapCaptureToSymbolType(captureName: string): SymbolType;
-    resolveImport?(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[], captureName?: string): void;
+    resolveImport?(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[], captureName?: string, absFilePath?: string): void;
     getDecisionPoints(): string[];
+    normalizeDocstring?: (raw: string) => string;
+    extractTestSpecs?: (root: Parser.SyntaxNode, filePath: string, fileQname: string) => TestSpec[];
 }

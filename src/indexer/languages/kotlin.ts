@@ -3,33 +3,19 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { LanguageProvider, RawCodeEdge } from '../types';
-import { SymbolType } from '../../types';
-// @ts-ignore
-import Kotlin from 'tree-sitter-kotlin';
-import Parser from 'tree-sitter';
-import * as fs from 'fs';
-import * as path from 'path';
+import { LanguageDescriptor } from './descriptor';
 
-export class KotlinProvider implements LanguageProvider {
-    public extensions = ['kt', 'kts'];
-    public languageName = 'kotlin';
-
-    public getLanguage() {
-        return Kotlin;
-    }
-
-    public getQuery(): string {
-        const queryPath = path.resolve(__dirname, './queries/kotlin.scm');
-        return fs.readFileSync(queryPath, 'utf8');
-    }
-
-    public mapCaptureToSymbolType(captureName: string): SymbolType {
-        if (captureName.startsWith('class')) return 'class';
-        return 'function';
-    }
-
-    public resolveImport(node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string): void {
+export const kotlinDescriptor: LanguageDescriptor = {
+    name: 'kotlin',
+    extensions: ['kt', 'kts'],
+    grammarModule: 'tree-sitter-kotlin',
+    queryFile: 'kotlin.scm',
+    captureMap: [
+        ['class', 'class']
+    ],
+    defaultSymbolType: 'function',
+    decisionPoints: ['if_expression', 'for_statement', 'while_statement', 'catch_block'],
+    resolveImport(node, fromQName, edges, captureName) {
         const text = node.text;
 
         if (captureName === 'relation.inherits') {
@@ -48,8 +34,4 @@ export class KotlinProvider implements LanguageProvider {
             });
         }
     }
-
-    public getDecisionPoints(): string[] {
-        return ['if_expression', 'for_statement', 'while_statement', 'catch_block'];
-    }
-}
+};

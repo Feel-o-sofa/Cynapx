@@ -26,6 +26,7 @@ export const getSymbolDetailsHandler: ToolHandler = {
         let text = `### Symbol: ${node.qualified_name}\n`;
         text += `- **Type**: ${node.symbol_type}\n`;
         if (node.signature) text += `- **Signature**: ${node.signature}\n`;
+        if (node.docstring) text += `- **Docstring**: ${node.docstring}\n`;
         text += `- **File**: ${node.file_path} (line ${node.start_line}-${node.end_line})\n`;
 
         // L-2: tags is always string[] | undefined per type definition — Array.isArray branch removed
@@ -38,6 +39,36 @@ export const getSymbolDetailsHandler: ToolHandler = {
             node.history.slice(0, 3).forEach(commit => {
                 text += `- **[${commit.hash.substring(0, 7)}]** ${commit.message} (by ${commit.author})\n`;
             });
+        }
+
+        // Surface annotations
+        const db = ctx.graphEngine.nodeRepo.getDb();
+        const annotations = db.prepare(
+            'SELECT kind, body, author, created_at FROM annotations WHERE node_qname = ? ORDER BY created_at DESC LIMIT 5'
+        ).all(node.qualified_name) as { kind: string; body: string; author: string; created_at: number }[];
+        if (annotations.length > 0) {
+            text += `\n#### Agent Annotations:\n`;
+            for (const a of annotations) {
+                const date = new Date(a.created_at * 1000).toISOString().slice(0, 10);
+                text += `- **[${a.kind}]** ${a.body.slice(0, 200)} *(${a.author}, ${date})*\n`;
+            }
+        }
+
+        // P7: surface verified behavior — captured test specs and their assertions.
+        const testSpecs = db.prepare(
+            'SELECT title, assertions FROM test_specs WHERE target_qname = ?'
+        ).all(node.qualified_name) as { title: string; assertions: string }[];
+        if (testSpecs.length > 0) {
+            text += `\n#### Verified Behavior:\n`;
+            for (const spec of testSpecs.slice(0, 10)) {
+                const assertions = JSON.parse(spec.assertions) as string[];
+                text += `- **${spec.title}**`;
+                if (assertions.length > 0) {
+                    text += `: ${assertions.slice(0, 3).join('; ')}`;
+                    if (assertions.length > 3) text += ` (+${assertions.length - 3} more)`;
+                }
+                text += '\n';
+            }
         }
 
         text += `\n#### Metrics:\n- LOC: ${node.loc}, CC: ${node.cyclomatic}\n- Static Coupling: Fan-in: ${node.fan_in || 0}, Fan-out: ${node.fan_out || 0}\n`;

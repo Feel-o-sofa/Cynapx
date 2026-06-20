@@ -111,6 +111,40 @@ describe('ArchitectureEngine custom rules', () => {
         expect(customViolation!.description).toMatch(/server.*db/);
     });
 
+    it('checkViolations() emits a circular-dependency violation with the correct edge for an A->B->A cycle', async () => {
+        // Regression test for the circular-dependency branch (Phase 22-1).
+        // The default stub uses getOutgoingEdges: () => [], so detectCycles()
+        // never finds a cycle and this branch (incl. the edge Map lookup) was
+        // previously 0% covered. Here we wire a real A->B->A cycle and pin that
+        // the Map lookup yields the same edge the old `edges.find(...)` would.
+        const nodeA = { id: 1, qualified_name: 'mod/a', file_path: 'src/mod/a.ts', tags: [], symbol_type: 'function' };
+        const nodeB = { id: 2, qualified_name: 'mod/b', file_path: 'src/mod/b.ts', tags: [], symbol_type: 'function' };
+        const edgeAB = { from_id: 1, to_id: 2, edge_type: 'calls' };
+        const edgeBA = { from_id: 2, to_id: 1, edge_type: 'calls' };
+
+        const stubEngine = {
+            getAllEdges: () => [edgeAB, edgeBA],
+            getAllNodes: () => [nodeA, nodeB],
+            getNodeById: (id: number) => id === 1 ? nodeA : id === 2 ? nodeB : undefined,
+            getOutgoingEdges: (id: number) => id === 1 ? [edgeAB] : id === 2 ? [edgeBA] : [],
+        } as unknown as import('../src/graph/graph-engine').GraphEngine;
+
+        const engine = new ArchitectureEngine(stubEngine);
+
+        const violations = await engine.checkViolations();
+
+        const cyclic = violations.find(v => v.policyId === 'circular-dependency');
+        expect(cyclic).toBeDefined();
+        // The .edge field must be populated via the O(1) Map lookup with the
+        // edge whose (from_id, to_id) matches the first two cycle members.
+        expect(cyclic!.edge).toBeDefined();
+        expect(cyclic!.edge.from_id).toBe(cyclic!.source.id);
+        expect(cyclic!.edge.to_id).toBe(cyclic!.target.id);
+        // Concretely, the cycle starts A->B, so the looked-up edge is edgeAB.
+        expect(cyclic!.edge).toBe(edgeAB);
+        expect(cyclic!.description).toMatch(/Circular dependency detected/);
+    });
+
     it('checkViolations() does not emit violations for allowed custom rules', async () => {
         const rules: ArchRule[] = [
             { name: 'graph can call db', from: 'graph', to: 'db', allowed: true },

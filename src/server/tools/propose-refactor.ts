@@ -5,6 +5,7 @@
  */
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
+import { requireEngine } from './_utils.js';
 
 export const proposeRefactorHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -15,7 +16,7 @@ export const proposeRefactorHandler: ToolHandler = {
         if (!ctx) {
             return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
         }
-        const proposal = await ctx.refactorEngine!.proposeRefactor(args.qualified_name);
+        const proposal = await requireEngine(ctx, 'refactorEngine').proposeRefactor(args.qualified_name);
         return { content: [{ type: "text", text: JSON.stringify(proposal, null, 2) }] };
     }
 };

@@ -116,7 +116,7 @@ Cynapx는 프로젝트 디렉토리에 절대 쓰지 않습니다. 모든 영속
 
 | 요구사항 | 버전 | 비고 |
 |----------|------|------|
-| Node.js | >= 20 | 필수 |
+| Node.js | >= 22 | 필수 |
 | Git | 최신 버전 | `backfill_history` 및 churn 메트릭에 필요 |
 | Python | 3.x | 선택 — `search_symbols`의 `semantic: true` 벡터 검색 활성화 |
 

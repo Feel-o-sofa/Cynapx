@@ -5,6 +5,7 @@
  */
 import * as fs from 'fs';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { getCentralStorageDir, getProjectHash } from './paths';
 
 /**
@@ -26,9 +27,20 @@ export interface ProjectProfile {
      * Populated here for documentation; A-6 will wire up the actual call.
      */
     webhookUrl?: string;
+    /**
+     * P9-0: Pluggable embedding provider configuration. When undefined, the
+     * default jina-sidecar provider is used (same behavior as before).
+     */
+    embedding?: {
+        provider: 'jina-sidecar' | 'openai' | 'ollama' | 'null';
+        model?: string;
+        apiKey?: string;
+        endpoint?: string;
+        dimensions?: number;
+    };
 }
 
-const DEFAULT_PROFILE: Required<Omit<ProjectProfile, 'webhookUrl'>> = {
+const DEFAULT_PROFILE: Required<Omit<ProjectProfile, 'webhookUrl' | 'embedding'>> = {
     excludePatterns: ['**/node_modules/**', '**/dist/**', '**/.git/**'],
     maxFileSize: 500 * 1024,
     languageOverrides: {}
@@ -62,7 +74,8 @@ export function loadProfile(projectPath: string): ProjectProfile {
             excludePatterns: raw.excludePatterns ?? DEFAULT_PROFILE.excludePatterns,
             maxFileSize: raw.maxFileSize ?? DEFAULT_PROFILE.maxFileSize,
             languageOverrides: raw.languageOverrides ?? DEFAULT_PROFILE.languageOverrides,
-            webhookUrl: raw.webhookUrl
+            webhookUrl: raw.webhookUrl,
+            embedding: raw.embedding
         };
     } catch {
         return { ...DEFAULT_PROFILE };
@@ -75,9 +88,17 @@ export function loadProfile(projectPath: string): ProjectProfile {
  */
 export function saveProfile(projectPath: string, profile: ProjectProfile): void {
     const profilePath = getProfilePath(projectPath);
-    const tmpPath = profilePath + '.tmp';
+    // A-8: pid + random suffix so concurrent writers don't clobber a shared
+    // `*.tmp` file. The rename is atomic; last-writer-wins for the same profile
+    // is acceptable (single profile per project, no field-level merge needed).
+    const tmpPath = `${profilePath}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
     fs.writeFileSync(tmpPath, JSON.stringify(profile, null, 2), { encoding: 'utf8', mode: 0o600 });
-    fs.renameSync(tmpPath, profilePath);
+    try {
+        fs.renameSync(tmpPath, profilePath);
+    } catch (e) {
+        try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+        throw e;
+    }
 }
 
 /**
