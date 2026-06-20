@@ -44,7 +44,7 @@ export interface LanguageDescriptor {
      * one genuinely per-language piece of logic, so it stays a function on the
      * descriptor rather than being force-flattened into data.
      */
-    resolveImport?: (node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string) => void;
+    resolveImport?: (node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string, absFilePath?: string) => void;
     /**
      * Optional language-specific docstring normalizer. Strips comment markers
      * and documentation syntax (e.g. Rust `///`, C# XML doc tags) so the stored

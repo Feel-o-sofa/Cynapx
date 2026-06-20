@@ -4,9 +4,11 @@
  * See LICENSE in the project root for license information.
  */
 import Parser from 'tree-sitter';
+import * as path from 'path';
 import { LanguageDescriptor } from './descriptor';
-import { TestSpec } from '../types';
+import { RawCodeEdge, TestSpec } from '../types';
 import { directChildrenOfType, truncate } from './test-spec-helpers';
+import { toCanonical } from '../../utils/paths';
 
 /** Returns the test function's name if it looks like a pytest/unittest test. */
 function pyFuncName(fn: Parser.SyntaxNode): string | undefined {
@@ -35,6 +37,60 @@ function collectPyAsserts(fn: Parser.SyntaxNode): string[] {
     return out;
 }
 
+/**
+ * Resolve a Python relative import (`from . import x`, `from .utils import y`,
+ * `from ..pkg import z`) to the canonical path(s) of the local target file(s)
+ * and emit best-effort `depends_on` edges. Unresolved edges (targets outside
+ * the project) drop harmlessly downstream, so emitting `.py` and package
+ * `__init__.py` candidates is safe.
+ *
+ * Dot semantics: N leading dots = N directory levels. 1 dot = the importing
+ * file's directory, 2 dots = its parent, so the base dir is the file dir gone
+ * up (N - 1) levels.
+ */
+function resolvePyRelativeImport(
+    stmt: Parser.SyntaxNode,
+    relativeImport: Parser.SyntaxNode,
+    fromQName: string,
+    edges: RawCodeEdge[],
+    absFilePath?: string
+): void {
+    if (!absFilePath) return;
+
+    const prefixNode = relativeImport.descendantsOfType('import_prefix')[0];
+    const dotCount = prefixNode ? (prefixNode.text.match(/\./g)?.length ?? 0) : 0;
+    if (dotCount === 0) return;
+
+    // Base directory: file's dir, then up (dotCount - 1) levels.
+    let baseDir = path.dirname(absFilePath);
+    for (let i = 0; i < dotCount - 1; i++) {
+        baseDir = path.dirname(baseDir);
+    }
+
+    const emitModule = (segments: string[]): void => {
+        if (segments.length === 0) return;
+        const targetBase = path.join(baseDir, ...segments);
+        const candidates = [`${targetBase}.py`, path.join(targetBase, '__init__.py')];
+        for (const candidate of candidates) {
+            edges.push({ from_qname: fromQName, to_qname: toCanonical(candidate), edge_type: 'depends_on', dynamic: false });
+        }
+    };
+
+    const moduleDottedName = relativeImport.descendantsOfType('dotted_name')[0];
+    if (moduleDottedName) {
+        // `from .utils import x` / `from ..pkg.sub import y`
+        emitModule(moduleDottedName.text.split('.'));
+    } else {
+        // `from . import z, w` — each imported name is a sibling module.
+        for (let i = 0; i < stmt.childCount; i++) {
+            const child = stmt.child(i)!;
+            if (child.type === 'dotted_name' && stmt.fieldNameForChild(i) === 'name') {
+                emitModule(child.text.split('.'));
+            }
+        }
+    }
+}
+
 export const pythonDescriptor: LanguageDescriptor = {
     name: 'python',
     extensions: ['py'],
@@ -50,7 +106,7 @@ export const pythonDescriptor: LanguageDescriptor = {
         'if_statement', 'elif_clause', 'for_statement', 'while_statement',
         'case_clause', 'except_clause', 'conditional_expression', 'boolean_operator'
     ],
-    resolveImport(node, fromQName, edges, captureName) {
+    resolveImport(node, fromQName, edges, captureName, absFilePath) {
         if (captureName === 'relation.inherits') {
             edges.push({ from_qname: fromQName, to_qname: node.text, edge_type: 'inherits', dynamic: false });
             return;
@@ -72,18 +128,14 @@ export const pythonDescriptor: LanguageDescriptor = {
             }
         } else if (node.type === 'import_from_statement') {
             const moduleNode = node.childForFieldName('module_name');
-            if (moduleNode) {
+            if (!moduleNode) return;
+
+            if (moduleNode.type === 'relative_import') {
+                // Local/relative import: resolve to a sibling/ancestor .py file.
+                resolvePyRelativeImport(node, moduleNode, fromQName, edges, absFilePath);
+            } else {
                 const pkgName = moduleNode.text.split('.')[0];
-                let isRelative = false;
-                for (let i = 0; i < node.childCount; i++) {
-                    if (node.child(i)!.type === 'relative_import' || node.child(i)!.text.startsWith('.')) {
-                        isRelative = true;
-                        break;
-                    }
-                }
-                if (!isRelative) {
-                    edges.push({ from_qname: fromQName, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
-                }
+                edges.push({ from_qname: fromQName, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
             }
         }
     },

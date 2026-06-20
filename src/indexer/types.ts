@@ -62,7 +62,7 @@ export interface LanguageProvider {
     getLanguage(): any;
     getQuery(): string;
     mapCaptureToSymbolType(captureName: string): SymbolType;
-    resolveImport?(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[], captureName?: string): void;
+    resolveImport?(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[], captureName?: string, absFilePath?: string): void;
     getDecisionPoints(): string[];
     normalizeDocstring?: (raw: string) => string;
     extractTestSpecs?: (root: Parser.SyntaxNode, filePath: string, fileQname: string) => TestSpec[];

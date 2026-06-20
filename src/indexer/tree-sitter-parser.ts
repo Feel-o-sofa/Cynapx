@@ -213,7 +213,7 @@ export class TreeSitterParser implements CodeParser {
                 } else if (cName.includes('relation') || cName.includes('import')) {
                     // Import or OOP Relation
                     if (provider.resolveImport) {
-                        provider.resolveImport(node, fromQName, edges, cName);
+                        provider.resolveImport(node, fromQName, edges, cName, normalizedFilePath);
                     }
                 }
             }

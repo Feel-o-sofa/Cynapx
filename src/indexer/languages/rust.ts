@@ -4,9 +4,11 @@
  * See LICENSE in the project root for license information.
  */
 import Parser from 'tree-sitter';
+import * as path from 'path';
 import { LanguageDescriptor } from './descriptor';
 import { TestSpec } from '../types';
 import { truncate } from './test-spec-helpers';
+import { toCanonical } from '../../utils/paths';
 
 /**
  * A `function_item` is a test if one of its immediately preceding
@@ -50,7 +52,28 @@ export const rustDescriptor: LanguageDescriptor = {
     normalizeDocstring(raw: string): string {
         return raw.replace(/^\s*\/\/[\/!]\s?/gm, '').trim();
     },
-    resolveImport(node, fromQName, edges) {
+    resolveImport(node, fromQName, edges, _captureName, absFilePath) {
+        if (node.type === 'mod_item') {
+            // External module declaration `mod foo;` (no inline `{ ... }` body)
+            // resolves to a sibling source file: `<dir>/foo.rs` or `<dir>/foo/mod.rs`.
+            // Inline `mod foo { ... }` modules already become module nodes in the
+            // definition pass, so skip those here.
+            if (node.childForFieldName('body')) return;
+            const name = node.childForFieldName('name')?.text;
+            if (!name || !absFilePath) return;
+            const dir = path.dirname(absFilePath);
+            const candidates = [path.join(dir, `${name}.rs`), path.join(dir, name, 'mod.rs')];
+            for (const candidate of candidates) {
+                edges.push({
+                    from_qname: fromQName,
+                    to_qname: toCanonical(candidate),
+                    edge_type: 'depends_on',
+                    dynamic: false
+                });
+            }
+            return;
+        }
+
         const pathNode = node.descendantsOfType('identifier').pop();
         if (pathNode) {
             edges.push({
