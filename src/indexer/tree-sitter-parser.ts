@@ -155,6 +155,16 @@ export class TreeSitterParser implements CodeParser {
             }
         }
 
+        // Build name → qname index for intra-file call resolution (P8-2)
+        const localSymbolMap = new Map<string, string>();
+        for (const [, qname] of nodeToSymbolMap) {
+            const hashIdx = qname.lastIndexOf('#');
+            if (hashIdx >= 0) {
+                const name = qname.slice(hashIdx + 1);
+                localSymbolMap.set(name, qname);
+            }
+        }
+
         // Second pass: Extract Relations (Calls, Inheritance, Imports)
         for (const match of matches) {
             for (const capture of match.captures) {
@@ -184,11 +194,15 @@ export class TreeSitterParser implements CodeParser {
                         targetName = idNode.text;
                     }
 
+                    // P8-2: resolve intra-file calls to fully qualified names
+                    const resolvedTarget = (!targetName.includes('.') && localSymbolMap.has(targetName))
+                        ? localSymbolMap.get(targetName)!
+                        : targetName;
                     edges.push({
                         from_qname: fromQName,
-                        to_qname: targetName,
+                        to_qname: resolvedTarget,
                         edge_type: 'calls',
-                        dynamic: true,
+                        dynamic: !localSymbolMap.has(targetName) || targetName.includes('.'),
                         call_site_line: node.startPosition.row + 1
                     });
                 } else if (cName.includes('relation') || cName.includes('import')) {
