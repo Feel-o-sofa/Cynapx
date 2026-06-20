@@ -3,7 +3,7 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { LanguageProvider, RawCodeEdge } from '../types';
+import { LanguageProvider, RawCodeEdge, TestSpec } from '../types';
 import { SymbolType } from '../../types';
 import Parser from 'tree-sitter';
 import * as fs from 'fs';
@@ -52,6 +52,14 @@ export interface LanguageDescriptor {
      * is used in the parser.
      */
     normalizeDocstring?: (raw: string) => string;
+    /**
+     * Optional per-language test-spec extraction. Given the parsed syntax tree
+     * root and file context, returns the test specifications (test functions,
+     * their assertions, and best-effort target symbols) found in the file.
+     * Language-specific because each ecosystem has its own test conventions
+     * (pytest def test_*, Go func TestXxx, Rust #[test], JUnit @Test).
+     */
+    extractTestSpecs?: (root: Parser.SyntaxNode, filePath: string, fileQname: string) => TestSpec[];
 }
 
 const QUERIES_DIR = path.resolve(__dirname, 'queries');
@@ -100,6 +108,10 @@ export function createLanguageProvider(descriptor: LanguageDescriptor): Language
 
     if (descriptor.normalizeDocstring) {
         provider.normalizeDocstring = descriptor.normalizeDocstring;
+    }
+
+    if (descriptor.extractTestSpecs) {
+        provider.extractTestSpecs = descriptor.extractTestSpecs;
     }
 
     return provider;

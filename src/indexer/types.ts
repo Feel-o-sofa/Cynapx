@@ -65,4 +65,5 @@ export interface LanguageProvider {
     resolveImport?(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[], captureName?: string): void;
     getDecisionPoints(): string[];
     normalizeDocstring?: (raw: string) => string;
+    extractTestSpecs?: (root: Parser.SyntaxNode, filePath: string, fileQname: string) => TestSpec[];
 }

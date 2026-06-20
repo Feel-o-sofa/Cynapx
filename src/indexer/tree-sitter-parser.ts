@@ -4,7 +4,7 @@
  * See LICENSE in the project root for license information.
  */
 import Parser from 'tree-sitter';
-import { CodeParser, DeltaGraph, RawCodeEdge, LanguageProvider } from './types';
+import { CodeParser, DeltaGraph, RawCodeEdge, LanguageProvider, TestSpec } from './types';
 import { CodeNode, SymbolType } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -219,7 +219,17 @@ export class TreeSitterParser implements CodeParser {
             }
         }
 
-        return { nodes, edges };
+        // P8-1: Language-specific test-spec extraction (behavioral contracts).
+        let testSpecs: TestSpec[] | undefined;
+        if (provider.extractTestSpecs) {
+            try {
+                testSpecs = provider.extractTestSpecs(tree.rootNode, normalizedFilePath, canonicalFilePath);
+            } catch (err) {
+                // Test-spec extraction is best-effort; never fail the whole parse over it.
+                testSpecs = undefined;
+            }
+        }
+        return testSpecs && testSpecs.length > 0 ? { nodes, edges, testSpecs } : { nodes, edges };
     }
 
 }
