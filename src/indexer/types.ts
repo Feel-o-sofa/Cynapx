@@ -64,4 +64,5 @@ export interface LanguageProvider {
     mapCaptureToSymbolType(captureName: string): SymbolType;
     resolveImport?(node: Parser.SyntaxNode, filePath: string, edges: RawCodeEdge[], captureName?: string): void;
     getDecisionPoints(): string[];
+    normalizeDocstring?: (raw: string) => string;
 }

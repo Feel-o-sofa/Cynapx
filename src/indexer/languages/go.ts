@@ -17,6 +17,9 @@ export const goDescriptor: LanguageDescriptor = {
     ],
     defaultSymbolType: 'field',
     decisionPoints: ['if_statement', 'for_statement', 'expression_case', 'type_case', 'communication_case', 'binary_expression'],
+    normalizeDocstring(raw: string): string {
+        return raw.replace(/^\s*\/\/\s?/gm, '').trim();
+    },
     resolveImport(node, fromQName, edges) {
         const pathNode = node.descendantsOfType('interpreted_string_literal')[0];
         if (pathNode) {

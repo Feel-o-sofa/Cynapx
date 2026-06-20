@@ -16,6 +16,9 @@ export const gdscriptDescriptor: LanguageDescriptor = {
     ],
     defaultSymbolType: 'function',
     decisionPoints: ['if_statement', 'for_statement', 'while_statement', 'match_arm'],
+    normalizeDocstring(raw: string): string {
+        return raw.replace(/^\s*##\s?/gm, '').trim();
+    },
     resolveImport(node, fromQName, edges) {
         const parentNode = node.descendantsOfType('identifier')[0];
         if (parentNode) {

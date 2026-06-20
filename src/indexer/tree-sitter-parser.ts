@@ -33,15 +33,20 @@ export class TreeSitterParser implements CodeParser {
      * Extracts a leading comment (sibling) or a leading string docstring (Python)
      * for a captured definition node. Captured as "intent" for the knowledge base (P1).
      */
-    private extractTreeSitterDocstring(captureNode: Parser.SyntaxNode): string | undefined {
+    private extractTreeSitterDocstring(captureNode: Parser.SyntaxNode, provider?: LanguageProvider): string | undefined {
         // Look for an immediately preceding comment node (sibling)
         const prev = captureNode.previousNamedSibling;
         if (prev && (prev.type === 'comment' || prev.type === 'block_comment'
                      || prev.type === 'line_comment' || prev.type === 'doc_comment'
                      || prev.type === 'documentation_comment')) {
-            const text = prev.text
-                .replace(/^\/\*\*?|\*\/$|^\/\/\/?|^#+\s?|^\s*\*\s?/gm, '')
-                .trim();
+            let text: string;
+            if (provider?.normalizeDocstring) {
+                text = provider.normalizeDocstring(prev.text);
+            } else {
+                text = prev.text
+                    .replace(/^\/\*\*?|\*\/$|^\/\/\/?|^#+\s?|^\s*\*\s?/gm, '')
+                    .trim();
+            }
             return text || undefined;
         }
         // Python: check first child for string node (docstring)
@@ -140,7 +145,7 @@ export class TreeSitterParser implements CodeParser {
                         signature: paramsCapture ? `${name}${paramsCapture.node.text}` : undefined,
                         return_type: returnCapture ? returnCapture.node.text.replace(/^[:\s->]+/, '') : undefined,
                         modifiers: modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : undefined,
-                        docstring: this.extractTreeSitterDocstring(node)
+                        docstring: this.extractTreeSitterDocstring(node, provider)
                     });
 
                     edges.push({

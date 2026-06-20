@@ -18,6 +18,9 @@ export const rustDescriptor: LanguageDescriptor = {
     ],
     defaultSymbolType: 'field',
     decisionPoints: ['if_expression', 'for_expression', 'while_expression', 'loop_expression', 'match_arm', 'binary_expression'],
+    normalizeDocstring(raw: string): string {
+        return raw.replace(/^\s*\/\/[\/!]\s?/gm, '').trim();
+    },
     resolveImport(node, fromQName, edges) {
         const pathNode = node.descendantsOfType('identifier').pop();
         if (pathNode) {

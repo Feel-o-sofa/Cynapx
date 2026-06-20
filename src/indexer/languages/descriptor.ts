@@ -45,6 +45,13 @@ export interface LanguageDescriptor {
      * descriptor rather than being force-flattened into data.
      */
     resolveImport?: (node: Parser.SyntaxNode, fromQName: string, edges: RawCodeEdge[], captureName?: string) => void;
+    /**
+     * Optional language-specific docstring normalizer. Strips comment markers
+     * and documentation syntax (e.g. Rust `///`, C# XML doc tags) so the stored
+     * docstring is clean semantic text. When absent, a generic regex fallback
+     * is used in the parser.
+     */
+    normalizeDocstring?: (raw: string) => string;
 }
 
 const QUERIES_DIR = path.resolve(__dirname, 'queries');
@@ -89,6 +96,10 @@ export function createLanguageProvider(descriptor: LanguageDescriptor): Language
 
     if (descriptor.resolveImport) {
         provider.resolveImport = descriptor.resolveImport;
+    }
+
+    if (descriptor.normalizeDocstring) {
+        provider.normalizeDocstring = descriptor.normalizeDocstring;
     }
 
     return provider;

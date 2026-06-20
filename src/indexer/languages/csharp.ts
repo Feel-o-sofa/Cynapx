@@ -16,6 +16,13 @@ export const csharpDescriptor: LanguageDescriptor = {
     ],
     defaultSymbolType: 'function',
     decisionPoints: ['if_statement', 'for_statement', 'foreach_statement', 'while_statement', 'switch_section', 'catch_clause'],
+    normalizeDocstring(raw: string): string {
+        return raw
+            .replace(/^\s*\/\/\/\s?/gm, '')  // strip /// prefix
+            .replace(/<\/?(?:summary|param|returns|remarks|example|exception|see|seealso|typeparam|value)[^>]*>/g, '')  // strip XML tags
+            .replace(/\s+/g, ' ')  // collapse whitespace
+            .trim();
+    },
     resolveImport(node, fromQName, edges, captureName) {
         const text = node.text;
         if (captureName === 'relation.inherits') {
