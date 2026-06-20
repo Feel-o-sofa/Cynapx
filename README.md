@@ -1,7 +1,9 @@
-# 🧠 Cynapx v2.0.0
+# 🧠 Cynapx v3.0.0
 ### High-Performance AI-Native Code Knowledge Engine for AI Agents
 
 **Cynapx** transforms a codebase into a persistent, queryable knowledge graph of symbols and relationships — giving AI agents real structural understanding that survives session boundaries, context resets, and model restarts.
+
+> **v3.0.0** completes the Vision Arc (P1–P9): docstring/intent capture, temporal context, agent annotation write-back, architecture drift detection, polyglot test-spec & import enrichment, and **model-agnostic semantic search** with pluggable embedding providers. See [RELEASE_NOTES_v3.0.0.md](./RELEASE_NOTES_v3.0.0.md).
 
 ---
 
@@ -41,6 +43,7 @@ Text search and embedding retrieval help, but they describe **tokens**, not **st
 | **Zero-Pollution** | Writes nothing to your project directory; all data lives in `~/.cynapx/` |
 | **Confidence-Aware** | Dead code results are stratified into HIGH / MEDIUM / LOW tiers to minimize false positives |
 | **AI-Native** | Token-efficient output formatting, operator instruction injection, and smart context pruning for LLM consumption |
+| **Model-Agnostic** | Semantic/embedding layer is pluggable — OpenAI, Ollama, Jina sidecar, or your own. Agents can pass pre-computed query vectors so the model issuing a query is the model embedding it |
 | **Extensible** | New languages can be added by implementing the `LanguageProvider` interface |
 
 ---
@@ -88,36 +91,48 @@ initialize_project  →  mode: "existing"             # re-index a previously re
 initialize_project  →  mode: "custom", path: "/your/project"   # index any path on disk
 ```
 
-After indexing completes, all 20 tools are active. Use `get_setup_context` at any time to check status and disk usage.
+After indexing completes, all 27 tools are active. Use `get_setup_context` at any time to check status and disk usage.
 
 ---
 
-## 🛠️ MCP Tools — 20 Total
+## 🛠️ MCP Tools — 27 Total
 
 ### Setup & Lifecycle
 
 | Tool | Description |
 |---|---|
 | `get_setup_context` | Check initialization status, `disk_usage_mb`, and registered projects |
+| `get_project_overview` | Token-efficient whole-project briefing for agents bootstrapping context |
 | `initialize_project` | Index a project into the knowledge graph (`mode`: `"current"` \| `"existing"` \| `"custom"`) |
 | `purge_index` | Permanently delete the local index — requires `confirm: true` |
 | `re_tag_project` | Re-run structural characteristic tagging without full re-index |
 | `backfill_history` | Walk Git commit history and map commits to indexed symbols |
 
-### Symbol Navigation
+### Symbol Navigation & Semantic Search
 
 | Tool | Description |
 |---|---|
-| `search_symbols` | Keyword search with optional semantic (vector) mode |
+| `search_symbols` | Keyword search with optional semantic (vector) mode; accepts a pre-computed `query_embedding` for model-agnostic queries |
+| `find_similar_symbols` | K-NN semantic similarity over stored embeddings — duplicate detection, pattern discovery, refactoring |
 | `get_symbol_details` | Full metrics, structural tags, churn history, and source snippet for a symbol |
 | `get_callers` | All symbols that directly call a given symbol |
 | `get_callees` | All symbols called by a given symbol |
 | `get_related_tests` | Test-file symbols linked to a production symbol via call or import edges |
 
+### Temporal Context & Agent Memory
+
+| Tool | Description |
+|---|---|
+| `get_recent_changes` | Recently changed symbols, derived from Git history |
+| `get_symbol_history` | Change history and rationale for a single symbol — "why does this exist?" |
+| `add_annotation` | Persist an agent note onto a symbol (`decision` \| `gotcha` \| `todo` \| `rationale`) |
+| `get_annotations` | Retrieve agent-authored annotations for a symbol |
+
 ### Architecture Analysis
 
 | Tool | Description |
 |---|---|
+| `get_architecture` | Declared architecture intent + drift report against the real graph |
 | `check_architecture_violations` | Detect illegal layer/domain crossings and circular dependencies |
 | `get_remediation_strategy` | Generate a 3-step, prioritized fix plan for a detected violation |
 | `discover_latent_policies` | Surface implicit architectural patterns encoded in the graph |
@@ -174,6 +189,27 @@ In addition to the MCP interface, Cynapx can expose its analysis engine over an 
 | `POST /api/search/symbols` | Keyword / semantic symbol search |
 | `POST /api/graph/export` | Export the graph as `json`, `graphml`, or `dot` |
 | `GET /healthz` | Unauthenticated liveness/readiness probe |
+
+---
+
+## 🔌 Model-Agnostic Embeddings
+
+Cynapx's semantic layer is **pluggable** so it can serve any AI agent model — Claude, ChatGPT Codex, local LLMs, and future models. The embedding provider is selected at runtime; the default is the bundled Jina code-embeddings sidecar.
+
+| Env var | Purpose | Example |
+|---|---|---|
+| `CYNAPX_EMBED_PROVIDER` | `openai` \| `ollama` \| `jina-sidecar` \| `null` | `openai` |
+| `CYNAPX_EMBED_MODEL` | Model name for the chosen provider | `text-embedding-3-small` |
+| `CYNAPX_EMBED_API_KEY` | API key (OpenAI-compatible providers) | `sk-...` |
+| `CYNAPX_EMBED_ENDPOINT` | Base URL override (Azure / vLLM / LM Studio / self-hosted) | `https://api.openai.com` |
+| `CYNAPX_EMBED_DIMENSIONS` | Embedding dimensionality | `1536` |
+
+- **OpenAI-compatible** — native `fetch` to `/v1/embeddings`; works with OpenAI, Azure OpenAI, vLLM, and LM Studio.
+- **Ollama** — native `fetch` to `localhost:11434/api/embed` (e.g. `nomic-embed-text`).
+- **Jina sidecar** — bundled `jina-code-embeddings` (896 dims), the default.
+- **Per-project override** — set `embedding` in the project profile to pin a provider for one project.
+
+Agents can also bypass server-side embedding entirely by passing a pre-computed `query_embedding` to `search_symbols` — keeping the query vector in the same model space the agent uses.
 
 ---
 

@@ -5,6 +5,36 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.0.0] - 2026-06-20
+
+The **Vision Arc (P1–P9)** release — making Cynapx a true AI-driven knowledge base with model-agnostic semantic search and polyglot cross-language enrichment. See [RELEASE_NOTES_v3.0.0.md](./RELEASE_NOTES_v3.0.0.md) for the full narrative.
+
+### Added
+- **Model-agnostic embedding providers** (P9-0) — pluggable factory (`createEmbeddingProviderFromEnv()`) selecting OpenAI-compatible, Ollama, Jina sidecar, or Null providers at runtime via `CYNAPX_EMBED_*` env vars or per-project `ProjectProfile.embedding`
+- **`find_similar_symbols` tool** (P9-3) — K-NN semantic similarity over stored embeddings via `VectorRepository.getEmbedding()`, score normalized as `1 / (1 + distance)`
+- **Query-time embedding pass-through** (P9-2) — `search_symbols` accepts a pre-computed `query_embedding`, keeping queries in the agent's own model space; enables semantic search even without `semantic: true`
+- **Rich structured search output** (P9-5) — results now return `{ qname, type, file, signature, docstring_snippet, tags, fan_in, score }`
+- **Confidence scoring** (P9-4) — `mergeResultsRRF` exposes RRF/positional relevance scores on every result
+- **Code body in embedding snippets** (P9-1) — `createSnippet()` includes the on-disk source body (start/end line slice, 1000-char cap) for sharper semantic discrimination
+- **`get_project_overview` tool** (P3) — token-efficient whole-project briefing
+- **`get_recent_changes` / `get_symbol_history` tools** (P4) — temporal context from Git history
+- **`add_annotation` / `get_annotations` tools** (P5) — agent write-back of `decision` / `gotcha` / `todo` / `rationale` notes
+- **`get_architecture` tool** (P6) — architecture intent model from `cynapx.architecture.json` with drift detection
+- **Docstring/intent capture** (P1) and meaningful embedding snippets (P2)
+- **Polyglot test-spec extraction** (P8-1) — pytest/unittest (Python), `func Test*`/`t.Run` (Go), `#[test]` (Rust), `@Test` (Java) via `LanguageDescriptor.extractTestSpecs` hook
+- **Cross-file local import resolution** (P8-3) — Python relative imports and Rust `mod foo;` resolve to real file nodes
+- **Per-language docstring normalization** (P8-4) — Rust (`///`/`//!`), C# (XML tags), Go (`//`), GDScript (`##`) via `normalizeDocstring` hook
+- **Intra-file call resolution** (P8-2) — `calls` edges resolve to same-file FQNs
+
+### Changed
+- **Version bump to 3.0.0** — major version reflecting the completed Vision Arc and the new model-agnostic semantic layer
+- `mcp-server.ts` replaced hardcoded `PythonEmbeddingProvider` with `createEmbeddingProviderFromEnv()`
+- MCP tool count grew from 20 to **27**
+- `LanguageDescriptor` gained three optional hooks (`resolveImport`, `normalizeDocstring`, `extractTestSpecs`); `resolveImport` extended with optional `absFilePath` parameter (backward-compatible)
+
+### Quality
+- 839/839 tests passing across 57 files; `tsc --noEmit` clean; `npm audit --omit=dev` 0 vulnerabilities
+
 ## [2.0.0] - 2026-04-18
 
 ### Added
