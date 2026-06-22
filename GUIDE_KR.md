@@ -753,11 +753,12 @@ Related tests for UserService.authenticate (3):
 **출력 예시:**
 
 ```
-Recently changed symbols (10):
+Recent commits (10):
 
-1. UserService.authenticate   a1b2c3d  2026-06-18  "fix: token expiry edge case"
-2. TokenValidator.verify      a1b2c3d  2026-06-18  "fix: token expiry edge case"
-3. ApiGateway.handleRequest   d4e5f6a  2026-06-15  "feat: add rate-limit headers"
+a1b2c3d  2026-06-18  "fix: token expiry edge case"
+  → UserService.authenticate, TokenValidator.verify
+d4e5f6a  2026-06-15  "feat: add rate-limit headers"
+  → ApiGateway.handleRequest, src/middleware/rate-limit.ts
 ```
 
 ---
