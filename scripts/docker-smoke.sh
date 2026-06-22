@@ -33,6 +33,10 @@ PORT="${CYNAPX_SMOKE_PORT:-3199}"
 TIMEOUT="${CYNAPX_SMOKE_TIMEOUT:-180}"
 CONTAINER="cynapx-smoke-$$"
 WORKDIR=""
+# Ephemeral API token for the throwaway container — generated per run so no
+# literal token value is committed to source. Only consumed inside this
+# container (the smoke test itself only polls the unauthenticated /healthz).
+SMOKE_TOKEN="${KNOWLEDGE_TOOL_TOKEN:-$(openssl rand -hex 16 2>/dev/null || echo "smoke-$$-$RANDOM$RANDOM")}"
 
 log()  { echo "[docker-smoke] $*"; }
 
@@ -86,7 +90,7 @@ chmod -R a+rwX "$WORKDIR"
 log "starting container $CONTAINER (API on port $PORT) ..."
 docker run -d --name "$CONTAINER" \
     --network=host \
-    -e KNOWLEDGE_TOOL_TOKEN=smoke-test-token \
+    -e KNOWLEDGE_TOOL_TOKEN="$SMOKE_TOKEN" \
     -v "$WORKDIR:/workspace" \
     "$IMAGE_TAG" --api --api-port "$PORT" --path /workspace
 
