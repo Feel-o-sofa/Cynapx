@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.1.0] - 2026-06-22
+
+A post-release refinement of the v3.0.0 Vision Arc: documentation corrected against source, the in-protocol agent guidance refreshed with new prompts and a repo playbook, and a security-hygiene fix to the Docker smoke script. **No breaking changes, no schema change, no re-index required.** See [RELEASE_NOTES_v3.1.0.md](./RELEASE_NOTES_v3.1.0.md).
+
+### Added
+- **Three new MCP prompts** (additive, backward-compatible) — `onboard-codebase` (guided first-contact workflow for an unfamiliar repo), `find-similar` (drives the semantic `find_similar_symbols` K-NN flow), and `trace-history` (walks temporal context via `get_recent_changes` / `get_symbol_history`)
+- **Repo-root `AGENTS.md`** — concise playbook codifying conventions and the development protocol for agents working on the Cynapx repository itself
+
+### Changed
+- **Version bump to 3.1.0** — additive, backward-compatible agent-facing capability refresh (new MCP prompts) warrants a minor bump
+- **Rewritten in-protocol operator manual** — `buildCynapxInstructions()` emits a clearer, version-stamped operator manual in the MCP `initialize` response, reaching any connecting model automatically
+- **Refreshed `refactor-safety` prompt** — updated to the current toolset and reasoning flow
+- **Documentation accuracy** — README/README_KR/GUIDE_EN/GUIDE_KR corrected against actual source for MCP tool params, CLI flags, REST endpoints/auth, and admin/ops behavior; `get_recent_changes` example made commit-keyed to match its description
+
+### Security
+- **No literal API token in the Docker smoke script** — `scripts/docker-smoke.sh` now generates `KNOWLEDGE_TOOL_TOKEN` per run (env override, else `openssl rand -hex 16`, with a non-`openssl` fallback) instead of hardcoding `smoke-test-token`; no literal token value remains in source. No behavioral change to the smoke test.
+
 ## [3.0.0] - 2026-06-20
 
 The **Vision Arc (P1–P9)** release — making Cynapx a true AI-driven knowledge base with model-agnostic semantic search and polyglot cross-language enrichment. See [RELEASE_NOTES_v3.0.0.md](./RELEASE_NOTES_v3.0.0.md) for the full narrative.
@@ -142,6 +159,7 @@ The **Vision Arc (P1–P9)** release — making Cynapx a true AI-driven knowledg
 - Core indexing logic enhancements and `.gitignore` updates
 - Initial commit: Code Knowledge Tool core implementation
 
+[3.1.0]: https://github.com/Feel-o-sofa/cynapx/compare/v3.0.0...v3.1.0
 [3.0.0]: https://github.com/Feel-o-sofa/cynapx/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.6...v2.0.0
 [1.0.6]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.5...v1.0.6
