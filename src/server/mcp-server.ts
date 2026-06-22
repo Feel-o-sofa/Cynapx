@@ -24,15 +24,36 @@ import { Logger } from '../utils/logger';
 
 
 const log = new Logger('MCP');
-const CYNAPX_INSTRUCTIONS = `
-# Cynapx Operator Manual (v1.0.6)
-You are operating the Cynapx high-performance code knowledge engine. Adhere to these protocol invariants:
-1. **Investigation-First**: Before modifying code, always use 'analyze_impact' and 'get_symbol_details'.
-2. **Context Efficiency**: For symbols with >100 lines, 'get_symbol_details' automatically prunes the output. Use 'read_file' with specific offsets for full logic.
-3. **Architectural Integrity**: Use 'check_architecture_violations' after major refactors.
-4. **Data Purity**: Follow the Zero-Pollution principle. No local configs unless asked.
-5. **Consistency**: Monitor 'graph://ledger'. Use 'check_consistency --repair' if sums do not match.
-`;
+
+/**
+ * Agent-facing operator manual injected into the client's context at connect
+ * time (MCP `instructions`). This is the primary way ANY agent — Claude,
+ * Codex, a local LLM — learns how to drive Cynapx, so keep it model-agnostic,
+ * tool-accurate, and concise. The version is interpolated so it never goes
+ * stale; update the body whenever tools or the recommended flow change.
+ */
+function buildCynapxInstructions(version: string): string {
+    return `# Cynapx Operator Manual (v${version})
+Cynapx is a persistent code knowledge graph. Query structure and intent directly instead of guessing from raw text. All tools are model-agnostic.
+
+## Recommended flow
+1. **Orient** — call \`get_project_overview\` first on an unfamiliar codebase (purpose, stack, architecture, entry points, hotspots).
+2. **Locate** — \`search_symbols\` (keyword or semantic) to find symbols; \`find_similar_symbols\` to surface duplicates/patterns. You may pass a pre-computed \`query_embedding\` to keep queries in your own model space.
+3. **Understand** — \`get_symbol_details\`, \`get_callers\`, \`get_callees\`, \`get_related_tests\`. Ask "why does this exist" with \`get_symbol_history\`; "what changed lately" with \`get_recent_changes\`.
+4. **Investigate before editing** — ALWAYS run \`analyze_impact\` (ripple effect) before changing a symbol.
+5. **Guard architecture** — \`get_architecture\` and \`check_architecture_violations\` after structural work; \`get_remediation_strategy\` for fixes.
+6. **Write back** — record decisions, gotchas, todos, and rationale with \`add_annotation\` so future sessions inherit your context; read them with \`get_annotations\`.
+
+## Invariants
+- **Investigation-first**: never modify code before \`analyze_impact\` + \`get_symbol_details\`.
+- **Context efficiency**: \`get_symbol_details\` prunes large symbols; widen with its own params rather than re-reading whole files.
+- **Temporal tools need history**: \`get_recent_changes\` / \`get_symbol_history\` require \`backfill_history\` to have been run once.
+- **Zero-pollution**: Cynapx never writes to the project; do not add local config unless asked.
+- **Consistency**: inspect the \`graph://ledger\` resource; run \`check_consistency\` (with \`repair: true\`) if counts diverge.
+
+## Resources
+\`graph://summary\`, \`graph://hotspots\`, \`graph://clusters\`, \`graph://ledger\`.`;
+}
 
 export class McpServer {
     private sdkServer: SdkMcpServer;
@@ -58,7 +79,7 @@ export class McpServer {
             version
         }, {
             capabilities: { resources: {}, tools: {}, prompts: {} },
-            instructions: CYNAPX_INSTRUCTIONS
+            instructions: buildCynapxInstructions(version)
         });
 
         this.workspaceManager = workspaceManager || new WorkspaceManager();
@@ -166,7 +187,7 @@ export class McpServer {
             version
         }, {
             capabilities: { resources: {}, tools: {}, prompts: {} },
-            instructions: CYNAPX_INSTRUCTIONS
+            instructions: buildCynapxInstructions(version)
         });
 
         // Re-register all handlers on the per-session server using shared deps
