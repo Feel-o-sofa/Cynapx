@@ -162,21 +162,21 @@ The `cynapx-admin` binary provides operational control over all registered proje
 
 | Command | What it does |
 |---|---|
-| `status` | Show current disk usage and registered project count |
-| `list` | List all registered projects with their paths and index state |
-| `inspect <hash>` | Detailed view of a single project index |
-| `doctor` | Run health checks across all indexes and surface inconsistencies |
-| `purge <hash>` | Delete the index for a specific project |
-| `unregister <hash>` | Remove a project from the registry without deleting its index |
-| `compact <hash>` | Run SQLite VACUUM to reclaim disk space |
-| `backup <hash>` | Create a timestamped backup of a project index |
-| `restore <hash> <backup>` | Restore a project index from a backup file |
+| `status` | Dashboard overview of all registered projects (default command) |
+| `list` | Compact table of all registered projects with their paths and index state |
+| `inspect <name>` | Detailed stats for a single project (by name or path) |
+| `doctor` | Detect stale or broken registry entries across all indexes |
+| `purge <name>` | Delete the index database files for a project (`-y` to skip prompt, `-f` to force past a live lock) |
+| `unregister <name>` | Remove a project from the registry without deleting its DB files |
+| `compact` | Run SQLite VACUUM on **all** project databases to reclaim disk space |
+| `backup <name>` | Create a timestamped backup of a project database |
+| `restore <backup-path>` | Restore a project database from a backup directory |
 
 ---
 
 ## 🌐 REST API
 
-In addition to the MCP interface, Cynapx can expose its analysis engine over an authenticated HTTP REST API. Start it by passing `--api` at boot (optionally `--api-port <number>`, default `3000`). All `/api/*` routes require a **Bearer token** (constant-time validated) and are protected by per-IP **rate limiting** (heavy analysis routes use a stricter limiter). The full contract is published as an OpenAPI 3.0 spec (`src/server/openapi.ts`), served via Swagger UI at `/api/docs` in non-production environments.
+In addition to the MCP interface, Cynapx can expose its analysis engine over an authenticated HTTP REST API. Start it by passing `--api` at boot (optionally `--api-port <number>`, default `3000`; `--bind <addr>`, default `127.0.0.1`; `--https` for an ephemeral TLS cert). All `/api/*` routes require a **Bearer token** (constant-time validated) and are protected by per-IP **rate limiting** (global 100 req/min; heavy analysis routes 10 req/min). The token is taken from the `KNOWLEDGE_TOOL_TOKEN` environment variable, or auto-generated and written to `~/.cynapx/api-token` (mode `0600`) when that variable is unset. The full contract is published as an OpenAPI 3.0 spec (`src/server/openapi.ts`), served via Swagger UI at `/api/docs` in non-production environments.
 
 | Route | Description |
 |---|---|

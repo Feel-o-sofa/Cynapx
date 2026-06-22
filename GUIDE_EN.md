@@ -67,7 +67,7 @@ Your Project (any of 12 supported languages)
             ┌──────────────┼──────────────┐
             ▼              ▼              ▼
        MCP Server      REST API      Graph Engine
-       (stdio)        (:3001)      (BFS/DFS/LRU cache)
+       (stdio)        (:3000)      (BFS/DFS/LRU cache)
        27 tools     Swagger UI     Impact traversal
 ```
 
@@ -171,8 +171,7 @@ Replace `/absolute/path/to/Cynapx` with the actual path where you cloned the rep
       "args": [
         "/absolute/path/to/Cynapx/dist/bootstrap.js",
         "--path", "/absolute/path/to/your-project",
-        "--port", "3001",
-        "--no-auth"
+        "--api", "--api-port", "3000"
       ]
     }
   }
@@ -210,12 +209,19 @@ These options are passed to `node dist/bootstrap.js` (or `ts-node src/bootstrap.
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `--path <dir>` | `cwd` | Absolute or relative path to the project directory to analyze |
-| `--port <n>` | `3001` | Port for the REST API and Swagger UI |
-| `--bind <addr>` | `127.0.0.1` | Bind address. Use `0.0.0.0` for LAN access |
-| `--no-auth` | `false` (auth enabled) | Disable Bearer token authentication on the REST API |
+| `-p, --path <paths...>` | `cwd` | One or more project paths to analyze (space-separated) |
+| `--api` | off | Start the REST API server (off by default — MCP stdio only) |
+| `--api-port <number>` | `3000` | Port for the REST API and Swagger UI |
+| `--bind <address>` | `127.0.0.1` | Bind address. Use `0.0.0.0` for LAN access |
+| `--https` | off | Enable an ephemeral self-signed HTTPS cert for the API server |
+| `--no-index` | indexing on | Skip the initial index sync on startup |
+| `--no-watch` | watching on | Disable the file watcher (no incremental re-index on save) |
+| `--force` | off | Force a full re-index instead of an incremental one |
+| `--interactive` | off | Start in interactive REPL mode instead of MCP stdio |
 
-**Authentication:** when auth is enabled, a token is auto-generated on every startup and printed to `stderr`. Use it as `Authorization: Bearer <token>` on REST requests. The MCP server (stdio) does not require the token — it is only for REST.
+**Authentication (REST only):** the API Bearer token is read from the `KNOWLEDGE_TOOL_TOKEN` environment variable. When that variable is unset, a token is auto-generated and written to `~/.cynapx/api-token` (file mode `0600`) — it is **not** printed to stdout/stderr. Send it as `Authorization: Bearer <token>` on REST requests. The MCP server (stdio) does not use the token — it is REST-only. `GET /healthz` is always unauthenticated.
+
+**Environment variables:** `CYNAPX_LOG_LEVEL` (`debug`\|`info`\|`warn`\|`error`\|`silent`) tunes log verbosity (logs go to stderr); `CYNAPX_LOG_PAYLOADS=1` enables redacted request-payload logging; `NODE_ENV=production` disables the Swagger UI at `/api/docs`. Embedding-provider variables are covered in [§2.6](#26-model-agnostic-embeddings).
 
 ---
 
@@ -341,15 +347,15 @@ Return a token-efficient, whole-project briefing — the fastest way for an agen
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `top_n` | number | `10` | How many top symbols / modules to include in each ranked list |
+| `include_clusters` | boolean | `true` | Include the architectural cluster breakdown in the briefing |
 
-**Returns:** Formatted text briefing — node/edge totals, language breakdown, entry points, and the most-depended-upon symbols.
+**Returns:** Formatted text briefing — purpose, tech stack, architecture shape, entry points, hotspots, and documentation headers.
 
 **Example call:**
 
 ```
 Tool: get_project_overview
-top_n: 10
+include_clusters: true
 ```
 
 **Example output:**
@@ -742,22 +748,25 @@ These tools answer *"what changed recently"* and *"why does this exist"*, and le
 
 #### `get_recent_changes`
 
-List symbols that changed recently, derived from Git history mapped onto the graph. Use it to orient at the start of a session or to scope a review.
+List recent commits across the codebase and which symbols/files each one changed — answers *"what changed recently?"*. Use it to orient at the start of a session or to scope a review.
+
+> **Requires `backfill_history`** to have been run first (it maps Git commits onto symbols).
 
 **Parameters:**
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
-| `limit` | number | `20` | Maximum number of changed symbols to return |
-| `since` | string | — | Optional ISO date or Git revision lower bound (e.g. `2026-06-01`, `HEAD~20`) |
+| `limit` | number | `20` | Maximum number of commits to return |
+| `since_days` | number | — | Only include commits from the last N days |
 
-**Returns:** Array of `{ qname, file, last_commit, commit_date, message }`, newest first.
+**Returns:** Recent commits, each with the symbols/files it touched, newest first.
 
 **Example call:**
 
 ```
 Tool: get_recent_changes
 limit: 10
+since_days: 7
 ```
 
 **Example output:**
@@ -774,16 +783,17 @@ Recently changed symbols (10):
 
 #### `get_symbol_history`
 
-Return the change history and rationale for a single symbol — every commit that touched it, in order. Answers *"why does this exist / why is it shaped this way?"*
+Return the full commit history of a single symbol with an intent summary — every commit that touched it, in order. Answers *"why does this exist / why is it shaped this way?"*
+
+> **Requires `backfill_history`** to have been run first.
 
 **Parameters:**
 
 | Name | Type | Default | Description |
 |------|------|---------|-------------|
 | `qualified_name` | string | required | The symbol whose history you want |
-| `limit` | number | `20` | Maximum number of commits to return |
 
-**Returns:** Array of `{ commit, date, author, message }`, newest first.
+**Returns:** The symbol's commit history (commit, date, author, message) with an intent summary, newest first.
 
 **Example call:**
 
@@ -814,7 +824,8 @@ Persist an agent-authored note onto a symbol. Annotations survive across session
 |------|------|---------|-------------|
 | `qualified_name` | string | required | The symbol to annotate |
 | `kind` | `"decision"` \| `"gotcha"` \| `"todo"` \| `"rationale"` | required | The category of note |
-| `text` | string | required | The annotation body |
+| `body` | string | required | The annotation text |
+| `author` | string | `"agent"` | Who authored the note |
 
 **Returns:** Confirmation with the stored annotation ID.
 
@@ -824,22 +835,24 @@ Persist an agent-authored note onto a symbol. Annotations survive across session
 Tool: add_annotation
 qualified_name: "UserService.authenticate"
 kind: "gotcha"
-text: "Token TTL is read from env at call time, not cached — changing AUTH_TTL takes effect immediately."
+body: "Token TTL is read from env at call time, not cached — changing AUTH_TTL takes effect immediately."
 ```
 
 ---
 
 #### `get_annotations`
 
-Retrieve all agent-authored annotations for a symbol.
+Retrieve agent annotations for a symbol — or the most recent annotations across the whole codebase when no symbol is given.
 
 **Parameters:**
 
-| Name | Type | Description |
-|------|------|-------------|
-| `qualified_name` | string | The symbol whose annotations you want |
+| Name | Type | Default | Description |
+|------|------|---------|-------------|
+| `qualified_name` | string | — | The symbol whose annotations you want. Omit to list recent annotations across the codebase |
+| `kind` | `"decision"` \| `"gotcha"` \| `"todo"` \| `"rationale"` | — | Optional filter by annotation category |
+| `limit` | number | `20` | Maximum number of annotations to return |
 
-**Returns:** Array of `{ id, kind, text, created_at }`.
+**Returns:** Array of `{ id, kind, body, author, created_at }`.
 
 **Example output:**
 

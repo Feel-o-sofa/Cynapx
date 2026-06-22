@@ -162,15 +162,33 @@ initialize_project  →  mode: "custom", path: "/your/project"   # 디스크의 
 
 | 명령 | 기능 |
 |---|---|
-| `status` | 현재 디스크 사용량 및 등록된 프로젝트 수 표시 |
-| `list` | 등록된 모든 프로젝트의 경로와 인덱스 상태 목록 |
-| `inspect <hash>` | 단일 프로젝트 인덱스의 상세 뷰 |
-| `doctor` | 모든 인덱스에 대한 상태 검사 실행 및 불일치 탐지 |
-| `purge <hash>` | 특정 프로젝트의 인덱스 삭제 |
-| `unregister <hash>` | 인덱스를 삭제하지 않고 레지스트리에서 프로젝트 제거 |
-| `compact <hash>` | SQLite VACUUM 실행으로 디스크 공간 회수 |
-| `backup <hash>` | 프로젝트 인덱스의 타임스탬프 백업 생성 |
-| `restore <hash> <backup>` | 백업 파일에서 프로젝트 인덱스 복원 |
+| `status` | 등록된 모든 프로젝트의 대시보드 개요 (기본 명령) |
+| `list` | 등록된 모든 프로젝트의 경로와 인덱스 상태를 간결한 표로 표시 |
+| `inspect <name>` | 단일 프로젝트의 상세 통계 (이름 또는 경로로 지정) |
+| `doctor` | 모든 인덱스에서 오래되거나 손상된 레지스트리 항목 탐지 |
+| `purge <name>` | 프로젝트의 인덱스 DB 파일 삭제 (`-y` 확인 생략, `-f` 활성 잠금 무시) |
+| `unregister <name>` | DB 파일은 유지하고 레지스트리에서 프로젝트 제거 |
+| `compact` | **모든** 프로젝트 DB에 SQLite VACUUM 실행으로 디스크 공간 회수 |
+| `backup <name>` | 프로젝트 DB의 타임스탬프 백업 생성 |
+| `restore <backup-path>` | 백업 디렉토리에서 프로젝트 DB 복원 |
+
+---
+
+## 🌐 REST API
+
+MCP 인터페이스 외에도, Cynapx는 분석 엔진을 인증된 HTTP REST API로 노출할 수 있습니다. 부팅 시 `--api`를 전달하여 시작합니다(선택: `--api-port <number>`, 기본 `3000`; `--bind <addr>`, 기본 `127.0.0.1`; `--https`로 임시 TLS 인증서). 모든 `/api/*` 라우트는 **Bearer 토큰**(상수 시간 검증)을 요구하며 IP별 **속도 제한**으로 보호됩니다(전역 100 req/분; 무거운 분석 라우트 10 req/분). 토큰은 `KNOWLEDGE_TOOL_TOKEN` 환경변수에서 읽으며, 미설정 시 자동 생성되어 `~/.cynapx/api-token`(모드 `0600`)에 기록됩니다. 전체 명세는 OpenAPI 3.0 스펙(`src/server/openapi.ts`)으로 발행되며, 비프로덕션 환경에서 `/api/docs`의 Swagger UI로 제공됩니다.
+
+| 라우트 | 설명 |
+|---|---|
+| `POST /api/symbol/get` | 단일 심볼의 전체 상세 정보 |
+| `POST /api/graph/callers` | 특정 심볼을 직접 호출하는 심볼 |
+| `POST /api/graph/callees` | 특정 심볼이 호출하는 심볼 |
+| `POST /api/analysis/impact` | BFS 파급 효과 영향 분석 |
+| `POST /api/analysis/hotspots` | 선택한 메트릭 기준 상위 심볼 |
+| `POST /api/analysis/tests` | 프로덕션 심볼에 연결된 테스트 |
+| `POST /api/search/symbols` | 키워드 / 시맨틱 심볼 검색 |
+| `POST /api/graph/export` | 그래프를 `json`, `graphml`, `dot`로 내보내기 |
+| `GET /healthz` | 인증 없는 liveness/readiness 프로브 |
 
 ---
 

@@ -142,6 +142,7 @@ The **Vision Arc (P1–P9)** release — making Cynapx a true AI-driven knowledg
 - Core indexing logic enhancements and `.gitignore` updates
 - Initial commit: Code Knowledge Tool core implementation
 
+[3.0.0]: https://github.com/Feel-o-sofa/cynapx/compare/v2.0.0...v3.0.0
 [2.0.0]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.6...v2.0.0
 [1.0.6]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.5...v1.0.6
 [1.0.5]: https://github.com/Feel-o-sofa/cynapx/compare/v1.0.2...v1.0.5
