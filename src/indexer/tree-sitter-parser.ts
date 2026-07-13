@@ -14,6 +14,36 @@ import { toCanonical } from '../utils/paths';
 import { MetricsCalculator } from './metrics-calculator';
 
 /**
+ * AST node types that wrap a callee name when the call goes through a receiver
+ * or qualifier. Some queries capture only a bare identifier for receiver calls
+ * (e.g. Kotlin's navigation calls capture the receiver `simple_identifier`,
+ * and the generic fallback grabs the first identifier of a member access — the
+ * receiver). A name captured in one of these contexts is a method/member call,
+ * so it must never be resolved to a same-named free function defined in the
+ * same file (P8-2 precision).
+ */
+const RECEIVER_CONTEXT_TYPES = new Set([
+    'selector_expression',      // Go
+    'member_access_expression', // C#
+    'navigation_expression',    // Kotlin
+    'attribute',                // Python / GDScript
+    'field_expression',         // Rust / C / C++
+    'member_expression'         // JavaScript / TypeScript
+]);
+
+/**
+ * True when the captured callee name sits inside a receiver-qualified call.
+ * Java uses a single `method_invocation` node type for both free and receiver
+ * calls, so it needs a field check instead of a parent-type check.
+ */
+export function isReceiverQualifiedCall(nameNode: Parser.SyntaxNode | undefined): boolean {
+    const parent = nameNode?.parent;
+    if (!parent) return false;
+    if (RECEIVER_CONTEXT_TYPES.has(parent.type)) return true;
+    return parent.type === 'method_invocation' && parent.childForFieldName('object') !== null;
+}
+
+/**
  * Optimized Generic TreeSitterParser that delegates language-specific logic to LanguageProviders.
  */
 export class TreeSitterParser implements CodeParser {
@@ -38,7 +68,7 @@ export class TreeSitterParser implements CodeParser {
         const prev = captureNode.previousNamedSibling;
         if (prev && (prev.type === 'comment' || prev.type === 'block_comment'
                      || prev.type === 'line_comment' || prev.type === 'doc_comment'
-                     || prev.type === 'documentation_comment')) {
+                     || prev.type === 'documentation_comment' || prev.type === 'multiline_comment')) {
             let text: string;
             if (provider?.normalizeDocstring) {
                 text = provider.normalizeDocstring(prev.text);
@@ -191,23 +221,31 @@ export class TreeSitterParser implements CodeParser {
                     // Call expression
                     const prefix = cName.split('.')[0];
                     const nameCapture = match.captures.find(c => c.name === `${prefix}.name`);
-                    let targetName = nameCapture?.node.text;
-                    
+                    let targetNode = nameCapture?.node;
+                    let targetName = targetNode?.text;
+
                     if (!targetName) {
                         const funcNode = node.childForFieldName('function') || node.childForFieldName('name') || node;
-                        const idNode = funcNode.descendantsOfType('identifier')[0] || funcNode;
-                        targetName = idNode.text;
+                        targetNode = funcNode.descendantsOfType('identifier')[0] || funcNode;
+                        targetName = targetNode.text;
                     }
 
-                    // P8-2: resolve intra-file calls to fully qualified names
-                    const resolvedTarget = (!targetName.includes('.') && localSymbolMap.has(targetName))
-                        ? localSymbolMap.get(targetName)!
+                    // P8-2: resolve intra-file calls to fully qualified names.
+                    // Receiver-qualified calls (method calls on an object) keep
+                    // their bare name and stay dynamic — resolving them to a
+                    // same-named free function would fabricate a wrong edge.
+                    // Lookups are lowercased because localSymbolMap keys come
+                    // from canonicalized (lowercase) qnames.
+                    const lookupKey = targetName.toLowerCase();
+                    const isReceiverCall = targetName.includes('.') || isReceiverQualifiedCall(targetNode);
+                    const resolvedTarget = (!isReceiverCall && localSymbolMap.has(lookupKey))
+                        ? localSymbolMap.get(lookupKey)!
                         : targetName;
                     edges.push({
                         from_qname: fromQName,
                         to_qname: resolvedTarget,
                         edge_type: 'calls',
-                        dynamic: !localSymbolMap.has(targetName) || targetName.includes('.'),
+                        dynamic: isReceiverCall || !localSymbolMap.has(lookupKey),
                         call_site_line: node.startPosition.row + 1
                     });
                 } else if (cName.includes('relation') || cName.includes('import')) {

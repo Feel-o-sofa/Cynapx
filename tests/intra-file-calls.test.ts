@@ -109,6 +109,87 @@ func Run() {
         expect(configureCall!.dynamic).toBe(true);
     });
 
+    it('resolves an uppercase same-file free call while the same-named method call stays dynamic (Go)', async () => {
+        // localSymbolMap keys come from canonicalized (lowercase) qnames, so the
+        // lookup must be case-insensitive: the free call `Configure()` resolves,
+        // while the receiver call `c.Configure()` is never resolved to it.
+        const src = `package main
+
+type Client struct{}
+
+func (c *Client) Configure() {}
+
+func Configure() {}
+
+func Run() {
+    c := &Client{}
+    c.Configure()
+    Configure()
+}
+`;
+        const file = path.join(tmpDir, 'mixed.go');
+        fs.writeFileSync(file, src);
+
+        const parser = new TreeSitterParser();
+        const { edges } = await parser.parse(file, 'commit1', 1);
+
+        const fromRun = callEdges(edges).filter(e => e.from_qname.endsWith('#run'));
+        const resolved = fromRun.filter(e => e.to_qname.includes('#configure') && e.dynamic === false);
+        const dynamic = fromRun.filter(e => e.to_qname === 'c.Configure' && e.dynamic === true);
+
+        // Exactly one statically resolved edge (the free call) and one dynamic
+        // dotted edge (the receiver call keeps its selector text).
+        expect(resolved.length).toBe(1);
+        expect(dynamic.length).toBe(1);
+    });
+
+    it('does not resolve a C# member-access invocation to a same-file free method', async () => {
+        const src = `class Runner {
+    static void Configure() {}
+
+    static void Run(Client c) {
+        c.Configure();
+    }
+}
+`;
+        const file = path.join(tmpDir, 'runner.cs');
+        fs.writeFileSync(file, src);
+
+        const parser = new TreeSitterParser();
+        const { edges } = await parser.parse(file, 'commit1', 1);
+
+        const memberCall = callEdges(edges).find(e => e.to_qname.toLowerCase().includes('configure') && e.dynamic);
+        expect(memberCall).toBeDefined();
+        // The member access keeps its dotted selector text and is never
+        // statically resolved to the same-file free method.
+        expect(memberCall!.to_qname).toBe('c.Configure');
+        const misresolved = callEdges(edges).filter(e => e.to_qname.includes('#configure') && e.dynamic === false);
+        expect(misresolved.length).toBe(0);
+    });
+
+    it('does not resolve a Java receiver invocation but resolves the bare one', async () => {
+        const src = `class Runner {
+    void configure() {}
+
+    void run(Client c) {
+        c.configure();
+        configure();
+    }
+}
+`;
+        const file = path.join(tmpDir, 'Runner.java');
+        fs.writeFileSync(file, src);
+
+        const parser = new TreeSitterParser();
+        const { edges } = await parser.parse(file, 'commit1', 1);
+
+        const fromRun = callEdges(edges).filter(e => e.from_qname.endsWith('#run'));
+        const resolved = fromRun.filter(e => e.to_qname.includes('#configure') && e.dynamic === false);
+        const dynamic = fromRun.filter(e => e.to_qname === 'configure' && e.dynamic === true);
+        expect(resolved.length).toBe(1);
+        expect(dynamic.length).toBe(1);
+    });
+
     it('only the bare same-file call is resolved; member access is not captured as a resolved call', async () => {
         // A direct same-file call `method()` resolves to `#method`. A member
         // access `ns.method()` is NOT an identifier-form call target, so it is
