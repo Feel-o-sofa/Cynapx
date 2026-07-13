@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Follow-up precision and polyglot-coverage work on the P8 cross-language enrichment arc. No schema change; a re-index is recommended to pick up the newly captured docstrings, test specs, and corrected call edges.
+
+### Added
+- **Kotlin test-spec extraction** — `@Test`-annotated functions (JUnit and `kotlin.test`, including fully qualified annotations) with their `assert*` assertions are captured as `test_specs`
+- **PHP test-spec extraction** — PHPUnit `test*` methods and `#[Test]`-attribute methods inside test classes (`*Test` / extends `TestCase`), with `$this->assert*`, `self::assert*`, and `expect*` assertions
+- **C++ test-spec extraction** — GoogleTest `TEST` / `TEST_F` / `TEST_P` / `TYPED_TEST` blocks captured as `Suite.Name` specs with their `EXPECT_*` / `ASSERT_*` assertions
+- **Kotlin and PHP docstring normalizers** — KDoc and PHPDoc block markers (and `//` / `#` line-comment markers) are stripped so stored docstrings are clean semantic text
+
+### Fixed
+- **Kotlin KDoc capture** — KDoc blocks are emitted as `multiline_comment` nodes by the Kotlin grammar and were previously dropped entirely; they are now stored as the symbol's docstring
+- **Intra-file call resolution was case-sensitive against lowercased keys** — resolution silently failed for any symbol containing an uppercase letter (most Go/C#/Java/Rust names); lookups are now case-normalized, so e.g. a Go `Configure()` call resolves to the same-file `func Configure`
+- **Receiver-qualified calls no longer resolve to same-named free functions** — a method call through a receiver (Java `obj.configure()`, Kotlin navigation calls, member-access fallback paths) previously could be statically resolved to an unrelated same-file free function; such calls now keep their bare name and stay `dynamic`
+
 ## [3.1.0] - 2026-06-22
 
 A post-release refinement of the v3.0.0 Vision Arc: documentation corrected against source, the in-protocol agent guidance refreshed with new prompts and a repo playbook, and a security-hygiene fix to the Docker smoke script. **No breaking changes, no schema change, no re-index required.** See [RELEASE_NOTES_v3.1.0.md](./RELEASE_NOTES_v3.1.0.md).

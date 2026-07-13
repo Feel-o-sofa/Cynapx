@@ -112,12 +112,39 @@
 
 ---
 
+## P8 후속 정밀화·확장 (2026-07-13 완료분)
+
+v3.1.0 이후 "향후 후보 (미착수)" 목록 중 두 항목이 처리됐다 (브랜치 `claude/cynapx-status-goals-15uoop`,
+vitest 839→860):
+
+- **P8-2 셀렉터 vs 식별자 정밀화 — [DONE]**: 조사 결과 실제 오해소 경로는 두 가지였다.
+  1. **대소문자 버그(잠재)**: `localSymbolMap` 키는 canonical(소문자) qname에서 파생되는데 조회는
+     원본 대소문자 `targetName`으로 수행 — *대문자가 포함된 심볼(Go/C#/Java/Rust 대부분)의 파일 내
+     호출 해소가 조용히 실패*하고 있었다. 조회를 소문자 정규화(`lookupKey`)로 수정.
+  2. **수신자-경유 호출 오해소**: Java `obj.configure()`는 bare `identifier`만 캡처되고, Kotlin 내비게이션
+     호출은 수신자 `simple_identifier`가 캡처됨 — 동일 파일의 동명 자유함수로 잘못 정적 해소될 수 있었다.
+     `isReceiverQualifiedCall()` 가드 추가: 수신자 컨텍스트(`selector_expression`/`navigation_expression`/
+     `attribute`/`field_expression`/`member_expression`/`member_access_expression`, Java는
+     `method_invocation`의 `object` 필드 존재)로 캡처된 이름은 bare name 유지 + `dynamic:true`.
+  (참고: Go/C# 쿼리는 셀렉터 표현식 *전체 텍스트*를 캡처하므로 점(.) 포함 규칙으로 이미 안전했다.)
+- **Kotlin KDoc 캡처 — [DONE]**: tree-sitter-kotlin은 KDoc을 `multiline_comment` 노드로 방출하는데
+  `extractTreeSitterDocstring`의 sibling 타입 목록에 없어 *KDoc이 통째로 유실*되고 있었다. 타입 추가 +
+  Kotlin `normalizeDocstring` 훅(KDoc 마커 스트립) 신설.
+- **나머지 언어 docstring/테스트-스펙 확장 — [DONE (Kotlin/PHP/C++)]**:
+  - **Kotlin**: `@Test` 어노테이션 함수(JUnit/kotlin.test, 정규화된 `@org.junit.jupiter.api.Test` 포함) +
+    `assert*` 단언.
+  - **PHP**: 테스트 클래스(`*Test`/`extends TestCase`) 내 PHPUnit `test*` 메서드·`#[Test]` 속성 메서드 +
+    `$this->assert*`/`self::assert*`/`expect*` 단언. PHPDoc `normalizeDocstring` 훅 동반.
+  - **C++**: GoogleTest `TEST`/`TEST_F`/`TEST_P`/`TYPED_TEST` 블록(`Suite.Name` 스펙) + `EXPECT_*`/`ASSERT_*` 단언.
+  - **C**: 표준 테스트 프레임워크 부재(Unity/CUnit 등 비표준)로 의도적 제외 — 훅 없는 언어의 무-스펙
+    동작은 기존 게이트로 커버됨.
+
+---
+
 ## 향후 후보 (미착수)
 
 - **P8 Go 모듈 임포트 해소**: go.mod 모듈 경로 매핑 필요(현 범위 제외).
-- **P8-2 셀렉터 vs 식별자 정밀화**: Go `c.Configure()` 메서드 호출이 동명 자유함수로 잘못 해소될 수 있는
-  식별자-온리 모호성(P8-2 에이전트가 플래그함).
 - **테스트-스펙 `targetQname` 교차 파일 해소**: tree-sitter 언어는 현재 `targetQname` undefined(베스트-에포트).
-- **나머지 언어 docstring/테스트-스펙 확장**: C/C++/PHP/Kotlin 등.
+- **C# 테스트-스펙 추출**: NUnit `[Test]`/xUnit `[Fact]` 속성 기반 — Kotlin/PHP/C++와 동일 훅 패턴으로 확장 가능.
 - **대형 의존성 메이저 업그레이드(Express 5 / TypeScript 6)**: 회귀 위험 높고 신규 역량 없음 — 의도적 후순위
   (diagnostic-v30 L-22 참조).
