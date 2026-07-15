@@ -7,7 +7,7 @@ import Parser from 'tree-sitter';
 import * as path from 'path';
 import { LanguageDescriptor } from './descriptor';
 import { RawCodeEdge, TestSpec } from '../types';
-import { directChildrenOfType, truncate } from './test-spec-helpers';
+import { directChildrenOfType, inferProdFilePath, truncate } from './test-spec-helpers';
 import { toCanonical } from '../../utils/paths';
 
 /** Returns the test function's name if it looks like a pytest/unittest test. */
@@ -142,11 +142,13 @@ export const pythonDescriptor: LanguageDescriptor = {
     extractTestSpecs(root, filePath, fileQname): TestSpec[] {
         const specs: TestSpec[] = [];
 
+        // `test_foo.py` / `foo_test.py` exercises `foo.py` (file-level target).
+        const targetQname = inferProdFilePath(filePath);
         const addSpec = (fn: Parser.SyntaxNode, name: string, qnameKey: string): void => {
             specs.push({
                 testQname: `${fileQname}#${qnameKey}`,
                 title: name,
-                targetQname: undefined,
+                targetQname,
                 assertions: collectPyAsserts(fn),
                 filePath,
                 startLine: fn.startPosition.row + 1

@@ -6,7 +6,7 @@
 import Parser from 'tree-sitter';
 import { LanguageDescriptor } from './descriptor';
 import { TestSpec } from '../types';
-import { truncate } from './test-spec-helpers';
+import { inferProdFilePath, truncate } from './test-spec-helpers';
 
 /** True if the enclosing class looks like a PHPUnit test class (`FooTest` / extends TestCase). */
 function isTestClass(cls: Parser.SyntaxNode): boolean {
@@ -74,6 +74,8 @@ export const phpDescriptor: LanguageDescriptor = {
     },
     extractTestSpecs(root, filePath, fileQname): TestSpec[] {
         const specs: TestSpec[] = [];
+        // `FooTest.php` exercises `Foo.php`.
+        const targetQname = inferProdFilePath(filePath);
         for (const cls of root.descendantsOfType('class_declaration')) {
             if (!isTestClass(cls)) continue;
             for (const method of cls.descendantsOfType('method_declaration')) {
@@ -83,7 +85,7 @@ export const phpDescriptor: LanguageDescriptor = {
                 specs.push({
                     testQname: `${fileQname}#${name}`,
                     title: name,
-                    targetQname: undefined,
+                    targetQname,
                     assertions: collectPhpAsserts(method),
                     filePath,
                     startLine: method.startPosition.row + 1

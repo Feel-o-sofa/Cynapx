@@ -6,7 +6,7 @@
 import Parser from 'tree-sitter';
 import { LanguageDescriptor } from './descriptor';
 import { TestSpec } from '../types';
-import { truncate } from './test-spec-helpers';
+import { inferProdFilePath, truncate } from './test-spec-helpers';
 
 /** True if a method_declaration carries a `@Test` annotation. */
 function hasTestAnnotation(method: Parser.SyntaxNode): boolean {
@@ -56,6 +56,8 @@ export const javaDescriptor: LanguageDescriptor = {
     },
     extractTestSpecs(root, filePath, fileQname): TestSpec[] {
         const specs: TestSpec[] = [];
+        // `FooTest.java` exercises `Foo.java` (src/test → src/main mapped).
+        const targetQname = inferProdFilePath(filePath);
         for (const method of root.descendantsOfType('method_declaration')) {
             if (!hasTestAnnotation(method)) continue;
             const name = method.childForFieldName('name')?.text;
@@ -63,7 +65,7 @@ export const javaDescriptor: LanguageDescriptor = {
             specs.push({
                 testQname: `${fileQname}#${name}`,
                 title: name,
-                targetQname: undefined,
+                targetQname,
                 assertions: collectJavaAsserts(method),
                 filePath,
                 startLine: method.startPosition.row + 1

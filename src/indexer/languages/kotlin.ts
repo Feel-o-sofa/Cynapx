@@ -6,7 +6,7 @@
 import Parser from 'tree-sitter';
 import { LanguageDescriptor } from './descriptor';
 import { TestSpec } from '../types';
-import { truncate } from './test-spec-helpers';
+import { inferProdFilePath, truncate } from './test-spec-helpers';
 
 /** True if a function_declaration carries a `@Test` annotation (JUnit / kotlin.test). */
 function hasTestAnnotation(fn: Parser.SyntaxNode): boolean {
@@ -73,6 +73,8 @@ export const kotlinDescriptor: LanguageDescriptor = {
     },
     extractTestSpecs(root, filePath, fileQname): TestSpec[] {
         const specs: TestSpec[] = [];
+        // `FooTest.kt` exercises `Foo.kt` (src/test → src/main mapped).
+        const targetQname = inferProdFilePath(filePath);
         for (const fn of root.descendantsOfType('function_declaration')) {
             if (!hasTestAnnotation(fn)) continue;
             const name = fn.namedChildren.find(c => c.type === 'simple_identifier')?.text;
@@ -80,7 +82,7 @@ export const kotlinDescriptor: LanguageDescriptor = {
             specs.push({
                 testQname: `${fileQname}#${name}`,
                 title: name,
-                targetQname: undefined,
+                targetQname,
                 assertions: collectKotlinAsserts(fn),
                 filePath,
                 startLine: fn.startPosition.row + 1

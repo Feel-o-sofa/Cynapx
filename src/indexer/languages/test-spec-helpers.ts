@@ -4,6 +4,8 @@
  * See LICENSE in the project root for license information.
  */
 import Parser from 'tree-sitter';
+import * as path from 'path';
+import { toCanonical } from '../../utils/paths';
 
 /**
  * Shared helpers for per-language `extractTestSpecs` implementations. These are
@@ -11,6 +13,43 @@ import Parser from 'tree-sitter';
  * conventions differ, but the mechanics of walking the tree, normalizing
  * assertion text, and matching call prefixes are common.
  */
+
+/**
+ * Infer the production file a test file exercises from its naming convention
+ * (mirroring the `foo.test.ts` → `foo.ts` rule the TypeScript parser uses):
+ *
+ *   - `foo_test.go` → `foo.go` (also `_test.cpp` / `_test.cc` / `_test.py`)
+ *   - `test_foo.py` → `foo.py`
+ *   - `FooTest.java` / `FooTests.cs` / `FooTest.kt` / `FooTest.php` → `Foo.*`
+ *
+ * For Maven/Gradle-style layouts the `/src/test/<lang>/` segment is mapped to
+ * `/src/main/<lang>/` so the candidate points into the production tree.
+ *
+ * Returns the *canonical* prod-file path (matching stored file-node qnames),
+ * or undefined when the file name carries no test convention. The candidate
+ * is not checked for existence: a spec whose target_qname resolves to nothing
+ * simply never matches a lookup, which is harmless (P8 best-effort contract).
+ */
+export function inferProdFilePath(testFilePath: string): string | undefined {
+    const dir = path.dirname(testFilePath);
+    const ext = path.extname(testFilePath);
+    const base = path.basename(testFilePath, ext);
+
+    let prodBase: string | undefined;
+    if (base.startsWith('test_')) {
+        prodBase = base.slice('test_'.length);
+    } else if (base.endsWith('_test')) {
+        prodBase = base.slice(0, -'_test'.length);
+    } else {
+        const camel = base.match(/^(.*?)Tests?$/);
+        if (camel && camel[1]) prodBase = camel[1];
+    }
+    if (!prodBase) return undefined;
+
+    // Map test source roots onto the production tree (src/test/java|kotlin|…).
+    const prodDir = dir.replace(/([/\\])src\1test\1/, '$1src$1main$1');
+    return toCanonical(path.join(prodDir, prodBase + ext));
+}
 
 /**
  * Collapse whitespace and truncate an assertion expression to a single short

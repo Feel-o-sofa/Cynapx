@@ -6,7 +6,7 @@
 import Parser from 'tree-sitter';
 import { LanguageDescriptor } from './descriptor';
 import { TestSpec } from '../types';
-import { truncate } from './test-spec-helpers';
+import { inferProdFilePath, truncate } from './test-spec-helpers';
 
 const GTEST_MACROS = new Set(['TEST', 'TEST_F', 'TEST_P', 'TYPED_TEST']);
 
@@ -71,6 +71,8 @@ export const cppDescriptor: LanguageDescriptor = {
     },
     extractTestSpecs(root, filePath, fileQname): TestSpec[] {
         const specs: TestSpec[] = [];
+        // `calc_test.cpp` exercises `calc.cpp`.
+        const targetQname = inferProdFilePath(filePath);
         for (const fn of root.descendantsOfType('function_definition')) {
             const gtest = readGtestMacro(fn);
             if (!gtest) continue;
@@ -78,7 +80,7 @@ export const cppDescriptor: LanguageDescriptor = {
             specs.push({
                 testQname: `${fileQname}#${suite}.${name}`,
                 title: `${suite}.${name}`,
-                targetQname: undefined,
+                targetQname,
                 assertions: collectGtestAsserts(fn),
                 filePath,
                 startLine: fn.startPosition.row + 1
