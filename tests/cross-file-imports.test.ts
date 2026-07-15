@@ -15,6 +15,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import { TreeSitterParser } from '../src/indexer/tree-sitter-parser';
+import { clearGoModuleCaches } from '../src/indexer/languages/go';
 import { toCanonical } from '../src/utils/paths';
 import type { RawCodeEdge } from '../src/indexer/types';
 
@@ -113,5 +114,100 @@ describe('P8-3 cross-file local import resolution', () => {
         expect(barFileEdge).toBeUndefined();
         const modModEdge = dependsOn(edges).find(e => e.to_qname.includes(toCanonical(path.join(tmpDir, 'bar'))));
         expect(modModEdge).toBeUndefined();
+    });
+
+    describe('Go module imports (go.mod mapping)', () => {
+        beforeEach(() => {
+            clearGoModuleCaches();
+        });
+
+        it('resolves an intra-module import to the package\'s .go files', async () => {
+            writeFile('go.mod', 'module example.com/demo\n\ngo 1.22\n');
+            writeFile('util/util.go', 'package util\n\nfunc Do() {}\n');
+            writeFile('util/extra.go', 'package util\n\nfunc More() {}\n');
+            writeFile('util/util_test.go', 'package util\n');
+            const file = writeFile('main.go', [
+                'package main',
+                '',
+                'import "example.com/demo/util"',
+                '',
+                'func main() { util.Do() }',
+                '',
+            ].join('\n'));
+
+            const parser = new TreeSitterParser();
+            const { edges } = await parser.parse(file, 'commit1', 1);
+
+            const deps = dependsOn(edges);
+            expect(deps.find(e => e.to_qname === toCanonical(path.join(tmpDir, 'util', 'util.go')))).toBeDefined();
+            expect(deps.find(e => e.to_qname === toCanonical(path.join(tmpDir, 'util', 'extra.go')))).toBeDefined();
+            // _test.go files are not part of the imported package surface.
+            expect(deps.find(e => e.to_qname.endsWith('util_test.go'))).toBeUndefined();
+            // The bare package: form is replaced by the resolved file edges.
+            expect(deps.find(e => e.to_qname === 'package:example.com/demo/util')).toBeUndefined();
+        });
+
+        it('resolves imports from a nested directory via the module root', async () => {
+            writeFile('go.mod', 'module example.com/demo\n');
+            writeFile('internal/db/db.go', 'package db\n\nfunc Open() {}\n');
+            const file = writeFile('cmd/server/main.go', [
+                'package main',
+                '',
+                'import "example.com/demo/internal/db"',
+                '',
+                'func main() { db.Open() }',
+                '',
+            ].join('\n'));
+
+            const parser = new TreeSitterParser();
+            const { edges } = await parser.parse(file, 'commit1', 1);
+
+            const expected = toCanonical(path.join(tmpDir, 'internal', 'db', 'db.go'));
+            expect(dependsOn(edges).find(e => e.to_qname === expected)).toBeDefined();
+        });
+
+        it('keeps an external import as package: even when a go.mod exists', async () => {
+            writeFile('go.mod', 'module example.com/demo\n');
+            const file = writeFile('main.go', [
+                'package main',
+                '',
+                'import "github.com/pkg/errors"',
+                '',
+            ].join('\n'));
+
+            const parser = new TreeSitterParser();
+            const { edges } = await parser.parse(file, 'commit1', 1);
+
+            expect(dependsOn(edges).find(e => e.to_qname === 'package:github.com/pkg/errors')).toBeDefined();
+        });
+
+        it('falls back to package: when no go.mod exists up the tree', async () => {
+            const file = writeFile('main.go', [
+                'package main',
+                '',
+                'import "example.com/demo/util"',
+                '',
+            ].join('\n'));
+
+            const parser = new TreeSitterParser();
+            const { edges } = await parser.parse(file, 'commit1', 1);
+
+            expect(dependsOn(edges).find(e => e.to_qname === 'package:example.com/demo/util')).toBeDefined();
+        });
+
+        it('falls back to package: for an intra-module path whose directory has no .go files', async () => {
+            writeFile('go.mod', 'module example.com/demo\n');
+            const file = writeFile('main.go', [
+                'package main',
+                '',
+                'import "example.com/demo/ghost"',
+                '',
+            ].join('\n'));
+
+            const parser = new TreeSitterParser();
+            const { edges } = await parser.parse(file, 'commit1', 1);
+
+            expect(dependsOn(edges).find(e => e.to_qname === 'package:example.com/demo/ghost')).toBeDefined();
+        });
     });
 });
