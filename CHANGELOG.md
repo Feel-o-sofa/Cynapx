@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Follow-up precision and polyglot-coverage work on the P8 cross-language enrichment arc. No schema change; a re-index is recommended to pick up the newly captured docstrings, test specs, and corrected call edges.
 
 ### Added
+- **C# test-spec extraction** — xUnit `[Fact]`/`[Theory]`, NUnit `[Test]`/`[TestCase]`/`[TestCaseSource]`, and MSTest `[TestMethod]`/`[DataTestMethod]` methods (including qualified attributes like `[Xunit.Fact]`) with their `Assert.*` assertions are captured as `test_specs`
+- **Go module import resolution** — imports under the nearest `go.mod`'s module path now resolve to the package's actual `.go` files (cached go.mod/package-dir lookups), producing real file-to-file `depends_on` edges; external imports keep the `package:` form
+- **Best-effort `targetQname` for tree-sitter test specs** — test specs now link to the production symbol/file they exercise, so `get_related_tests` / `get_symbol_details` can surface them: Go `foo_test.go` + `TestAdd` → `foo.go#add` (symbol-level, subtests inherit); Rust same-file `#[test]` → its own file qname; Python/Java/Kotlin/C#/C++/PHP → file-level target via naming conventions (`test_x.py`, `XTest.java` with `src/test → src/main` mapping, `x_test.cpp`, …); unresolvable targets simply never match a lookup
 - **Kotlin test-spec extraction** — `@Test`-annotated functions (JUnit and `kotlin.test`, including fully qualified annotations) with their `assert*` assertions are captured as `test_specs`
 - **PHP test-spec extraction** — PHPUnit `test*` methods and `#[Test]`-attribute methods inside test classes (`*Test` / extends `TestCase`), with `$this->assert*`, `self::assert*`, and `expect*` assertions
 - **C++ test-spec extraction** — GoogleTest `TEST` / `TEST_F` / `TEST_P` / `TYPED_TEST` blocks captured as `Suite.Name` specs with their `EXPECT_*` / `ASSERT_*` assertions

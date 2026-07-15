@@ -141,10 +141,32 @@ vitest 839→860):
 
 ---
 
+## P8 후속 2차 사이클 (2026-07-15 완료분)
+
+미착수 목록의 나머지 세 항목을 처리했다 (브랜치 `claude/cynapx-status-goals-15uoop`, vitest 860→875):
+
+- **C# 테스트-스펙 추출 — [DONE]**: xUnit `[Fact]`/`[Theory]`, NUnit `[Test]`/`[TestCase]`/`[TestCaseSource]`,
+  MSTest `[TestMethod]`/`[DataTestMethod]` 속성 메서드(정규화된 `[Xunit.Fact]` 포함) +
+  `Assert.*`/`CollectionAssert.*`/`StringAssert.*` 단언.
+- **P8 Go 모듈 임포트 해소 — [DONE]**: `resolveImport`가 파일 기준 가장 가까운 go.mod를 찾아(디렉터리별 캐시)
+  모듈 경로 하위 임포트를 해당 패키지 디렉터리의 실제 `.go` 파일들(비-`_test.go`)로 해소해 file-to-file
+  `depends_on` 엣지를 방출. 외부 임포트·미해소 경로는 기존 `package:` 형식 유지. 미인덱스 후보 엣지는
+  파이프라인이 무해하게 드롭(P8-3과 동일 계약).
+- **테스트-스펙 `targetQname` 베스트-에포트 해소 — [DONE]**: `target_qname`은 `get_related_tests`/
+  `get_symbol_details`의 조회 키인데 tree-sitter 언어 스펙은 전부 undefined여서 *역참조가 불가능*했다.
+  공유 헬퍼 `inferProdFilePath()`(테스트 파일명 규약 + Maven식 `src/test → src/main` 매핑) 기반으로:
+  - **Go**: `foo_test.go`+`TestAdd` → `foo.go#add` 심볼-레벨(서브테스트는 부모 타깃 상속)
+  - **Rust**: 같은 파일의 `#[cfg(test)]` 테스트 → 자기 파일 qname(파일-레벨 폴백에 즉시 매칭)
+  - **Python/Java/Kotlin/C#/C++/PHP**: 파일-레벨 타깃(`test_x.py`/`XTest.java`/`x_test.cpp` 등)
+  - 전부 canonical 형태로 방출(저장 노드 qname과 정확히 일치). 미해소 타깃은 조회에 안 걸릴 뿐 무해.
+
+---
+
 ## 향후 후보 (미착수)
 
-- **P8 Go 모듈 임포트 해소**: go.mod 모듈 경로 매핑 필요(현 범위 제외).
-- **테스트-스펙 `targetQname` 교차 파일 해소**: tree-sitter 언어는 현재 `targetQname` undefined(베스트-에포트).
-- **C# 테스트-스펙 추출**: NUnit `[Test]`/xUnit `[Fact]` 속성 기반 — Kotlin/PHP/C++와 동일 훅 패턴으로 확장 가능.
 - **대형 의존성 메이저 업그레이드(Express 5 / TypeScript 6)**: 회귀 위험 높고 신규 역량 없음 — 의도적 후순위
   (diagnostic-v30 L-22 참조).
+- **T-1 재확인 (★1순위 임박)**: MCP SDK 2.x dist-tag / v2 stable 출현(스펙 publish 예정 2026-07-28 전후).
+  2026-07-15 기준 여전히 `latest: 1.29.0`(미발화).
+- **테스트-스펙 심볼-레벨 정밀화 확대**: 현재 Go만 심볼-레벨(`TestAdd`→`#add`) — Java/Kotlin/C# 테스트
+  메서드명 규약(`testAdd`/`addsTwoNumbers`)은 신뢰도가 낮아 파일-레벨로 보수적 유지. 실사용 피드백 후 재검토.
