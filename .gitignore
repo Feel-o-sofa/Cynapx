@@ -40,6 +40,7 @@ scripts/*
 !scripts/build-copy.js
 !scripts/docker-smoke.sh
 !scripts/ipc-e2e-test.js
+!scripts/availability-probe.mjs
 switch-env.js
 
 # AI Agent Context & Internal Docs (Exempt from Repo)
