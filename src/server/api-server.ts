@@ -126,6 +126,13 @@ const globalLimiter = rateLimit({
     windowMs: 60_000,
     max: 100,
     keyGenerator: (req) => req.socket.remoteAddress ?? 'unknown',
+    // AV-1: the liveness probe must never be throttled. Docker/k8s health
+    // checks share the instance's IP with local agent traffic, so counting
+    // /healthz against the per-IP budget lets sustained (legitimate) load
+    // starve the probe into 429 — orchestrators would then restart a
+    // perfectly healthy instance. The probe is unauthenticated, cheap, and
+    // never-500 by design, so exempting it leaks nothing.
+    skip: (req) => req.path === '/healthz' && req.method === 'GET',
 });
 const analyzeLimiter = rateLimit({
     windowMs: 60_000,
@@ -334,7 +341,16 @@ export class ApiServer {
         this.app.use((err: Error, req: express.Request, res: express.Response, _next: express.NextFunction) => {
             log.error('Unhandled error', { detail: err?.message ?? String(err) });
             if (!res.headersSent) {
-                res.status(500).json({ error_code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.' });
+                // AV-2: client faults must not surface as 5xx. body-parser
+                // rejections (malformed JSON → 400, entity.too.large → 413)
+                // carry a 4xx `status` — honour it so 5xx-based availability
+                // SLIs are not poisoned by client-caused noise.
+                const clientStatus = (err as any)?.status ?? (err as any)?.statusCode;
+                if (typeof clientStatus === 'number' && clientStatus >= 400 && clientStatus < 500) {
+                    res.status(clientStatus).json({ error_code: 'BAD_REQUEST', message: 'The request could not be processed.' });
+                } else {
+                    res.status(500).json({ error_code: 'INTERNAL_ERROR', message: 'An unexpected error occurred.' });
+                }
             }
         });
     }
