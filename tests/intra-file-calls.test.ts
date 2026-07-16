@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { TreeSitterParser } from '../src/indexer/tree-sitter-parser';
+import { TreeSitterParser, isReceiverQualifiedCall } from '../src/indexer/tree-sitter-parser';
 import type { RawCodeEdge } from '../src/indexer/types';
 
 let tmpDir: string;
@@ -221,5 +221,49 @@ function caller(): void {
         // there is exactly one resolved `#method` edge, the direct call.
         // (The member access `ns.method()` does not contribute a second one.)
         expect(resolved.length).toBe(1);
+    });
+});
+
+describe('isReceiverQualifiedCall (direct gates)', () => {
+    // Minimal stand-ins exposing only the fields the function reads:
+    // parent.type and parent.childForFieldName('object').
+    function nameNodeWithParent(parentType: string, objectField: unknown = null): any {
+        return {
+            parent: {
+                type: parentType,
+                childForFieldName: (field: string) => (field === 'object' ? objectField : null),
+            },
+        };
+    }
+
+    it('returns false for undefined and for a parentless node', () => {
+        expect(isReceiverQualifiedCall(undefined)).toBe(false);
+        expect(isReceiverQualifiedCall({ parent: null } as any)).toBe(false);
+    });
+
+    it('returns true for every receiver-context parent type', () => {
+        for (const type of [
+            'selector_expression',      // Go
+            'member_access_expression', // C#
+            'navigation_expression',    // Kotlin
+            'attribute',                // Python / GDScript
+            'field_expression',         // Rust / C / C++
+            'member_expression',        // JavaScript / TypeScript
+        ]) {
+            expect(isReceiverQualifiedCall(nameNodeWithParent(type))).toBe(true);
+        }
+    });
+
+    it('returns true for a Java method_invocation with an object field', () => {
+        expect(isReceiverQualifiedCall(nameNodeWithParent('method_invocation', { type: 'identifier' }))).toBe(true);
+    });
+
+    it('returns false for a Java method_invocation without an object field (free call)', () => {
+        expect(isReceiverQualifiedCall(nameNodeWithParent('method_invocation', null))).toBe(false);
+    });
+
+    it('returns false for non-receiver parent contexts', () => {
+        expect(isReceiverQualifiedCall(nameNodeWithParent('call_expression'))).toBe(false);
+        expect(isReceiverQualifiedCall(nameNodeWithParent('function_call_expression'))).toBe(false);
     });
 });
