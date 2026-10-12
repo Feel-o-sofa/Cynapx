@@ -369,6 +369,14 @@ exports[`tree-sitter parser — Python (sample.py) > snapshot: all captures 1`] 
     "text": "super",
   },
   {
+    "name": "call.expr",
+    "text": "super().__init__(name)",
+  },
+  {
+    "name": "call.name",
+    "text": "__init__",
+  },
+  {
     "name": "function.def",
     "text": "def speak(self) -> str:
         return f"{self.name} barks."",

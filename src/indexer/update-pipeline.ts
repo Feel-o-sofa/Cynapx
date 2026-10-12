@@ -22,6 +22,32 @@ import { FullScanStrategy, IncrementalSyncStrategy } from './sync-strategies';
 import { Logger } from '../utils/logger';
 
 
+/** Symbol types a call can target (a class, for a constructor call). */
+const CALLABLE_TYPES = new Set(['function', 'method', 'class']);
+const isCallable = (node: CodeNode) => CALLABLE_TYPES.has(node.symbol_type);
+
+/** Canonical paths of the files a parsed file imports (its depends_on targets). */
+function importedFiles(delta: DeltaGraph): Set<string> {
+    const files = new Set<string>();
+    for (const edge of delta.edges) {
+        if (edge.edge_type === 'depends_on') files.add(toCanonical(edge.to_qname));
+    }
+    return files;
+}
+
+/**
+ * Names a qualifier may use for a file's module: its stem, or its directory
+ * for a package entry file (`mod.rs`, `__init__.py`, `index.js`) and for Go,
+ * where the package is the directory.
+ */
+function moduleNames(file: string): string[] {
+    const ext = path.posix.extname(file);
+    const stem = path.posix.basename(file, ext);
+    const dir = path.posix.basename(path.posix.dirname(file));
+    if (ext === '.go' || ['mod', '__init__', 'index'].includes(stem)) return [dir, stem];
+    return [stem];
+}
+
 const log = new Logger('UpdatePipeline');
 /**
  * UpdatePipeline manages the incremental update process for the knowledge graph.
@@ -354,9 +380,10 @@ export class UpdatePipeline {
             // Pass 2: Relations
             for (const res of results) {
                 if (res.status === 'success' && res.event.event !== 'DELETE') {
+                    const imports = importedFiles(res.delta);
                     for (const edge of res.delta.edges) {
                         const fromId = this.resolveNodeId(edge, 'from', symbolCache);
-                        const toId = this.resolveNodeId(edge, 'to', symbolCache);
+                        const toId = this.resolveNodeId(edge, 'to', symbolCache, imports);
 
                         if (fromId !== undefined && toId !== undefined) {
                             this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
@@ -436,9 +463,10 @@ export class UpdatePipeline {
                 changedNodeIds.add(nodeId);
             }
 
+            const imports = importedFiles(delta);
             for (const edge of delta.edges) {
                 const fromId = this.resolveNodeId(edge, 'from', symbolCache);
-                const toId = this.resolveNodeId(edge, 'to', symbolCache);
+                const toId = this.resolveNodeId(edge, 'to', symbolCache, imports);
                 if (fromId !== undefined && toId !== undefined) {
                     this.edgeRepo.createEdge({ ...edge, from_id: fromId, to_id: toId });
                     changedNodeIds.add(fromId);
@@ -581,7 +609,10 @@ export class UpdatePipeline {
         for (const id of ids) stmt.run(id);
     }
 
-    private resolveNodeId(edge: any, side: 'from' | 'to', internalMap: Map<string, number>): number | undefined {
+    private resolveNodeId(edge: any, side: 'from' | 'to', internalMap: Map<string, number>, imports: ReadonlySet<string> = new Set()): number | undefined {
+        if (side === 'to' && edge.edge_type === 'calls') {
+            return this.resolveCallTarget(edge.from_qname, edge.to_qname, internalMap, imports);
+        }
         let qname = side === 'from' ? edge.from_qname : edge.to_qname;
         let typeHint: string | undefined;
         if (qname.includes(':')) {
@@ -613,5 +644,65 @@ export class UpdatePipeline {
         }
 
         return undefined;
+    }
+    /**
+     * Resolves a call target. Parsers resolve what they can see to a full qname;
+     * the rest arrives as source text, which is resolved here against the whole
+     * index, scoped by the caller's imports:
+     *
+     * - `name`: a function or type of that name. Preference goes to the
+     *   caller's file, then files it imports, then its directory (a Go package,
+     *   a Java package). An ambiguous name with no candidate in scope is left
+     *   unresolved: picking one would fabricate an edge.
+     * - `Q.name`: first a function in an imported file whose module is `Q`
+     *   (Go `util.Format`, Rust `util::log`), then, when `Q` is capitalized
+     *   like a type, a member of the type `Q` (Java `Util.log`, Rust
+     *   `Client::new`), preferred the same way.
+     * - A qualifier that is a variable (`c.configure`) or an expression is left
+     *   unresolved, since its type is unknown here.
+     */
+    private resolveCallTarget(fromQName: string, target: string, internalMap: Map<string, number>, imports: ReadonlySet<string>): number | undefined {
+        const lookup = (qname: string): number | undefined => {
+            const canonical = toCanonical(qname);
+            return internalMap.get(canonical) ?? this.nodeRepo.getNodeByQualifiedName(canonical)?.id;
+        };
+        const exact = lookup(target);
+        if (exact !== undefined) return exact;
+
+        const callerFile = toCanonical(fromQName.split('#')[0]);
+        const qualified = /^(.+)\.([^.]+)$/s.exec(target);
+        let candidates: CodeNode[];
+        if (target.includes('#')) {
+            candidates = [];
+        } else if (!qualified) {
+            candidates = this.nodeRepo.findNodesBySymbolName(target).filter(isCallable);
+        } else {
+            const [, qualifier, name] = qualified;
+            if (/[()\[\]]/.test(qualifier)) return undefined;
+            const last = qualifier.slice(qualifier.lastIndexOf('.') + 1);
+            for (const file of imports) {
+                if (!moduleNames(file).includes(last.toLowerCase())) continue;
+                const id = lookup(`${file}#${name}`);
+                if (id !== undefined) return id;
+            }
+            // Qnames are lowercase, so `logger.log` would match type `Logger`.
+            // Only a qualifier written like a type is treated as one.
+            candidates = /^[A-Z]/.test(last)
+                ? this.nodeRepo.findNodesBySymbolName(`${last}.${name}`).filter(isCallable)
+                : [];
+        }
+
+        if (candidates.length > 0) {
+            const fileOf = (n: CodeNode) => toCanonical(n.file_path);
+            const callerDir = path.posix.dirname(callerFile);
+            const inScope = candidates.find(n => fileOf(n) === callerFile)
+                ?? candidates.find(n => imports.has(fileOf(n)))
+                ?? candidates.find(n => path.posix.dirname(fileOf(n)) === callerDir);
+            if (inScope) return inScope.id;
+            return candidates.length === 1 ? candidates[0].id : undefined;
+        }
+
+        // Boundaryless Edge Discovery (Task 31)
+        return this.crossProjectResolver?.resolve(target, toCanonical(target));
     }
 }

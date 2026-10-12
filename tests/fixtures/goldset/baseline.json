@@ -1,8 +1,8 @@
 {
   "_comment": "Ratchet for tests/goldset.test.ts. truePositives may only go up and falsePositives only down. When a change improves a language, raise its numbers here in the same commit (npm run goldset prints them).",
-  "go": { "truePositives": 1, "falsePositives": 0 },
-  "java": { "truePositives": 6, "falsePositives": 1 },
-  "python": { "truePositives": 5, "falsePositives": 0 },
-  "rust": { "truePositives": 3, "falsePositives": 0 },
+  "go": { "truePositives": 7, "falsePositives": 0 },
+  "java": { "truePositives": 6, "falsePositives": 0 },
+  "python": { "truePositives": 6, "falsePositives": 0 },
+  "rust": { "truePositives": 6, "falsePositives": 0 },
   "typescript": { "truePositives": 7, "falsePositives": 0 }
 }

@@ -51,6 +51,7 @@ export const cppDescriptor: LanguageDescriptor = {
         ['module', 'module']
     ],
     defaultSymbolType: 'field',
+    implicitMemberCalls: true,
     decisionPoints: ['if_statement', 'for_statement', 'while_statement', 'catch_clause'],
     resolveImport(node, fromQName, edges, captureName) {
         if (captureName === 'relation.inherits') {

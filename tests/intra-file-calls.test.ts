@@ -183,9 +183,11 @@ func Run() {
         const parser = new TreeSitterParser();
         const { edges } = await parser.parse(file, 'commit1', 1);
 
-        const fromRun = callEdges(edges).filter(e => e.from_qname.endsWith('#run'));
-        const resolved = fromRun.filter(e => e.to_qname.includes('#configure') && e.dynamic === false);
-        const dynamic = fromRun.filter(e => e.to_qname === 'configure' && e.dynamic === true);
+        // Members are qualified by their class; the receiver call keeps its
+        // receiver so the update pipeline never mistakes it for this method.
+        const fromRun = callEdges(edges).filter(e => e.from_qname.endsWith('#runner.run'));
+        const resolved = fromRun.filter(e => e.to_qname.endsWith('#runner.configure') && e.dynamic === false);
+        const dynamic = fromRun.filter(e => e.to_qname === 'c.configure' && e.dynamic === true);
         expect(resolved.length).toBe(1);
         expect(dynamic.length).toBe(1);
     });

@@ -42,6 +42,7 @@ export const kotlinDescriptor: LanguageDescriptor = {
         ['class', 'class']
     ],
     defaultSymbolType: 'function',
+    implicitMemberCalls: true,
     decisionPoints: ['if_expression', 'for_statement', 'while_statement', 'catch_block'],
     normalizeDocstring(raw: string): string {
         // KDoc block (/** ... */) or plain line comments (// ...).

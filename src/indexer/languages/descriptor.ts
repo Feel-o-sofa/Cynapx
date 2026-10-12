@@ -60,6 +60,25 @@ export interface LanguageDescriptor {
      * (pytest def test_*, Go func TestXxx, Rust #[test], JUnit @Test).
      */
     extractTestSpecs?: (root: Parser.SyntaxNode, filePath: string, fileQname: string) => TestSpec[];
+    /**
+     * Optional owner lookup for definitions that are not nested inside their
+     * type, e.g. Go methods, whose receiver names the type. Returns the owning
+     * type's name, which qualifies the definition as `file#Type.method`.
+     * Definitions nested in a captured class need no hook.
+     */
+    ownerTypeName?: (defNode: Parser.SyntaxNode) => string | undefined;
+    /**
+     * Optional name of a method's receiver variable when the language lets the
+     * author choose it (Go: `func (c *Client) Run()` → `c`). Calls through it
+     * resolve like `self`/`this` calls.
+     */
+    receiverName?: (defNode: Parser.SyntaxNode) => string | undefined;
+    /**
+     * True when a bare call inside a class body may name a member of that class
+     * (Java, Kotlin, C#, C++: `foo()` means `this.foo()`). False or absent for
+     * languages where it always names a free function (Python, Rust, Go, JS).
+     */
+    implicitMemberCalls?: boolean;
 }
 
 const QUERIES_DIR = path.resolve(__dirname, 'queries');
@@ -112,6 +131,18 @@ export function createLanguageProvider(descriptor: LanguageDescriptor): Language
 
     if (descriptor.extractTestSpecs) {
         provider.extractTestSpecs = descriptor.extractTestSpecs;
+    }
+
+    if (descriptor.ownerTypeName) {
+        provider.ownerTypeName = descriptor.ownerTypeName;
+    }
+
+    if (descriptor.receiverName) {
+        provider.receiverName = descriptor.receiverName;
+    }
+
+    if (descriptor.implicitMemberCalls) {
+        provider.implicitMemberCalls = true;
     }
 
     return provider;
