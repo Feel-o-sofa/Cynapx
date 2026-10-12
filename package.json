@@ -23,7 +23,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "vitest bench",
-    "admin": "tsx src/cli/admin.ts"
+    "admin": "tsx src/cli/admin.ts",
+    "goldset": "tsx tests/goldset/report.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

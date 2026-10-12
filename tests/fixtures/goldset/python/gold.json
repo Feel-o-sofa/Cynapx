@@ -1,0 +1,40 @@
+{
+  "language": "python",
+  "edges": [
+    [
+      "pkg/client.py:9 Client.configure",
+      "pkg/util.py:1 format_num"
+    ],
+    [
+      "pkg/client.py:12 Client.run",
+      "pkg/client.py:9 Client.configure"
+    ],
+    [
+      "pkg/util.py:9 factorial",
+      "pkg/util.py:9 factorial"
+    ],
+    [
+      "pkg/main.py:7 use_client",
+      "pkg/client.py:9 Client.configure"
+    ],
+    [
+      "pkg/main.py:7 use_client",
+      "pkg/client.py:4 configure"
+    ],
+    [
+      "pkg/main.py:7 use_client",
+      "pkg/util.py:5 log"
+    ],
+    [
+      "pkg/main.py:7 use_client",
+      "pkg/util.py:9 factorial"
+    ]
+  ],
+  "cases": {
+    "receiver_vs_free": "A receiver call c.configure() targets the method; the bare configure() targets the same-named free function. The two must stay distinct.",
+    "self_call": "this/self method call inside the class resolves to the sibling method.",
+    "cross_file": "Calls to functions defined in another file of the project.",
+    "recursion": "factorial calls itself.",
+    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge."
+  }
+}
