@@ -152,3 +152,46 @@ describe('cross-file call resolution', () => {
         expect(await indexCalls([util, main])).toEqual([]);
     });
 });
+
+describe('annotations across the 4.1 member rename', () => {
+    it('moves an annotation from `file#member` to `file#Type.member` only when unambiguous', async () => {
+        const file = write('svc.py', `def helper():
+    pass
+
+class Client:
+    def configure(self):
+        pass
+
+    def helper(self):
+        pass
+
+class A:
+    def run(self):
+        pass
+
+class B:
+    def run(self):
+        pass
+`);
+        const manager = new DatabaseManager(':memory:');
+        const db = manager.getDb();
+        try {
+            const legacy = (member: string) => `${toCanonical(file)}#${member}`;
+            const add = db.prepare("INSERT INTO annotations (node_qname, kind, body) VALUES (?, 'decision', ?)");
+            add.run(legacy('configure'), 'moved');      // one new owner: moves
+            add.run(legacy('run'), 'ambiguous');        // A.run and B.run: stays
+            add.run(legacy('helper'), 'still a symbol'); // free function still exists: stays
+
+            const pipeline = new UpdatePipeline(db, new NodeRepository(db), new EdgeRepository(db), createDefaultParser());
+            (pipeline as any).embeddingManager = { refreshAll: async () => {}, isAvailable: false };
+            await pipeline.processBatch([{ event: 'ADD', file_path: file, commit: 'c' }], 1);
+
+            const keyOf = (body: string) => (db.prepare('SELECT node_qname FROM annotations WHERE body = ?').get(body) as { node_qname: string }).node_qname;
+            expect(keyOf('moved')).toBe(legacy('client.configure'));
+            expect(keyOf('ambiguous')).toBe(legacy('run'));
+            expect(keyOf('still a symbol')).toBe(legacy('helper'));
+        } finally {
+            manager.close?.();
+        }
+    });
+});

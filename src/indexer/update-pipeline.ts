@@ -376,6 +376,7 @@ export class UpdatePipeline {
                     }
                 }
             }
+            this.rekeyLegacyAnnotations(symbolCache.keys());
 
             // Pass 2: Relations
             for (const res of results) {
@@ -462,6 +463,7 @@ export class UpdatePipeline {
                 symbolCache.set(toCanonical(node.qualified_name), nodeId);
                 changedNodeIds.add(nodeId);
             }
+            this.rekeyLegacyAnnotations(symbolCache.keys());
 
             const imports = importedFiles(delta);
             for (const edge of delta.edges) {
@@ -645,6 +647,34 @@ export class UpdatePipeline {
 
         return undefined;
     }
+    /**
+     * Before 4.1, tree-sitter languages named a member `file#member`; it is now
+     * `file#Type.member`. Annotations are keyed by qname, so the re-index that
+     * the version change triggers would orphan those on members. This moves an
+     * annotation to the new name when nothing has the old name any more and
+     * exactly one new member claims it: when two types had a same-named member,
+     * the old name was shared and which one was meant is unknown.
+     */
+    private rekeyLegacyAnnotations(createdQNames: Iterable<string>): void {
+        const annotated = this.db.prepare('SELECT 1 FROM annotations LIMIT 1').get();
+        if (!annotated) return;
+        const claims = new Map<string, string[]>();
+        for (const qname of createdQNames) {
+            const hash = qname.indexOf('#');
+            const member = qname.slice(hash + 1);
+            if (hash < 0 || !member.includes('.')) continue;
+            const legacy = `${qname.slice(0, hash)}#${member.slice(member.lastIndexOf('.') + 1)}`;
+            claims.set(legacy, [...(claims.get(legacy) ?? []), qname]);
+        }
+        const hasAnnotation = this.db.prepare('SELECT 1 FROM annotations WHERE node_qname = ? LIMIT 1');
+        const rekey = this.db.prepare('UPDATE annotations SET node_qname = ? WHERE node_qname = ?');
+        for (const [legacy, qnames] of claims) {
+            if (qnames.length !== 1 || !hasAnnotation.get(legacy)) continue;
+            if (this.nodeRepo.getNodeByQualifiedName(legacy)) continue;
+            rekey.run(qnames[0], legacy);
+        }
+    }
+
     /**
      * Resolves a call target. Parsers resolve what they can see to a full qname;
      * the rest arrives as source text, which is resolved here against the whole
