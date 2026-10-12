@@ -182,30 +182,32 @@ After saving `.mcp.json`, restart Claude Code. Cynapx appears in the MCP tools p
 
 ### 2.4 Developer Workflow (Live Source Changes)
 
-When developing Cynapx itself (or testing patches in a worktree), use `ts-node` to skip the build step and pick up source changes immediately:
+When developing Cynapx itself (or testing patches in a worktree), use `tsx` to skip the build step and pick up source changes immediately:
 
 ```json
 {
   "mcpServers": {
     "cynapx": {
       "command": "npx",
-      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
+      "args": ["tsx", "src/bootstrap.ts", "--path", "."],
       "cwd": "/absolute/path/to/Cynapx"
     },
     "cynapx-dev": {
       "command": "npx",
-      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
+      "args": ["tsx", "src/bootstrap.ts", "--path", "."],
       "cwd": "/absolute/path/to/Cynapx/.claude/worktrees/<branch-name>"
     }
   }
 }
 ```
 
-`cynapx-dev` points to the worktree for the feature branch being developed. After editing source in the worktree, restart the Claude Code session — `ts-node` transpiles on the fly, no `npm run build` needed.
+`cynapx-dev` points to the worktree for the feature branch being developed. After editing source in the worktree, restart the Claude Code session — `tsx` transpiles on the fly, no `npm run build` needed. Because its `cwd` is machine-specific, register it in your local scope (`claude mcp add --scope local …`) rather than in the shared `.mcp.json`.
+
+> `ts-node` cannot run the source tree: imports use `.js` suffixes (required for the compiled output), which ts-node's CommonJS mode does not map back to `.ts`. Use `tsx` (`npm start`, `npm run dev`).
 
 ### 2.5 CLI Options
 
-These options are passed to `node dist/bootstrap.js` (or `ts-node src/bootstrap.ts`):
+These options are passed to `node dist/bootstrap.js` (or `npx tsx src/bootstrap.ts`):
 
 | Option | Default | Description |
 |--------|---------|-------------|

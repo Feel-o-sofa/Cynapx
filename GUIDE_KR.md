@@ -182,30 +182,32 @@ node dist/bootstrap.js --help
 
 ### 2.4 개발자 워크플로우 (소스 변경 즉시 반영)
 
-Cynapx 자체를 개발하거나 워크트리에서 패치를 테스트할 때는 `ts-node`를 사용하여 빌드 단계를 건너뛰고 소스 변경을 즉시 반영할 수 있습니다:
+Cynapx 자체를 개발하거나 워크트리에서 패치를 테스트할 때는 `tsx`를 사용하여 빌드 단계를 건너뛰고 소스 변경을 즉시 반영할 수 있습니다:
 
 ```json
 {
   "mcpServers": {
     "cynapx": {
       "command": "npx",
-      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
+      "args": ["tsx", "src/bootstrap.ts", "--path", "."],
       "cwd": "/Cynapx의/절대경로"
     },
     "cynapx-dev": {
       "command": "npx",
-      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
+      "args": ["tsx", "src/bootstrap.ts", "--path", "."],
       "cwd": "/Cynapx의/절대경로/.claude/worktrees/<브랜치명>"
     }
   }
 }
 ```
 
-`cynapx-dev`는 개발 중인 기능 브랜치의 워크트리를 가리킵니다. 워크트리에서 소스를 편집한 후 Claude Code 세션을 재시작하면 — `ts-node`가 즉시 트랜스파일하므로 `npm run build`가 필요 없습니다.
+`cynapx-dev`는 개발 중인 기능 브랜치의 워크트리를 가리킵니다. 워크트리에서 소스를 편집한 후 Claude Code 세션을 재시작하면 — `tsx`가 즉시 트랜스파일하므로 `npm run build`가 필요 없습니다. `cwd`가 머신마다 다르므로 공유 `.mcp.json`이 아니라 로컬 스코프(`claude mcp add --scope local …`)에 등록하세요.
+
+> `ts-node`로는 소스 트리를 실행할 수 없습니다: 임포트가 컴파일 산출물을 위해 `.js` 접미사를 쓰는데, ts-node의 CommonJS 모드는 이를 `.ts`로 되돌려 매핑하지 못합니다. `tsx`(`npm start`, `npm run dev`)를 사용하세요.
 
 ### 2.5 CLI 옵션
 
-`node dist/bootstrap.js`(또는 `ts-node src/bootstrap.ts`)에 전달하는 옵션:
+`node dist/bootstrap.js`(또는 `npx tsx src/bootstrap.ts`)에 전달하는 옵션:
 
 | 옵션 | 기본값 | 설명 |
 |------|--------|------|

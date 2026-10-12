@@ -22,7 +22,7 @@ const FALLBACK_VERSION = '0.0.0';
 let _cached: string | undefined;
 
 /**
- * Walk up from `dist/utils/` (or `src/utils/` under ts-node) looking for the
+ * Walk up from `dist/utils/` (or `src/utils/` when run from source via tsx) looking for the
  * nearest package.json. Resolving by walking instead of a fixed `../../` makes
  * this robust to where the compiled file lands and to test runners.
  */

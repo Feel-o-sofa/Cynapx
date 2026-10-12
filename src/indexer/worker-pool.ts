@@ -38,17 +38,26 @@ export class WorkerPool implements Disposable {
     /** Maximum number of tasks that may sit in the pending queue. */
     private _maxQueueSize: number;
 
-    /** Path & execArgv stored so replacement workers can be spawned identically. */
+    /** Worker entry stored so replacement workers can be spawned identically. */
     private workerPath: string;
-    private workerExecArgv: string[];
+    /** When running from .ts source: a CJS bootstrap evaluated as the worker entry. */
+    private workerSourceBootstrap?: string;
 
     constructor(private size: number = os.cpus().length, { maxQueueSize = 100 }: { maxQueueSize?: number } = {}) {
         this._maxQueueSize = maxQueueSize;
 
-        const isTsNode = process.execArgv.includes('ts-node/register') || process.argv[1].endsWith('.ts');
-        this.workerPath = path.resolve(__dirname, isTsNode ? 'index-worker.ts' : 'index-worker.js');
-        // Use ts-node to run the worker if we are in dev environment
-        this.workerExecArgv = isTsNode ? (process.execArgv.includes('--loader') ? process.execArgv : ['-r', 'ts-node/register']) : [];
+        const runningFromSource = process.argv[1]?.endsWith('.ts')
+            || process.execArgv.some(a => a.includes('tsx'));
+        this.workerPath = path.resolve(__dirname, runningFromSource ? 'index-worker.ts' : 'index-worker.js');
+        if (runningFromSource) {
+            // tsx's ESM hooks do not take effect for a worker whose entry is a
+            // .ts file (Node 22), so the worker resolves the worker's imports
+            // with the plain resolver and fails. Registering tsx's CommonJS hook
+            // first and then requiring the .ts entry works reliably.
+            this.workerSourceBootstrap =
+                `require(${JSON.stringify(require.resolve('tsx/cjs'))});` +
+                `require(${JSON.stringify(this.workerPath)});`;
+        }
 
         for (let i = 0; i < this.size; i++) {
             this.spawnWorker();
@@ -67,7 +76,9 @@ export class WorkerPool implements Disposable {
      * Called both during initial construction and when replacing a crashed/timed-out worker.
      */
     private spawnWorker(): Worker {
-        const worker = new Worker(this.workerPath, { execArgv: this.workerExecArgv });
+        const worker = this.workerSourceBootstrap
+            ? new Worker(this.workerSourceBootstrap, { eval: true })
+            : new Worker(this.workerPath, { execArgv: [] });
 
         worker.on('message', (result) => {
             const active: ActiveTask | null = this.taskMap.get(worker) ?? null;
