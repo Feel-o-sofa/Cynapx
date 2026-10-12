@@ -5,6 +5,11 @@
 > **성격**: 이 문서 하나로 외부 도움 없이 작업을 완수할 수 있도록 쓴 실행 지침서다.
 > 모호한 부분이 있으면 §7의 위임 경계에 따라 스스로 판단하되, 판단 근거를 커밋 메시지나 WORKLOG에 남겨라.
 
+> **진행 상태 (2026-10-12 갱신)**: WP-1(안정화)과 WP-2(도구 프로파일)는 **완료**되어 v4.0.0으로
+> 릴리스 준비됐다 — master 대상 PR이 오너 머지·태그를 기다린다. 다음 세션은 §5 WP-3부터 시작하라.
+> 세션 기록은 `agent_docs/WORKLOG.md`, 이번 세션에 추가된 결정은 §6의 D8·D9를 보라.
+> 아래 §0의 기대값과 §2의 스냅숏은 **착수 당시(v3.1.0) 기준**이며 역사적 기록으로 남겨 둔다.
+
 ---
 
 ## 0. 시작 절차 (세션 첫 10분)
@@ -121,8 +126,10 @@ CI 신규 워크플로가 수동 트리거로 1회 성공.
 ### 설계 (확정)
 
 - 환경변수 `CYNAPX_TOOL_PROFILE` = `frontier`(**기본값**) | `full`.
-  프로젝트 설정(`.cynapx-config` → ProjectProfile)에 `tool_profile` 필드로 프로젝트별 오버라이드 허용
-  (기존 `ProjectProfile.embedding` 필드가 같은 패턴의 전례다).
+  ~~프로젝트 설정(`.cynapx-config` → ProjectProfile)에 `tool_profile` 필드로 프로젝트별 오버라이드 허용~~
+  → **D8로 대체**: ProjectProfile은 `.cynapx-config`가 아니라 `~/.cynapx/profiles/{hash}.json`에 있고,
+  전례로 든 `ProjectProfile.embedding`은 어떤 코드도 읽지 않는 죽은 설정이었다. 프로파일은 프로세스 단위로
+  결정되며, 프로젝트별 선택은 각 MCP 서버 설정의 `env` 블록으로 한다.
 - **frontier에서 숨기는 도구 6종** (코드·테스트는 전부 보존):
   `find_similar_symbols`, `propose_refactor`, `discover_latent_policies`, `export_graph`,
   `re_tag_project`, `get_remediation_strategy`
@@ -156,14 +163,14 @@ CI 신규 워크플로가 수동 트리거로 1회 성공.
 
 ## 5. WP-3 — 후속 (WP-1·2 완료 후, 분량 남으면)
 
-1. **유지보수 프로토콜 교체**: `agent_docs/`의 diagnostic-vN/phaseN-plan 반복 사이클은 **은퇴한다** (§6 D5).
-   새 관성을 만들지 마라 — diagnostic-v32를 쓰지 말 것. 대신 이 HANDOVER.md 아래에
-   `agent_docs/WORKLOG.md`를 만들어 세션별 3~5줄 요약만 누적하라.
-2. **MCP TS SDK v2 감시**: 세션 시작 시 `npm view @modelcontextprotocol/sdk dist-tags` 1회.
+1. ✅ **유지보수 프로토콜 교체** (2026-10-12 완료): diagnostic-vN/phaseN-plan 사이클은 은퇴했다 (§6 D5).
+   diagnostic-v32를 쓰지 말 것. 세션 기록은 `agent_docs/WORKLOG.md`에 누적한다.
+2. **MCP TS SDK v2 감시**: 주간 CI 워크플로가 자동 감시한다(경고 주석). 세션 시작 시에도 `npm view @modelcontextprotocol/sdk dist-tags` 1회.
    2.x dist-tag가 출현하면 → 별도 마이그레이션 페이즈(stateless 전환 + 그때 도구 통합 21→~14 동시 수행, §6 D6).
 3. **엣지 정밀도 골드셋** (방향성): callers/impact의 가치는 해소 정밀도에 종속된다. 소규모 폴리글랏 골드셋
    리포를 만들어 호출 엣지 정확도(정답 대비 정밀/재현)를 측정 가능하게 하는 것이 "강화" 노선의 선행 조건이다.
-4. `agent_docs/vision-arc-status.md`의 "향후 후보" 절을 이 문서 기준으로 갱신.
+4. ✅ `agent_docs/vision-arc-status.md`의 "향후 후보" 절 갱신 (2026-10-12 완료).
+5. **잔여 소음 정리**: 인덱서가 앵커 파일 `.cynapx-config`를 파싱하려다 "No parser found"를 매번 ERROR로 남긴다 — 인덱싱 대상에서 제외할 것 (무해, 저위험).
 
 ---
 
@@ -178,6 +185,8 @@ CI 신규 워크플로가 수동 트리거로 1회 성공.
 | D5 | diagnostic/phase 문서 사이클 은퇴 | 단일 장애 지점(에이전트 세션 지속)이 3개월 동결로 실증됨 → CI 경보로 대체 |
 | D6 | 도구 통합(21→14) 보류 | 스키마 비호환 작업이므로 SDK v2 전환(어차피 비호환 시점)과 묶는 게 싸다 |
 | D7 | simple-git 4 메이저는 WP-1 포함 | critical 2건이 강제 |
+| D8 | 도구 프로파일은 **프로세스 단위** (프로젝트별 오버라이드 없음) | MCP 클라이언트는 연결 시 도구 목록을 한 번 가져오므로 활성 프로젝트를 따라갈 수 없다. 프로젝트별 선택은 이미 클라이언트 설정의 `env` 블록으로 가능하다 (2026-10-12) |
+| D9 | 릴리스 버전은 3.2.0이 아니라 **4.0.0** | WP-2가 기본 도구 표면(공개 API)을 줄였다 — 3.1.0 클라이언트가 숨김 도구를 호출하면 깨진다. env 한 줄로 복원 가능하지만 비호환 자체는 사실이다 (2026-10-12) |
 
 ---
 
@@ -207,5 +216,12 @@ CI 신규 워크플로가 수동 트리거로 1회 성공.
 8. Kotlin KDoc은 `multiline_comment` 노드 타입이다. docstring sibling 타입 목록은
    `extractTreeSitterDocstring()`에 하드코딩되어 있다.
 9. 커밋 메시지·코드·PR에 **모델 식별자를 넣지 마라**(세션 어트리뷰션 라인은 하네스 규약을 따른다).
-10. 모든 작업 후 전수 게이트: `npx vitest run` + `npx tsc --noEmit` + `npm run build` +
+10. **소스 실행은 `tsx`**: 소스 임포트가 `.js` 접미사를 쓰므로 ts-node(CJS)로는 실행 불가. 소스 모드 워커는
+    `tsx/cjs` 부트스트랩으로 띄운다(`worker-pool.ts`) — Node 22에서 tsx ESM 훅은 `.ts` 진입 워커에 적용되지 않는다.
+11. **lockfile 갱신은 npm 11로**: npm 10.9.x는 이 매니페스트의 신규 해소에서 arborist가 크래시한다
+    (`#loadPeerSet` 'edgesOut' of null, vite/vitest peer 그래프). `npx -y npm@11 install --package-lock-only`.
+    결과 lockfile은 npm 10의 `npm ci`로 정상 설치된다.
+12. **서버를 띄운 테스트는 정리까지**: `npm start`/`npx` 래퍼 PID를 kill해도 tsx 자식은 남는다.
+    `ps`로 `tsx/dist/preflight` 프로세스를 찾아 정리하라 — `pkill -f <경로>`는 셸 자신을 죽일 수 있다.
+13. 모든 작업 후 전수 게이트: `npx vitest run` + `npx tsc --noEmit` + `npm run build` +
     `npm audit --omit=dev`. 이 리포는 테스트가 두터워서(소스와 1:1 규모) 게이트를 믿어도 된다.
