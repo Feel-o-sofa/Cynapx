@@ -1,0 +1,85 @@
+name: Scheduled Maintenance
+
+# Raises an alarm when the dependency tree or upstream protocol drifts while
+# nobody is working on the repository. Maintenance used to depend on agent
+# sessions running a manual diagnostic cycle; when those sessions stopped for
+# three months, 12 advisories accumulated unseen. This job replaces that cycle.
+#
+# Scheduled runs only fire from the default branch. Changes to this file are
+# also exercised on pull requests so the workflow is proven before merge.
+
+on:
+  schedule:
+    - cron: '17 3 * * 1' # Mondays 03:17 UTC
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/scheduled-maintenance.yml
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  maintenance:
+    name: Dependency and protocol drift check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Audit production dependencies (HIGH gate)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Audit full tree (report only)
+        run: npm audit || true
+
+      - name: Report outdated dependencies
+        run: npm outdated || true
+
+      - name: Watch for MCP TypeScript SDK v2
+        run: |
+          tags="$(npm view @modelcontextprotocol/sdk dist-tags --json)"
+          echo "$tags"
+          if echo "$tags" | grep -Eq '"[^"]+": *"2\.'; then
+            echo "::warning title=MCP SDK v2 published::A 2.x dist-tag exists. Start the stateless-protocol migration (agent_docs/HANDOVER.md, WP-3)."
+          fi
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run tests
+        run: npm test
+
+      - name: Open or update the maintenance alert issue
+        if: failure() && github.event_name != 'pull_request'
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const title = 'Scheduled maintenance check failed';
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const { data: open } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner, repo: context.repo.repo, state: 'open', per_page: 100,
+            });
+            const existing = open.find(i => i.title === title && !i.pull_request);
+            const body = `The weekly maintenance workflow failed: ${runUrl}\n\n` +
+              'Check the audit, type-check and test steps. agent_docs/HANDOVER.md describes the remediation workflow.';
+            if (existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body,
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner, repo: context.repo.repo, title, body,
+              });
+            }
