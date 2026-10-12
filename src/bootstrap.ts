@@ -482,7 +482,10 @@ async function bootstrap() {
         console.error("[*] MCP Server ready on stdio.");
     }
 
+    let shuttingDown = false;
     const shutdown = async () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
         console.error("\n[*] Shutting down gracefully...");
         await lifecycle.disposeAll();
         await lockManager.release();
@@ -490,6 +493,14 @@ async function bootstrap() {
     };
     process.on('SIGINT', shutdown);
     process.on('SIGTERM', shutdown);
+    // MCP stdio lifecycle: a client disconnects by closing the server's stdin
+    // and waiting for it to exit. Without this the server outlives its client,
+    // and if the client's follow-up SIGTERM only reaches a wrapper (npx/tsx),
+    // the orphan keeps holding the singleton lock and IPC host.
+    if (!options.interactive && !options.api && !command) {
+        process.stdin.once('end', shutdown);
+        process.stdin.once('close', shutdown);
+    }
 }
 
 bootstrap().catch(err => {
