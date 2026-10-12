@@ -34,6 +34,6 @@ drift detection now runs in CI (`.github/workflows/scheduled-maintenance.yml`).
 - **Decisions added** (HANDOVER §6): D8 profile is per process, not per project; D9 release
   is 4.0.0, not 3.2.0.
 - **Open follow-ups**: ~~the indexer logs "No parser found" for unparseable files (noise,
-  harmless)~~ — wrong, see the next entry; `ProjectProfile.embedding` is loaded
+  harmless)~~ — wrong, see the entry above; `ProjectProfile.embedding` is loaded
   but never read (kept per the no-deletion rule; docs no longer claim it works); the
   scheduled workflow only starts firing once it is on master.
