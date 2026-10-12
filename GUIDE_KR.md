@@ -18,6 +18,7 @@
    - [2.4 개발자 워크플로우 (소스 변경 즉시 반영)](#24-개발자-워크플로우-소스-변경-즉시-반영)
    - [2.5 CLI 옵션](#25-cli-옵션)
    - [2.6 모델 비종속 임베딩](#26-모델-비종속-임베딩)
+   - [2.7 도구 프로파일](#27-도구-프로파일)
 3. [프로젝트 라이프사이클](#3-프로젝트-라이프사이클)
 4. [MCP 도구 레퍼런스](#4-mcp-도구-레퍼런스)
    - [4.1 설정 및 라이프사이클](#41-설정-및-라이프사이클)
@@ -121,7 +122,7 @@ Cynapx는 프로젝트 디렉토리에 절대 쓰지 않습니다. 모든 영속
 |----------|------|------|
 | Node.js | >= 22 | 필수 |
 | Git | 최신 버전 | `backfill_history` 및 churn 메트릭에 필요 |
-| Python | 3.x | 선택 — `search_symbols`의 `semantic: true` 벡터 검색 활성화 |
+| Python | 3.x | 선택 — `full` 프로파일의 기본 임베딩 제공자인 Jina 사이드카 실행 (§2.7) |
 
 > Cynapx는 **npm에 게시되지 않습니다**. `git clone`으로만 설치합니다.
 
@@ -178,7 +179,7 @@ node dist/bootstrap.js --help
 }
 ```
 
-`.mcp.json` 저장 후 Claude Code를 재시작합니다. Cynapx가 MCP 도구 패널에 나타나고 27개 도구가 모두 사용 가능해집니다.
+`.mcp.json` 저장 후 Claude Code를 재시작합니다. Cynapx가 MCP 도구 패널에 나타나며, 기본 `frontier` 프로파일에서는 21개, `CYNAPX_TOOL_PROFILE=full`에서는 27개 도구 전부가 제공됩니다(§2.7).
 
 ### 2.4 개발자 워크플로우 (소스 변경 즉시 반영)
 
@@ -229,7 +230,7 @@ Cynapx 자체를 개발하거나 워크트리에서 패치를 테스트할 때�
 
 ### 2.6 모델 비종속 임베딩
 
-Cynapx의 시맨틱 계층(벡터 검색, `find_similar_symbols`, `search_symbols`의 선택적 `semantic: true` 모드)은 **플러그형**입니다. 임베딩 제공자는 런타임에 선택되므로 Cynapx는 벤더 종속 없이 어떤 AI 에이전트 모델이든 — Claude, ChatGPT Codex, 로컬 LLM, 미래 모델 — 지원할 수 있습니다. 제공자를 설정하지 않으면 번들된 Jina code-embeddings 사이드카가 사용됩니다.
+Cynapx의 시맨틱 계층(벡터 검색, `find_similar_symbols`, `search_symbols`의 선택적 `semantic: true` 모드)은 **플러그형**입니다. 임베딩 제공자는 런타임에 선택되므로 Cynapx는 벤더 종속 없이 어떤 AI 에이전트 모델이든 — Claude, ChatGPT Codex, 로컬 LLM, 미래 모델 — 지원할 수 있습니다. 제공자를 설정하지 않으면 기본 `frontier` 프로파일에서는 임베딩이 꺼지고, `full`에서는 번들된 Jina code-embeddings 사이드카가 사용됩니다(§2.7).
 
 **환경변수를 통한 제공자 선택:**
 
@@ -247,14 +248,45 @@ Cynapx의 시맨틱 계층(벡터 검색, `find_similar_symbols`, `search_symbol
 |--------|-----------|-----------|------|
 | `openai` | 네이티브 `fetch` → `/v1/embeddings` | `text-embedding-3-small` (1536) | OpenAI, Azure OpenAI, vLLM, LM Studio 호환 |
 | `ollama` | 네이티브 `fetch` → `localhost:11434/api/embed` | `nomic-embed-text` (768) | 완전 로컬 |
-| `jina-sidecar` | Python 사이드카 | `jina-code-embeddings` (896) | 번들 기본값 |
-| `null` | — | — | no-op 폴백; 시맨틱 기능 비활성화 |
+| `jina-sidecar` | Python 사이드카 | `jina-code-embeddings` (896) | 번들; `full`의 기본값 |
+| `null` | — | — | 시맨틱 기능 비활성화; `frontier`의 기본값 |
 
-**프로젝트별 오버라이드.** 프로젝트 프로파일에 `embedding` 블록을 설정하여 환경 기본값을 덮어쓰고 특정 프로젝트의 제공자를 고정할 수 있습니다.
+**프로젝트별 설정.** 제공자는 서버 프로세스 단위로 위 변수에서 결정됩니다 — 프로젝트마다 다른 제공자를 쓰려면 각 프로젝트의 MCP 서버 `env` 블록에 지정하세요.
 
 **쿼리 타임 패스스루.** 자체 모델로 이미 임베딩을 계산한 에이전트는 사전 계산된 `query_embedding` 배열을 `search_symbols`에 전달할 수 있습니다. 서버는 재임베딩을 생략하고 제공된 벡터로 직접 검색하여 — 쿼리를 에이전트 자신의 모델 공간에 유지하고 모델 간 불일치를 방지합니다. 벡터를 제공하면 `semantic: true` 없이도 시맨틱 검색이 활성화됩니다.
 
 > **제공자 변경 후 재인덱싱.** 저장된 임베딩은 인덱스 시점에 활성화된 제공자가 생성합니다. 제공자(또는 차원)를 변경하면 `purge_index` 후 `initialize_project`를 실행하여 임베딩을 일관되게 재생성하세요.
+
+### 2.7 도구 프로파일
+
+Cynapx는 AI 에이전트와 경쟁하지 않고 보완합니다. 에이전트가 스스로 할 수 없는 일 — 세션 간 기억(`add_annotation`), 심볼 이력, 선언된 아키텍처 대조, 역방향 호출 관계(`get_callers`, `analyze_impact`), 결정론적 메트릭 — 에 집중합니다. `CYNAPX_TOOL_PROFILE`이 서버 프로세스의 도구 세트를 고릅니다:
+
+| 프로파일 | 제공 도구 | `CYNAPX_EMBED_PROVIDER` 미설정 시 임베딩 | 대상 |
+|---------|-----------|------------------------------------------|------|
+| `frontier` (기본값) | 21 | 끔 | 프런티어급 에이전트 (Claude, Codex 등) |
+| `full` | 27 | Jina 사이드카 | 소형 로컬 모델 |
+
+`frontier`에서는 다음 도구가 제거가 아니라 숨김 처리되며 §4에 †로 표시됩니다: `find_similar_symbols`, `propose_refactor`, `discover_latent_policies`, `export_graph`, `re_tag_project`, `get_remediation_strategy` (및 `find-similar` 프롬프트). 코드와 테스트는 그대로 유지됩니다.
+
+- 숨겨진 도구를 호출하면 활성화 방법을 설명하는 오류 결과를 반환하므로, 도구 목록을 캐시한 클라이언트도 혼란을 겪지 않습니다.
+- 임베딩이 꺼진 상태에서 `semantic: true` 또는 `query_embedding`으로 `search_symbols`를 호출하면 키워드 인덱스로 응답하고 한 줄 안내를 덧붙입니다.
+- 연결 시 전송되는 운영 지침은 해당 프로파일이 제공하는 도구만 설명합니다.
+
+MCP 클라이언트는 연결 시 도구 목록을 가져오므로 프로파일은 프로세스당 한 번 결정됩니다. 서버 항목의 `env` 블록에 지정하세요:
+
+```json
+{
+  "mcpServers": {
+    "cynapx": {
+      "command": "node",
+      "args": ["/Cynapx의/절대경로/dist/bootstrap.js", "--path", "."],
+      "env": { "CYNAPX_TOOL_PROFILE": "full" }
+    }
+  }
+}
+```
+
+알 수 없는 값은 stderr 경고와 함께 `frontier`로 처리됩니다.
 
 ---
 
@@ -435,6 +467,8 @@ Registry entry retained (unregister: false)
 
 #### `re_tag_project`
 
+> † **`full` 프로파일 전용** — 기본 `frontier` 프로파일에서는 숨겨집니다([§2.7](#27-도구-프로파일)).
+
 인덱싱된 모든 노드에 대해 전체 5-pass 구조적 태깅 알고리즘을 재실행합니다. 현재 그래프 토폴로지로부터 모든 `layer:*`, `role:*`, `domain:*`, `trait:*` 태그를 재도출합니다.
 
 **파라미터:** 없음
@@ -542,6 +576,8 @@ Found 3 results for "authenticate" (type: method):
 ---
 
 #### `find_similar_symbols`
+
+> † **`full` 프로파일 전용** — 기본 `frontier` 프로파일에서는 숨겨집니다([§2.7](#27-도구-프로파일)).
 
 저장된 임베딩에 대한 K-최근접 이웃(K-NN) 검색으로 주어진 심볼과 **의미적으로 유사한** 심볼을 찾습니다. 중복 탐지, 반복 패턴 발굴, 리팩토링 후보 발견에 유용합니다. 쿼리 심볼 자기 자신은 결과에서 제외됩니다.
 
@@ -913,6 +949,8 @@ Architecture violations found: 3
 
 #### `get_remediation_strategy`
 
+> † **`full` 프로파일 전용** — 기본 `frontier` 프로파일에서는 숨겨집니다([§2.7](#27-도구-프로파일)).
+
 특정 아키텍처 위반을 해결하기 위한 구체적인 리팩토링 계획을 가져옵니다.
 
 **파라미터:**
@@ -953,6 +991,8 @@ Risk:   Low — 공개 API 변경 없음; 이벤트 기반 분리는 되돌릴 �
 ---
 
 #### `discover_latent_policies`
+
+> † **`full` 프로파일 전용** — 기본 `frontier` 프로파일에서는 숨겨집니다([§2.7](#27-도구-프로파일)).
 
 그래프를 분석하여 암묵적 아키텍처 관례를 발굴합니다 — 실제로는 존재하지만 공식적으로 선언된 적 없는 패턴.
 
@@ -1174,6 +1214,8 @@ Distance 3:
 
 #### `propose_refactor`
 
+> † **`full` 프로파일 전용** — 기본 `frontier` 프로파일에서는 숨겨집니다([§2.7](#27-도구-프로파일)).
+
 심볼의 복잡도, 커플링, 의존 그래프를 고려하여 위험도 인식 단계별 리팩토링 제안을 생성합니다.
 
 **파라미터:**
@@ -1222,6 +1264,8 @@ Ordered steps:
 ---
 
 #### `export_graph`
+
+> † **`full` 프로파일 전용** — 기본 `frontier` 프로파일에서는 숨겨집니다([§2.7](#27-도구-프로파일)).
 
 서브그래프(또는 전체 프로젝트 그래프)를 Mermaid 다이어그램과 구조화된 JSON으로 내보냅니다.
 

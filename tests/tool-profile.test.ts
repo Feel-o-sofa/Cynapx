@@ -14,6 +14,8 @@
  *   - search_symbols falls back to keywords and says so when embeddings are off.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { McpServer, buildCynapxInstructions } from '../src/server/mcp-server';
@@ -171,6 +173,22 @@ describe('operator instructions per profile', () => {
         const { client } = await connect('frontier');
         expect(client.getInstructions()).toContain('Tool profile: frontier');
         await client.close();
+    });
+});
+
+describe('AGENTS.md stays in sync with the code', () => {
+    const agentsMd = fs.readFileSync(path.join(__dirname, '..', 'AGENTS.md'), 'utf8');
+    const toolMap = agentsMd.slice(agentsMd.indexOf('## Tool map'), agentsMd.indexOf('## Prompts'))
+        .split('\n').filter(line => line.startsWith('|')).join('\n');
+
+    it('lists exactly the implemented tools in its tool map', () => {
+        const listed = [...toolMap.matchAll(/`([a-z_]+)`/g)].map(m => m[1]).sort();
+        expect(listed).toEqual(TOOL_DEFINITIONS.map(t => t.name).sort());
+    });
+
+    it('marks exactly the frontier-hidden tools with †', () => {
+        const marked = [...toolMap.matchAll(/`([a-z_]+)`†/g)].map(m => m[1]).sort();
+        expect(marked).toEqual([...FRONTIER_HIDDEN_TOOLS].sort());
     });
 });
 

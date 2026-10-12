@@ -91,11 +91,13 @@ initialize_project  →  mode: "existing"             # 이전에 등록된 프�
 initialize_project  →  mode: "custom", path: "/your/project"   # 디스크의 임의 경로 인덱싱
 ```
 
-인덱싱이 완료되면 27개의 도구가 모두 활성화됩니다. `get_setup_context`를 언제든지 호출하여 상태와 디스크 사용량을 확인할 수 있습니다.
+인덱싱이 완료되면 기본 `frontier` 프로파일은 21개 도구를, `CYNAPX_TOOL_PROFILE=full`은 27개 전부를 제공합니다(아래 **도구 프로파일** 참조). `get_setup_context`를 언제든지 호출하여 상태와 디스크 사용량을 확인할 수 있습니다.
 
 ---
 
-## 🛠️ MCP 도구 목록 — 총 27개
+## 🛠️ MCP 도구 목록 — 총 27개 (기본 프로파일 21개)
+
+† 표시 도구는 `full` 프로파일에서만 제공됩니다.
 
 ### 설정 및 라이프사이클
 
@@ -105,15 +107,15 @@ initialize_project  →  mode: "custom", path: "/your/project"   # 디스크의 
 | `get_project_overview` | 컨텍스트를 부트스트랩하는 에이전트를 위한 토큰 효율적 프로젝트 전체 브리핑 |
 | `initialize_project` | 프로젝트를 지식 그래프에 인덱싱 (`mode`: `"current"` \| `"existing"` \| `"custom"`) |
 | `purge_index` | 로컬 인덱스를 영구 삭제 — `confirm: true` 필요 |
-| `re_tag_project` | 전체 재인덱싱 없이 구조적 특성 태깅만 재실행 |
+| `re_tag_project` † | 전체 재인덱싱 없이 구조적 특성 태깅만 재실행 |
 | `backfill_history` | Git 커밋 이력을 역추적하여 인덱싱된 심볼에 커밋을 매핑 |
 
-### 심볼 탐색 및 시맨틱 검색
+### 심볼 탐색 및 검색
 
 | 도구 | 설명 |
 |---|---|
-| `search_symbols` | 선택적 시맨틱(벡터) 모드를 포함한 키워드 검색; 모델 비종속 쿼리를 위한 사전 계산 `query_embedding` 수용 |
-| `find_similar_symbols` | 저장된 임베딩 기반 K-NN 시맨틱 유사도 — 중복 탐지, 패턴 발견, 리팩토링 |
+| `search_symbols` | 키워드 검색; 임베딩이 켜져 있으면 사전 계산 `query_embedding`도 받는 선택적 시맨틱(벡터) 모드 |
+| `find_similar_symbols` † | 저장된 임베딩 기반 K-NN 시맨틱 유사도 — 중복 탐지, 패턴 발견, 리팩토링 |
 | `get_symbol_details` | 심볼의 전체 메트릭, 구조 태그, 변경 이력, 소스 스니펫 조회 |
 | `get_callers` | 특정 심볼을 직접 호출하는 모든 심볼 목록 |
 | `get_callees` | 특정 심볼이 호출하는 모든 심볼 목록 |
@@ -134,8 +136,8 @@ initialize_project  →  mode: "custom", path: "/your/project"   # 디스크의 
 |---|---|
 | `get_architecture` | 선언된 아키텍처 의도 + 실제 그래프 대비 드리프트 리포트 |
 | `check_architecture_violations` | 레이어/도메인 간 불법 교차 및 순환 의존성 탐지 |
-| `get_remediation_strategy` | 탐지된 위반에 대한 3단계 우선순위 수정 계획 생성 |
-| `discover_latent_policies` | 그래프에 암묵적으로 인코딩된 아키텍처 패턴 발굴 |
+| `get_remediation_strategy` † | 탐지된 위반에 대한 3단계 우선순위 수정 계획 생성 |
+| `discover_latent_policies` † | 그래프에 암묵적으로 인코딩된 아키텍처 패턴 발굴 |
 
 ### 품질 및 위험도
 
@@ -150,9 +152,26 @@ initialize_project  →  mode: "custom", path: "/your/project"   # 디스크의 
 
 | 도구 | 설명 |
 |---|---|
-| `propose_refactor` | 심볼의 실제 그래프 위치에 기반한 위험도 인식 리팩토링 제안 |
-| `export_graph` | 지식 그래프의 Mermaid 다이어그램 + JSON 구조 요약 내보내기 |
+| `propose_refactor` † | 심볼의 실제 그래프 위치에 기반한 위험도 인식 리팩토링 제안 |
+| `export_graph` † | 지식 그래프의 Mermaid 다이어그램 + JSON 구조 요약 내보내기 |
 | `check_consistency` | 그래프 무결성을 디스크 상태 및 Git HEAD와 대조 검증 |
+
+---
+
+## 🎚️ 도구 프로파일
+
+Cynapx는 프런티어 모델이 이미 잘하는 일과 경쟁하지 않고, AI 에이전트가 스스로 할 수 없는 일 — 세션 간 기억, 심볼 이력, 선언된 아키텍처 대조, 역방향 호출 관계, 결정론적 메트릭 — 을 보완하도록 설계되었습니다. `CYNAPX_TOOL_PROFILE`이 서버 프로세스 단위로 도구 세트를 고릅니다:
+
+| 프로파일 | 도구 수 | 기본 임베딩 | 대상 |
+|---|---|---|---|
+| `frontier` (기본값) | 21 | 끔 | 프런티어급 에이전트 (Claude, Codex 등) |
+| `full` | 27 | Jina 사이드카 | 소형 로컬 모델 |
+
+`frontier`에서 † 도구는 제거가 아니라 숨김입니다: 호출하면 활성화 방법을 알려주는 오류를 반환하고, `search_symbols`의 시맨틱 요청은 안내 문구와 함께 키워드 인덱스로 응답합니다. MCP 서버 설정의 `env` 블록에서 지정하세요:
+
+```json
+"cynapx": { "command": "node", "args": ["/path/to/Cynapx/dist/bootstrap.js"], "env": { "CYNAPX_TOOL_PROFILE": "full" } }
+```
 
 ---
 
@@ -176,7 +195,7 @@ initialize_project  →  mode: "custom", path: "/your/project"   # 디스크의 
 
 ## 🌐 REST API
 
-MCP 인터페이스 외에도, Cynapx는 분석 엔진을 인증된 HTTP REST API로 노출할 수 있습니다. 부팅 시 `--api`를 전달하여 시작합니다(선택: `--api-port <number>`, 기본 `3000`; `--bind <addr>`, 기본 `127.0.0.1`; `--https`로 임시 TLS 인증서). 모든 `/api/*` 라우트는 **Bearer 토큰**(상수 시간 검증)을 요구하며 IP별 **속도 제한**으로 보호됩니다(전역 100 req/분; 무거운 분석 라우트 10 req/분). 토큰은 `KNOWLEDGE_TOOL_TOKEN` 환경변수에서 읽으며, 미설정 시 자동 생성되어 `~/.cynapx/api-token`(모드 `0600`)에 기록됩니다. 전체 명세는 OpenAPI 3.0 스펙(`src/server/openapi.ts`)으로 발행되며, 비프로덕션 환경에서 `/api/docs`의 Swagger UI로 제공됩니다.
+MCP 인터페이스 외에도, Cynapx는 분석 엔진을 인증된 HTTP REST API로 노출할 수 있습니다. 옵트인 기능이며 기본으로는 권장하지 않습니다 — 원격 접근에는 같은 플래그로 제공되는 MCP HTTP 엔드포인트(`/mcp`)를 사용하세요. 부팅 시 `--api`를 전달하여 시작합니다(선택: `--api-port <number>`, 기본 `3000`; `--bind <addr>`, 기본 `127.0.0.1`; `--https`로 임시 TLS 인증서). 모든 `/api/*` 라우트는 **Bearer 토큰**(상수 시간 검증)을 요구하며 IP별 **속도 제한**으로 보호됩니다(전역 100 req/분; 무거운 분석 라우트 10 req/분). 토큰은 `KNOWLEDGE_TOOL_TOKEN` 환경변수에서 읽으며, 미설정 시 자동 생성되어 `~/.cynapx/api-token`(모드 `0600`)에 기록됩니다. 전체 명세는 OpenAPI 3.0 스펙(`src/server/openapi.ts`)으로 발행되며, 비프로덕션 환경에서 `/api/docs`의 Swagger UI로 제공됩니다.
 
 | 라우트 | 설명 |
 |---|---|
@@ -194,7 +213,7 @@ MCP 인터페이스 외에도, Cynapx는 분석 엔진을 인증된 HTTP REST AP
 
 ## 🔌 모델 비종속 임베딩
 
-Cynapx의 시맨틱 계층은 **플러그형**이므로 어떤 AI 에이전트 모델이든 — Claude, ChatGPT Codex, 로컬 LLM, 미래 모델 — 지원할 수 있습니다. 임베딩 제공자는 런타임에 선택되며, 기본값은 번들된 Jina code-embeddings 사이드카입니다.
+Cynapx의 시맨틱 계층은 **플러그형**이므로 어떤 AI 에이전트 모델이든 — Claude, ChatGPT Codex, 로컬 LLM, 미래 모델 — 지원할 수 있습니다. 임베딩 제공자는 런타임에 선택됩니다. `CYNAPX_EMBED_PROVIDER`가 없으면 기본 `frontier` 프로파일에서는 임베딩이 꺼지고, `full`에서는 번들된 Jina code-embeddings 사이드카를 사용합니다.
 
 | 환경변수 | 용도 | 예시 |
 |---|---|---|
@@ -206,8 +225,8 @@ Cynapx의 시맨틱 계층은 **플러그형**이므로 어떤 AI 에이전트 �
 
 - **OpenAI 호환** — `/v1/embeddings`로의 네이티브 `fetch`; OpenAI, Azure OpenAI, vLLM, LM Studio와 호환.
 - **Ollama** — `localhost:11434/api/embed`로의 네이티브 `fetch` (예: `nomic-embed-text`).
-- **Jina 사이드카** — 번들된 `jina-code-embeddings` (896 차원), 기본값.
-- **프로젝트별 오버라이드** — 프로젝트 프로파일의 `embedding`을 설정하여 특정 프로젝트의 제공자를 고정.
+- **Jina 사이드카** — 번들된 `jina-code-embeddings` (896 차원), `full` 프로파일의 기본값.
+- **프로젝트별 설정** — 제공자는 서버 프로세스 단위로 정해지므로, 각 프로젝트의 MCP 서버 `env` 블록에 위 변수를 지정하세요.
 
 에이전트는 `search_symbols`에 사전 계산된 `query_embedding`을 전달하여 서버측 임베딩을 완전히 우회할 수 있습니다 — 쿼리 벡터를 에이전트가 사용하는 모델 공간 안에 유지합니다.
 
