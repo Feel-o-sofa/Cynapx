@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.1.0] - 2026-10-12
+
+**Call-graph accuracy.** `get_callers`, `get_callees` and `analyze_impact` are only as good as call resolution, which is now measured: a polyglot gold set (`tests/fixtures/goldset/`, `npm run goldset`) scores call edges against hand-verified truth in Go, Java, Python, Rust and TypeScript, and a test fails if any language regresses. Precision went from 96% to 100% and recall from 61% to 100% on that set — a small set, so read it as a regression guard more than a guarantee. On an unseen codebase (Python's stdlib `email` package), 153 call edges were added and the 16 that disappeared were all misattributed or wrong. **The index rebuilds automatically on first start** (the minor version changed), and annotations are carried over.
+
+### Changed
+- **Tree-sitter members are qualified by their type** — `file#Type.member` instead of `file#member` (Go methods take their receiver's type), matching the TypeScript parser. A method and a same-named free function in one file used to collapse into one node and share its callers. Use the new names in `get_symbol_details`, `add_annotation` and other tools that take a qualified name
+- **Ambiguous calls are left unresolved instead of guessed** — a call whose name matches several symbols, none in scope, used to bind to whichever the database returned first
+
+### Fixed
+- **Calls through `self` / `this` / a Go receiver** resolve to the caller's own type; Python attribute calls (`self.configure()`) are captured at all
+- **Calls through a typed parameter** (`c *client.Client`, `Client c`, `c: Client`, `c: &Client`) resolve to that type's method
+- **Module-qualified calls** (`util.Format` in Go, `util::log` in Rust, `util.f()` through a module import) resolve against the caller's imports; Rust `::` paths were previously mangled and dropped
+- **Type-qualified calls** (`Util.log`, `Client::new`, `Base.method(self)`) resolve to the type's member
+- **TypeScript calls to imported functions** were attributed to the caller's own file and dropped or bound to a same-named local
+- **Method calls no longer bind to unrelated same-named functions** elsewhere in the project (e.g. `logger.log()` to `Util.log`)
+- **Annotations on renamed members are kept** — the re-index moves them from `file#member` to `file#Type.member` when exactly one member claims the old name
+
+### Known gaps
+- Receivers whose type is only inferable from an assignment (`c := client.New()`, `c = Client()`), inherited methods and `super()` calls stay unresolved
+- Python absolute imports of the project's own package (`from email.utils import x`) are treated as external, so they do not scope resolution
+
 ## [4.0.0] - 2026-10-12
 
 Cynapx is refocused as a layer that **complements** frontier AI agents instead of competing with them: a new default `frontier` tool profile serves the 21 tools that cover what an agent cannot do on its own, and keeps embeddings off. Nothing was removed — `CYNAPX_TOOL_PROFILE=full` restores all 27 tools and the embedding sidecar for smaller local models. The release also clears every known advisory (12 → 0), repairs the source-run path and the stdio shutdown lifecycle, and ships the P8 polyglot follow-ups and availability fixes. **No schema change.** A re-index is recommended to pick up new docstrings, test specs and corrected call edges. See [RELEASE_NOTES_v4.0.0.md](./RELEASE_NOTES_v4.0.0.md).

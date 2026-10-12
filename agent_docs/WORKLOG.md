@@ -6,6 +6,35 @@ drift detection now runs in CI (`.github/workflows/scheduled-maintenance.yml`).
 
 ---
 
+## 2026-10-12 (latest) — 4.1.0: call-edge gold set and resolution (HANDOVER WP-3 item 3)
+
+- **v4.0.0**: merged to master (PR #23, CI green). The tag is **not** pushed: GitHub refuses non-branch
+  refs from agent sessions (`only branch updates are permitted`; HANDOVER gotcha 14). Owner creates it.
+- **Gold set**: 5 languages, 36 hand-verified call edges, keyed by definition site. Ratchet test +
+  `npm run goldset` report. Baseline at start: precision 96%, recall 61%.
+- **Root causes found and fixed**, in order of impact:
+  1. Tree-sitter named members `file#member`, so a method and a same-named function collapsed into one
+     node (and every `fold` method in a file became one node). Now `file#Type.member`.
+  2. The pipeline resolved any unmatched name to the first symbol in the DB with that name — the source
+     of the Java false positive. Now scoped: caller's file → its imports → its directory → unique.
+  3. Qualified calls were dropped: Go `util.Format`, Rust `util::log` (the `:` type-hint split mangled
+     it), Java `Util.log` (captured bare). Now resolved via imports (module) or type members.
+  4. `self`/`this`/Go receiver calls, and calls through typed parameters, now resolve to the type.
+  5. TypeScript: imported identifiers resolved to the import alias in the caller's file.
+- **Result**: precision 100%, recall 100% on the gold set. **Cross-check on unseen code** (Python stdlib
+  `email`, old vs new resolver, compared by definition site): +153 edges (sample of 25 all correct),
+  −16 (every one a collapsed-node artifact now at the right definition, or a wrong guess such as
+  `utils.decode_params → _header_value_parser.quote` when utils imports `quote` from `_parseaddr`).
+- **Annotations**: keyed by qname, so the rename would orphan them. The automatic re-index (minor
+  version change) moves them when unambiguous.
+- **Decisions**: D10 precision over recall for ambiguous calls; D11 release as 4.1.0.
+- **Open follow-ups** (HANDOVER §5 item 6): assignment-inferred receivers, inherited/`super()` calls,
+  Python absolute self-package imports. Also noticed: `purge_index` deletes annotations with the DB, and
+  the 4.0.0 upgrade notes recommend it — 4.1.0's automatic re-index avoids that path, but `purge_index`
+  itself still discards cross-session memory.
+
+---
+
 ## 2026-10-12 (later) — v4.0.0 release blockers found after the PR went up
 
 - The repo's own MCP server still failed to connect after the source-runner fix: a cold
