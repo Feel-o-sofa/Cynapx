@@ -161,6 +161,7 @@ describe('createEmbeddingProviderFromEnv', () => {
         'CYNAPX_EMBED_API_KEY',
         'CYNAPX_EMBED_ENDPOINT',
         'CYNAPX_EMBED_DIMENSIONS',
+        'CYNAPX_TOOL_PROFILE',
     ];
     const saved: Record<string, string | undefined> = {};
 
@@ -174,7 +175,20 @@ describe('createEmbeddingProviderFromEnv', () => {
         }
     });
 
-    it('returns PythonEmbeddingProvider when CYNAPX_EMBED_PROVIDER is unset', () => {
+    it('returns NullEmbeddingProvider when CYNAPX_EMBED_PROVIDER is unset (frontier profile default)', () => {
+        const p = createEmbeddingProviderFromEnv();
+        expect(p).toBeInstanceOf(NullEmbeddingProvider);
+    });
+
+    it('returns PythonEmbeddingProvider when CYNAPX_EMBED_PROVIDER is unset under the full profile', () => {
+        process.env.CYNAPX_TOOL_PROFILE = 'full';
+        const p = createEmbeddingProviderFromEnv();
+        expect(p).toBeInstanceOf(PythonEmbeddingProvider);
+        p.dispose?.();
+    });
+
+    it('an explicit CYNAPX_EMBED_PROVIDER wins over the frontier default', () => {
+        process.env.CYNAPX_EMBED_PROVIDER = 'jina-sidecar';
         const p = createEmbeddingProviderFromEnv();
         expect(p).toBeInstanceOf(PythonEmbeddingProvider);
         p.dispose?.();

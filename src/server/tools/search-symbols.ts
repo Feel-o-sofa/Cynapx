@@ -6,6 +6,11 @@
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
 import { mergeResultsRRF, requireEngine, EngineNotReadyError, toStructuredResult } from './_utils.js';
+import { isEmbeddingUnavailable } from '../../indexer/embedding-manager.js';
+
+export const SEMANTIC_FALLBACK_NOTICE =
+    'Note: semantic search is unavailable (embeddings are disabled or the embedding provider failed); ' +
+    'these are keyword-index results. Set CYNAPX_EMBED_PROVIDER, or run with CYNAPX_TOOL_PROFILE=full, to enable it.';
 
 export const searchSymbolsHandler: ToolHandler = {
     async execute(args: any, deps: ToolDeps): Promise<ToolResult> {
@@ -29,7 +34,12 @@ export const searchSymbolsHandler: ToolHandler = {
         }
         // P9-2: a pre-computed embedding implies the caller wants semantic
         // results even if `semantic` was not explicitly set to true.
-        const useSemantic = args.semantic === true || args.query_embedding !== undefined;
+        const semanticRequested = args.semantic === true || args.query_embedding !== undefined;
+        // Embeddings off (the frontier-profile default) or the sidecar gave up:
+        // there are no stored vectors to search, so answer from the keyword
+        // index and say so instead of returning silently degraded results.
+        const semanticUnavailable = semanticRequested && isEmbeddingUnavailable(deps.embeddingProvider);
+        const useSemantic = semanticRequested && !semanticUnavailable;
         // O-1/M4: clamp to [1, 200] — negative or zero limits would otherwise
         // reach SQLite as LIMIT -1 (= unlimited).
         const limit = Math.min(Math.max(Math.floor(args.limit) || 10, 1), 200);
@@ -76,6 +86,10 @@ export const searchSymbolsHandler: ToolHandler = {
         const flat = results.flat().slice(0, limit);
         // P9-4: thread the RRF / positional confidence score through to the
         // structured result so agents can judge and filter match quality.
-        return { content: [{ type: "text", text: JSON.stringify(flat.map(r => toStructuredResult(r.node, { score: r.score })), null, 2) }] };
+        const content: ToolResult['content'] = [{ type: "text", text: JSON.stringify(flat.map(r => toStructuredResult(r.node, { score: r.score })), null, 2) }];
+        if (semanticUnavailable) {
+            content.push({ type: "text", text: SEMANTIC_FALLBACK_NOTICE });
+        }
+        return { content };
     }
 };

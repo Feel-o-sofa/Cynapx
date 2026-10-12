@@ -6,6 +6,7 @@
 import { EmbeddingProvider, PythonEmbeddingProvider, NullEmbeddingProvider } from '../embedding-manager';
 import { OpenAIEmbeddingProvider } from './openai';
 import { OllamaEmbeddingProvider } from './ollama';
+import { resolveToolProfile } from '../../utils/tool-profile';
 
 /**
  * P9-0: Configuration for an embedding provider. Mirrors the `embedding`
@@ -43,20 +44,30 @@ export function createEmbeddingProvider(config?: EmbeddingConfig): EmbeddingProv
  * switch providers without editing a profile:
  *   CYNAPX_EMBED_PROVIDER, CYNAPX_EMBED_MODEL, CYNAPX_EMBED_API_KEY,
  *   CYNAPX_EMBED_ENDPOINT, CYNAPX_EMBED_DIMENSIONS
- * Absent/`jina-sidecar` -> default sidecar provider.
+ * An explicit CYNAPX_EMBED_PROVIDER always wins. Without one, the tool profile
+ * picks the default: `frontier` -> embeddings off, `full` -> jina sidecar.
+ *
+ * Both the query-time provider (McpServer) and the index-time provider
+ * (EmbeddingManager via UpdatePipeline) must come from here so stored vectors
+ * and query vectors share one model.
  */
-export function createEmbeddingProviderFromEnv(): EmbeddingProvider {
-    const provider = process.env.CYNAPX_EMBED_PROVIDER;
-    if (!provider || provider === 'jina-sidecar') {
+export function createEmbeddingProviderFromEnv(env: NodeJS.ProcessEnv = process.env): EmbeddingProvider {
+    const provider = env.CYNAPX_EMBED_PROVIDER;
+    if (!provider) {
+        return resolveToolProfile(env) === 'full'
+            ? new PythonEmbeddingProvider()
+            : new NullEmbeddingProvider();
+    }
+    if (provider === 'jina-sidecar') {
         return new PythonEmbeddingProvider();
     }
     const config: EmbeddingConfig = {
         provider: provider as any,
-        model: process.env.CYNAPX_EMBED_MODEL,
-        apiKey: process.env.CYNAPX_EMBED_API_KEY,
-        endpoint: process.env.CYNAPX_EMBED_ENDPOINT,
-        dimensions: process.env.CYNAPX_EMBED_DIMENSIONS
-            ? parseInt(process.env.CYNAPX_EMBED_DIMENSIONS, 10)
+        model: env.CYNAPX_EMBED_MODEL,
+        apiKey: env.CYNAPX_EMBED_API_KEY,
+        endpoint: env.CYNAPX_EMBED_ENDPOINT,
+        dimensions: env.CYNAPX_EMBED_DIMENSIONS
+            ? parseInt(env.CYNAPX_EMBED_DIMENSIONS, 10)
             : undefined,
     };
     return createEmbeddingProvider(config);

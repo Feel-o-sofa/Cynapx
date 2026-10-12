@@ -17,6 +17,7 @@ import { IpcCoordinator } from './ipc-coordinator.js';
 import { toolRegistry } from './tools/_registry.js';
 import { EngineNotReadyError } from './tools/_utils.js';
 import { ProgressReporter, NOOP_PROGRESS, createProgressReporter } from './tools/_progress.js';
+import { ToolProfile, isToolEnabled, disabledToolMessage } from '../utils/tool-profile.js';
 
 export interface ToolDeps {
     waitUntilReady: () => Promise<void>;
@@ -31,258 +32,263 @@ export interface ToolDeps {
     markReady: (state: boolean) => void;
     getIsInitialized: () => boolean;
     setIsInitialized: (value: boolean) => void;
+    /** Hides tools the profile disables. Absent = every tool (no restriction). */
+    toolProfile?: ToolProfile;
 }
+
+/** Every tool Cynapx implements. The served list is filtered by the tool profile. */
+export const TOOL_DEFINITIONS = [
+    {
+        name: "get_setup_context",
+        description: "Get project initialization status and registry info.",
+        inputSchema: { type: "object", properties: {} }
+    },
+    {
+        name: "get_project_overview",
+        description: "Returns a token-efficient briefing of the indexed project: purpose, tech stack, architecture shape, entry points, hotspots, and documentation headers. Call this first when starting work on an unfamiliar codebase.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                include_clusters: { type: "boolean", default: true }
+            }
+        }
+    },
+    {
+        name: "initialize_project",
+        description: "Initialize and register a project in the central registry.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                mode: { type: "string", enum: ["current", "existing", "custom"] },
+                path: { type: "string" },
+                zero_pollution: { type: "boolean", default: true }
+            },
+            required: ["mode"]
+        }
+    },
+    {
+        name: "search_symbols",
+        description: "Search for symbols with semantic support.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                query: { type: "string" },
+                semantic: { type: "boolean" },
+                limit: { type: "number" },
+                symbol_type: { type: "string" },
+                query_embedding: {
+                    type: "array",
+                    items: { type: "number" },
+                    description: "Pre-computed embedding vector for the query. When provided, skips server-side embedding generation and uses this vector directly for semantic search. Useful when the calling agent has already computed an embedding."
+                }
+            },
+            required: ["query"]
+        }
+    },
+    {
+        name: "find_similar_symbols",
+        description: "Find symbols semantically similar to a given symbol using vector embeddings. Useful for identifying duplicates, patterns, or related code during refactoring.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                qualified_name: { type: "string" },
+                limit: { type: "number", default: 10 }
+            },
+            required: ["qualified_name"]
+        }
+    },
+    {
+        name: "get_symbol_details",
+        description: "Get comprehensive details, metrics, and pruned source code for a symbol.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                qualified_name: { type: "string" },
+                include_source: { type: "boolean", default: true },
+                summary_only: { type: "boolean", default: false }
+            },
+            required: ["qualified_name"]
+        }
+    },
+    {
+        name: "analyze_impact",
+        description: "Identify all symbols that depend on this symbol (ripple effect).",
+        inputSchema: {
+            type: "object",
+            properties: {
+                qualified_name: { type: "string" },
+                max_depth: { type: "number", default: 3 },
+                use_cache: { type: "boolean", default: true }
+            },
+            required: ["qualified_name"]
+        }
+    },
+    {
+        name: "get_callers",
+        description: "Get direct callers of a symbol.",
+        inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+    },
+    {
+        name: "get_callees",
+        description: "Get symbols called by a symbol.",
+        inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+    },
+    {
+        name: "get_related_tests",
+        description: "Find associated test symbols for a production symbol.",
+        inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+    },
+    {
+        name: "check_architecture_violations",
+        description: "Detect layer or role violations in the codebase.",
+        inputSchema: { type: "object", properties: {} }
+    },
+    {
+        name: "get_remediation_strategy",
+        description: "Get structural guidance for fixing violations.",
+        inputSchema: { type: "object", properties: { violation: { type: "object" } }, required: ["violation"] }
+    },
+    {
+        name: "propose_refactor",
+        description: "Get a risk-aware refactoring proposal.",
+        inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+    },
+    {
+        name: "get_risk_profile",
+        description: "Calculate risk profile based on CC, churn and coupling.",
+        inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
+    },
+    {
+        name: "get_hotspots",
+        description: "Identify technical debt hotspots via specific metrics.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                metric: { type: "string", enum: ["cyclomatic", "fan_in", "fan_out", "loc"] },
+                threshold: { type: "number", default: 0 }
+            },
+            required: ["metric"]
+        }
+    },
+    {
+        name: "find_dead_code",
+        description: "Identify unreachable or unused symbols.",
+        inputSchema: { type: "object", properties: {} }
+    },
+    {
+        name: "export_graph",
+        description: "Export the dependency graph. Supports json (Mermaid summary), graphml, and dot formats.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                root_qname: { type: "string" },
+                max_depth: { type: "number", default: 2 },
+                format: { type: "string", enum: ["json", "graphml", "dot"], default: "json" }
+            }
+        }
+    },
+    {
+        name: "check_consistency",
+        description: "Verify graph integrity against disk and Git.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                repair: { type: "boolean", default: false },
+                force: { type: "boolean", default: false }
+            }
+        }
+    },
+    {
+        name: "purge_index",
+        description: "Completely delete local database index.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                confirm: { type: "boolean" },
+                unregister: { type: "boolean" }
+            },
+            required: ["confirm"]
+        }
+    },
+    {
+        name: "re_tag_project",
+        description: "Re-run structural characteristic tagging.",
+        inputSchema: { type: "object", properties: {} }
+    },
+    {
+        name: "backfill_history",
+        description: "Fetch and map Git commit history.",
+        inputSchema: { type: "object", properties: {} }
+    },
+    {
+        name: "discover_latent_policies",
+        description: "Discover implicit architectural patterns.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                threshold: { type: "number", default: 0.9 },
+                min_count: { type: "number", default: 5 }
+            }
+        }
+    },
+    {
+        name: "get_recent_changes",
+        description: "List recent commits across the codebase and which symbols/files each changed (answers 'what changed recently'). Requires backfill_history.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                limit: { type: "number", default: 20 },
+                since_days: { type: "number" }
+            }
+        }
+    },
+    {
+        name: "get_symbol_history",
+        description: "Show the full commit history of a single symbol with an intent summary (answers 'why does this exist'). Requires backfill_history.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                qualified_name: { type: "string" }
+            },
+            required: ["qualified_name"]
+        }
+    },
+    {
+        name: "add_annotation",
+        description: "Record an agent annotation (decision, gotcha, todo, or rationale) against a symbol for future context.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                qualified_name: { type: "string" },
+                kind: { type: "string", enum: ["decision", "gotcha", "todo", "rationale"] },
+                body: { type: "string" },
+                author: { type: "string", default: "agent" }
+            },
+            required: ["qualified_name", "kind", "body"]
+        }
+    },
+    {
+        name: "get_annotations",
+        description: "Retrieve agent annotations for a symbol, or recent annotations across the codebase if no symbol is given.",
+        inputSchema: {
+            type: "object",
+            properties: {
+                qualified_name: { type: "string" },
+                kind: { type: "string", enum: ["decision", "gotcha", "todo", "rationale"] },
+                limit: { type: "number", default: 20 }
+            }
+        }
+    },
+    {
+        name: "get_architecture",
+        description: "Returns declared architecture intent (layers, rules, responsibilities) and drift detection showing where reality diverges from the declared design.",
+        inputSchema: { type: "object", properties: {} }
+    }
+];
 
 export function registerToolHandlers(sdkServer: SdkMcpServer, deps: ToolDeps): void {
     sdkServer.setRequestHandler(ListToolsRequestSchema, async () => ({
-        tools: [
-            {
-                name: "get_setup_context",
-                description: "Get project initialization status and registry info.",
-                inputSchema: { type: "object", properties: {} }
-            },
-            {
-                name: "get_project_overview",
-                description: "Returns a token-efficient briefing of the indexed project: purpose, tech stack, architecture shape, entry points, hotspots, and documentation headers. Call this first when starting work on an unfamiliar codebase.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        include_clusters: { type: "boolean", default: true }
-                    }
-                }
-            },
-            {
-                name: "initialize_project",
-                description: "Initialize and register a project in the central registry.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        mode: { type: "string", enum: ["current", "existing", "custom"] },
-                        path: { type: "string" },
-                        zero_pollution: { type: "boolean", default: true }
-                    },
-                    required: ["mode"]
-                }
-            },
-            {
-                name: "search_symbols",
-                description: "Search for symbols with semantic support.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        query: { type: "string" },
-                        semantic: { type: "boolean" },
-                        limit: { type: "number" },
-                        symbol_type: { type: "string" },
-                        query_embedding: {
-                            type: "array",
-                            items: { type: "number" },
-                            description: "Pre-computed embedding vector for the query. When provided, skips server-side embedding generation and uses this vector directly for semantic search. Useful when the calling agent has already computed an embedding."
-                        }
-                    },
-                    required: ["query"]
-                }
-            },
-            {
-                name: "find_similar_symbols",
-                description: "Find symbols semantically similar to a given symbol using vector embeddings. Useful for identifying duplicates, patterns, or related code during refactoring.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        qualified_name: { type: "string" },
-                        limit: { type: "number", default: 10 }
-                    },
-                    required: ["qualified_name"]
-                }
-            },
-            {
-                name: "get_symbol_details",
-                description: "Get comprehensive details, metrics, and pruned source code for a symbol.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        qualified_name: { type: "string" },
-                        include_source: { type: "boolean", default: true },
-                        summary_only: { type: "boolean", default: false }
-                    },
-                    required: ["qualified_name"]
-                }
-            },
-            {
-                name: "analyze_impact",
-                description: "Identify all symbols that depend on this symbol (ripple effect).",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        qualified_name: { type: "string" },
-                        max_depth: { type: "number", default: 3 },
-                        use_cache: { type: "boolean", default: true }
-                    },
-                    required: ["qualified_name"]
-                }
-            },
-            {
-                name: "get_callers",
-                description: "Get direct callers of a symbol.",
-                inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
-            },
-            {
-                name: "get_callees",
-                description: "Get symbols called by a symbol.",
-                inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
-            },
-            {
-                name: "get_related_tests",
-                description: "Find associated test symbols for a production symbol.",
-                inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
-            },
-            {
-                name: "check_architecture_violations",
-                description: "Detect layer or role violations in the codebase.",
-                inputSchema: { type: "object", properties: {} }
-            },
-            {
-                name: "get_remediation_strategy",
-                description: "Get structural guidance for fixing violations.",
-                inputSchema: { type: "object", properties: { violation: { type: "object" } }, required: ["violation"] }
-            },
-            {
-                name: "propose_refactor",
-                description: "Get a risk-aware refactoring proposal.",
-                inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
-            },
-            {
-                name: "get_risk_profile",
-                description: "Calculate risk profile based on CC, churn and coupling.",
-                inputSchema: { type: "object", properties: { qualified_name: { type: "string" } }, required: ["qualified_name"] }
-            },
-            {
-                name: "get_hotspots",
-                description: "Identify technical debt hotspots via specific metrics.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        metric: { type: "string", enum: ["cyclomatic", "fan_in", "fan_out", "loc"] },
-                        threshold: { type: "number", default: 0 }
-                    },
-                    required: ["metric"]
-                }
-            },
-            {
-                name: "find_dead_code",
-                description: "Identify unreachable or unused symbols.",
-                inputSchema: { type: "object", properties: {} }
-            },
-            {
-                name: "export_graph",
-                description: "Export the dependency graph. Supports json (Mermaid summary), graphml, and dot formats.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        root_qname: { type: "string" },
-                        max_depth: { type: "number", default: 2 },
-                        format: { type: "string", enum: ["json", "graphml", "dot"], default: "json" }
-                    }
-                }
-            },
-            {
-                name: "check_consistency",
-                description: "Verify graph integrity against disk and Git.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        repair: { type: "boolean", default: false },
-                        force: { type: "boolean", default: false }
-                    }
-                }
-            },
-            {
-                name: "purge_index",
-                description: "Completely delete local database index.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        confirm: { type: "boolean" },
-                        unregister: { type: "boolean" }
-                    },
-                    required: ["confirm"]
-                }
-            },
-            {
-                name: "re_tag_project",
-                description: "Re-run structural characteristic tagging.",
-                inputSchema: { type: "object", properties: {} }
-            },
-            {
-                name: "backfill_history",
-                description: "Fetch and map Git commit history.",
-                inputSchema: { type: "object", properties: {} }
-            },
-            {
-                name: "discover_latent_policies",
-                description: "Discover implicit architectural patterns.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        threshold: { type: "number", default: 0.9 },
-                        min_count: { type: "number", default: 5 }
-                    }
-                }
-            },
-            {
-                name: "get_recent_changes",
-                description: "List recent commits across the codebase and which symbols/files each changed (answers 'what changed recently'). Requires backfill_history.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        limit: { type: "number", default: 20 },
-                        since_days: { type: "number" }
-                    }
-                }
-            },
-            {
-                name: "get_symbol_history",
-                description: "Show the full commit history of a single symbol with an intent summary (answers 'why does this exist'). Requires backfill_history.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        qualified_name: { type: "string" }
-                    },
-                    required: ["qualified_name"]
-                }
-            },
-            {
-                name: "add_annotation",
-                description: "Record an agent annotation (decision, gotcha, todo, or rationale) against a symbol for future context.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        qualified_name: { type: "string" },
-                        kind: { type: "string", enum: ["decision", "gotcha", "todo", "rationale"] },
-                        body: { type: "string" },
-                        author: { type: "string", default: "agent" }
-                    },
-                    required: ["qualified_name", "kind", "body"]
-                }
-            },
-            {
-                name: "get_annotations",
-                description: "Retrieve agent annotations for a symbol, or recent annotations across the codebase if no symbol is given.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        qualified_name: { type: "string" },
-                        kind: { type: "string", enum: ["decision", "gotcha", "todo", "rationale"] },
-                        limit: { type: "number", default: 20 }
-                    }
-                }
-            },
-            {
-                name: "get_architecture",
-                description: "Returns declared architecture intent (layers, rules, responsibilities) and drift detection showing where reality diverges from the declared design.",
-                inputSchema: { type: "object", properties: {} }
-            }
-        ]
+        tools: TOOL_DEFINITIONS.filter(t => isToolEnabled(t.name, deps.toolProfile ?? 'full'))
     }));
 
     sdkServer.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
@@ -314,15 +320,22 @@ export async function executeTool(
     deps: ToolDeps,
     progress: ProgressReporter = NOOP_PROGRESS
 ): Promise<any> {
+    if (deps.toolProfile && !isToolEnabled(name, deps.toolProfile)) {
+        // An explicit result instead of MethodNotFound: an agent with a cached
+        // tool list (or a local model following old instructions) learns why
+        // the tool is unavailable and how to enable it.
+        return { isError: true, content: [{ type: 'text', text: disabledToolMessage(name, deps.toolProfile) }] };
+    }
+    // Name checks need no engine, so they answer before waiting on readiness;
+    // otherwise an unknown name would hang until the project finished indexing.
+    const handler = toolRegistry.get(name);
+    if (!handler) throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     if (deps.isTerminal() && deps.getTerminalCoordinator()) {
         // A-4(2): progress is not relayed across the Host↔Terminal IPC boundary
         // (see ipc-coordinator.ts) — Terminal-forwarded tools report no progress.
         return deps.getTerminalCoordinator()!.forwardExecuteTool(name, args);
     }
     await deps.waitUntilReady();
-
-    const handler = toolRegistry.get(name);
-    if (!handler) throw new McpError(ErrorCode.MethodNotFound, `Unknown tool: ${name}`);
     try {
         return await handler.execute(args, deps, progress);
     } catch (err) {

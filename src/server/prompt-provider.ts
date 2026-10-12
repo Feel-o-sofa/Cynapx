@@ -10,48 +10,58 @@ import {
     McpError,
     ErrorCode
 } from "@modelcontextprotocol/sdk/types.js";
+import { ToolProfile, isPromptEnabled } from '../utils/tool-profile';
+
+const PROMPT_DEFINITIONS = [
+    {
+        name: "onboard-codebase",
+        description: "Bootstrap context on an unfamiliar codebase using the project overview"
+    },
+    {
+        name: "explain-impact",
+        description: "Explain ripple effect of changing a symbol",
+        arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
+    },
+    {
+        name: "find-similar",
+        description: "Find semantically similar symbols (duplicates, patterns, refactor candidates)",
+        arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
+    },
+    {
+        name: "trace-history",
+        description: "Explain why a symbol exists from its commit history (requires backfill_history)",
+        arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
+    },
+    {
+        name: "check-health",
+        description: "Check graph health and consistency"
+    },
+    {
+        name: "refactor-safety",
+        description: "Perform a comprehensive safety check before refactoring a symbol",
+        arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
+    }
+];
 
 export function registerPromptHandlers(
     sdkServer: SdkMcpServer,
-    waitUntilReady: () => Promise<void>
+    waitUntilReady: () => Promise<void>,
+    profile: ToolProfile = 'full'
 ): void {
     sdkServer.setRequestHandler(ListPromptsRequestSchema, async () => ({
-        prompts: [
-            {
-                name: "onboard-codebase",
-                description: "Bootstrap context on an unfamiliar codebase using the project overview"
-            },
-            {
-                name: "explain-impact",
-                description: "Explain ripple effect of changing a symbol",
-                arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
-            },
-            {
-                name: "find-similar",
-                description: "Find semantically similar symbols (duplicates, patterns, refactor candidates)",
-                arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
-            },
-            {
-                name: "trace-history",
-                description: "Explain why a symbol exists from its commit history (requires backfill_history)",
-                arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
-            },
-            {
-                name: "check-health",
-                description: "Check graph health and consistency"
-            },
-            {
-                name: "refactor-safety",
-                description: "Perform a comprehensive safety check before refactoring a symbol",
-                arguments: [{ name: "qualified_name", description: "The qualified name of the symbol", required: true }]
-            }
-        ]
+        prompts: PROMPT_DEFINITIONS.filter(p => isPromptEnabled(p.name, profile))
     }));
 
     sdkServer.setRequestHandler(GetPromptRequestSchema, async (request) => {
-        await waitUntilReady();
         const name = request.params.name;
         const args = request.params.arguments || {};
+
+        if (!isPromptEnabled(name, profile)) {
+            throw new McpError(ErrorCode.InvalidRequest,
+                `Prompt '${name}' relies on tools disabled under the '${profile}' tool profile. ` +
+                `Restart the Cynapx server with CYNAPX_TOOL_PROFILE=full to enable it.`);
+        }
+        await waitUntilReady();
 
         if (name === "onboard-codebase") {
             return {

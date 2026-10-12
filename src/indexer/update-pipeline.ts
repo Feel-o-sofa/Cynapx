@@ -15,6 +15,7 @@ import { toCanonical } from '../utils/paths';
 import { CrossProjectResolver } from './cross-project-resolver';
 import { StructuralTagger } from './structural-tagger';
 import { EmbeddingManager } from './embedding-manager';
+import { createEmbeddingProviderFromEnv } from './embedding-providers';
 import { CodeNode } from '../types';
 import { GraphEngine } from '../graph/graph-engine';
 import { FullScanStrategy, IncrementalSyncStrategy } from './sync-strategies';
@@ -39,7 +40,7 @@ export class UpdatePipeline {
         private projectPath?: string,
         private graphEngine?: GraphEngine
     ) {
-        this.embeddingManager = new EmbeddingManager(this.db, this.nodeRepo);
+        this.embeddingManager = new EmbeddingManager(this.db, this.nodeRepo, createEmbeddingProviderFromEnv());
         if (this.projectPath) {
             this.crossProjectResolver = new CrossProjectResolver(this.nodeRepo, this.projectPath);
         }
