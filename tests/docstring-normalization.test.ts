@@ -23,10 +23,15 @@
  * deterministic and require no DB / grammar / filesystem access.
  */
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import { rustDescriptor } from '../src/indexer/languages/rust';
 import { csharpDescriptor } from '../src/indexer/languages/csharp';
 import { goDescriptor } from '../src/indexer/languages/go';
 import { gdscriptDescriptor } from '../src/indexer/languages/gdscript';
+import { kotlinDescriptor } from '../src/indexer/languages/kotlin';
+import { phpDescriptor } from '../src/indexer/languages/php';
 import { createLanguageProvider } from '../src/indexer/languages';
 import { TreeSitterParser } from '../src/indexer/tree-sitter-parser';
 import type { LanguageProvider } from '../src/indexer/types';
@@ -129,6 +134,55 @@ describe('normalizeDocstring (per-language)', () => {
         });
     });
 
+    describe('Kotlin', () => {
+        const normalize = kotlinDescriptor.normalizeDocstring!;
+
+        it('is defined', () => {
+            expect(typeof normalize).toBe('function');
+        });
+
+        it('strips KDoc block markers', () => {
+            const raw = '/**\n * Adds two numbers.\n * @param a left operand\n */';
+            expect(normalize(raw)).toBe('Adds two numbers.\n@param a left operand');
+        });
+
+        it('strips single-line KDoc', () => {
+            expect(normalize('/** Multiplies. */')).toBe('Multiplies.');
+        });
+
+        it('strips // line comment markers', () => {
+            expect(normalize('// plain note\n// second line')).toBe('plain note\nsecond line');
+        });
+
+        it('returns empty string for empty / whitespace-only input', () => {
+            expect(normalize('')).toBe('');
+            expect(normalize('/** */')).toBe('');
+        });
+    });
+
+    describe('PHP', () => {
+        const normalize = phpDescriptor.normalizeDocstring!;
+
+        it('is defined', () => {
+            expect(typeof normalize).toBe('function');
+        });
+
+        it('strips PHPDoc block markers', () => {
+            const raw = '/**\n * Persists the user.\n * @return void\n */';
+            expect(normalize(raw)).toBe('Persists the user.\n@return void');
+        });
+
+        it('strips // and # line comment markers', () => {
+            expect(normalize('// slash note')).toBe('slash note');
+            expect(normalize('# hash note')).toBe('hash note');
+        });
+
+        it('returns empty string for empty / whitespace-only input', () => {
+            expect(normalize('')).toBe('');
+            expect(normalize('/** */')).toBe('');
+        });
+    });
+
     describe('GDScript', () => {
         const normalize = gdscriptDescriptor.normalizeDocstring!;
 
@@ -197,5 +251,48 @@ describe('extractTreeSitterDocstring', () => {
     it('returns undefined when there is no leading comment or docstring', () => {
         const node = { previousNamedSibling: null, firstNamedChild: null };
         expect(extractDocstring(node)).toBeUndefined();
+    });
+
+    it('recognizes a Kotlin KDoc multiline_comment sibling', () => {
+        // tree-sitter-kotlin emits KDoc blocks as `multiline_comment` nodes,
+        // which the sibling-type check previously dropped entirely.
+        const provider = createLanguageProvider(kotlinDescriptor);
+        const node = {
+            previousNamedSibling: {
+                type: 'multiline_comment',
+                text: '/**\n * Adds two numbers.\n */',
+                firstNamedChild: null,
+            },
+            firstNamedChild: null,
+        };
+        expect(extractDocstring(node, provider)).toBe('Adds two numbers.');
+    });
+});
+
+describe('Kotlin KDoc end-to-end capture', () => {
+    it('stores the KDoc of a Kotlin function as its docstring via parse()', async () => {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cynapx-kdoc-'));
+        try {
+            const file = path.join(tmpDir, 'calc.kt');
+            fs.writeFileSync(file, [
+                'package demo',
+                '',
+                'fun first() {}',
+                '',
+                '/**',
+                ' * Adds two numbers.',
+                ' */',
+                'fun add(a: Int, b: Int): Int = a + b',
+                '',
+            ].join('\n'));
+
+            const parser = new TreeSitterParser();
+            const { nodes } = await parser.parse(file, 'commit1', 1);
+            const add = nodes.find(n => n.qualified_name.endsWith('#add'));
+            expect(add).toBeDefined();
+            expect(add!.docstring).toBe('Adds two numbers.');
+        } finally {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
     });
 });

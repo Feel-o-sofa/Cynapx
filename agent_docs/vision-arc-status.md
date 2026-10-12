@@ -112,12 +112,70 @@
 
 ---
 
+## P8 후속 정밀화·확장 (2026-07-13 완료분)
+
+v3.1.0 이후 "향후 후보 (미착수)" 목록 중 두 항목이 처리됐다 (브랜치 `claude/cynapx-status-goals-15uoop`,
+vitest 839→860):
+
+- **P8-2 셀렉터 vs 식별자 정밀화 — [DONE]**: 조사 결과 실제 오해소 경로는 두 가지였다.
+  1. **대소문자 버그(잠재)**: `localSymbolMap` 키는 canonical(소문자) qname에서 파생되는데 조회는
+     원본 대소문자 `targetName`으로 수행 — *대문자가 포함된 심볼(Go/C#/Java/Rust 대부분)의 파일 내
+     호출 해소가 조용히 실패*하고 있었다. 조회를 소문자 정규화(`lookupKey`)로 수정.
+  2. **수신자-경유 호출 오해소**: Java `obj.configure()`는 bare `identifier`만 캡처되고, Kotlin 내비게이션
+     호출은 수신자 `simple_identifier`가 캡처됨 — 동일 파일의 동명 자유함수로 잘못 정적 해소될 수 있었다.
+     `isReceiverQualifiedCall()` 가드 추가: 수신자 컨텍스트(`selector_expression`/`navigation_expression`/
+     `attribute`/`field_expression`/`member_expression`/`member_access_expression`, Java는
+     `method_invocation`의 `object` 필드 존재)로 캡처된 이름은 bare name 유지 + `dynamic:true`.
+  (참고: Go/C# 쿼리는 셀렉터 표현식 *전체 텍스트*를 캡처하므로 점(.) 포함 규칙으로 이미 안전했다.)
+- **Kotlin KDoc 캡처 — [DONE]**: tree-sitter-kotlin은 KDoc을 `multiline_comment` 노드로 방출하는데
+  `extractTreeSitterDocstring`의 sibling 타입 목록에 없어 *KDoc이 통째로 유실*되고 있었다. 타입 추가 +
+  Kotlin `normalizeDocstring` 훅(KDoc 마커 스트립) 신설.
+- **나머지 언어 docstring/테스트-스펙 확장 — [DONE (Kotlin/PHP/C++)]**:
+  - **Kotlin**: `@Test` 어노테이션 함수(JUnit/kotlin.test, 정규화된 `@org.junit.jupiter.api.Test` 포함) +
+    `assert*` 단언.
+  - **PHP**: 테스트 클래스(`*Test`/`extends TestCase`) 내 PHPUnit `test*` 메서드·`#[Test]` 속성 메서드 +
+    `$this->assert*`/`self::assert*`/`expect*` 단언. PHPDoc `normalizeDocstring` 훅 동반.
+  - **C++**: GoogleTest `TEST`/`TEST_F`/`TEST_P`/`TYPED_TEST` 블록(`Suite.Name` 스펙) + `EXPECT_*`/`ASSERT_*` 단언.
+  - **C**: 표준 테스트 프레임워크 부재(Unity/CUnit 등 비표준)로 의도적 제외 — 훅 없는 언어의 무-스펙
+    동작은 기존 게이트로 커버됨.
+
+---
+
+## P8 후속 2차 사이클 (2026-07-15 완료분)
+
+미착수 목록의 나머지 세 항목을 처리했다 (브랜치 `claude/cynapx-status-goals-15uoop`, vitest 860→875):
+
+- **C# 테스트-스펙 추출 — [DONE]**: xUnit `[Fact]`/`[Theory]`, NUnit `[Test]`/`[TestCase]`/`[TestCaseSource]`,
+  MSTest `[TestMethod]`/`[DataTestMethod]` 속성 메서드(정규화된 `[Xunit.Fact]` 포함) +
+  `Assert.*`/`CollectionAssert.*`/`StringAssert.*` 단언.
+- **P8 Go 모듈 임포트 해소 — [DONE]**: `resolveImport`가 파일 기준 가장 가까운 go.mod를 찾아(디렉터리별 캐시)
+  모듈 경로 하위 임포트를 해당 패키지 디렉터리의 실제 `.go` 파일들(비-`_test.go`)로 해소해 file-to-file
+  `depends_on` 엣지를 방출. 외부 임포트·미해소 경로는 기존 `package:` 형식 유지. 미인덱스 후보 엣지는
+  파이프라인이 무해하게 드롭(P8-3과 동일 계약).
+- **테스트-스펙 `targetQname` 베스트-에포트 해소 — [DONE]**: `target_qname`은 `get_related_tests`/
+  `get_symbol_details`의 조회 키인데 tree-sitter 언어 스펙은 전부 undefined여서 *역참조가 불가능*했다.
+  공유 헬퍼 `inferProdFilePath()`(테스트 파일명 규약 + Maven식 `src/test → src/main` 매핑) 기반으로:
+  - **Go**: `foo_test.go`+`TestAdd` → `foo.go#add` 심볼-레벨(서브테스트는 부모 타깃 상속)
+  - **Rust**: 같은 파일의 `#[cfg(test)]` 테스트 → 자기 파일 qname(파일-레벨 폴백에 즉시 매칭)
+  - **Python/Java/Kotlin/C#/C++/PHP**: 파일-레벨 타깃(`test_x.py`/`XTest.java`/`x_test.cpp` 등)
+  - 전부 canonical 형태로 방출(저장 노드 qname과 정확히 일치). 미해소 타깃은 조회에 안 걸릴 뿐 무해.
+
+---
+
+## v4.0.0 재초점 (2026-10-12)
+
+v4.0.0부터 Cynapx의 정체성은 **"에이전트 약점 보완 도구"** 다 (오너 확정, `agent_docs/HANDOVER.md` §1).
+기본 `frontier` 프로파일이 21개 도구를 제공하고, 임베딩·유사도·처방 계열 6종은 숨김(삭제 아님) —
+`CYNAPX_TOOL_PROFILE=full`이 소형 로컬 모델용으로 전부 복원한다. 이 문서의 P1–P9 기능은 모두 코드에
+남아 있으며, 그중 P9(시맨틱 검색) 계열은 `full` 프로파일 전용이 되었다.
+
 ## 향후 후보 (미착수)
 
-- **P8 Go 모듈 임포트 해소**: go.mod 모듈 경로 매핑 필요(현 범위 제외).
-- **P8-2 셀렉터 vs 식별자 정밀화**: Go `c.Configure()` 메서드 호출이 동명 자유함수로 잘못 해소될 수 있는
-  식별자-온리 모호성(P8-2 에이전트가 플래그함).
-- **테스트-스펙 `targetQname` 교차 파일 해소**: tree-sitter 언어는 현재 `targetQname` undefined(베스트-에포트).
-- **나머지 언어 docstring/테스트-스펙 확장**: C/C++/PHP/Kotlin 등.
-- **대형 의존성 메이저 업그레이드(Express 5 / TypeScript 6)**: 회귀 위험 높고 신규 역량 없음 — 의도적 후순위
-  (diagnostic-v30 L-22 참조).
+실행 지침과 우선순위는 `agent_docs/HANDOVER.md`가 단일 원천이다. 요약:
+
+- **MCP TS SDK v2 전환 + 도구 통합(21→~14)**: 2026-07-28 스펙 개정(stateless 기본, MRTR)이 출시됐고
+  C# SDK는 v2를 냈으나 TS SDK는 2026-10-12 기준 `latest: 1.32.1`. 주간 CI 워크플로가 2.x 출현을 감시한다.
+- **엣지 정밀도 골드셋**: callers/impact 가치는 호출 해소 정밀도에 종속 — 폴리글랏 골드셋으로 측정 가능하게.
+- **테스트-스펙 심볼-레벨 정밀화 확대**: 현재 Go만 심볼-레벨 — 실사용 피드백 후 재검토(기존 항목 유지).
+- **Express 5 / TypeScript 7 등 메이저**: 보류(HANDOVER D3/D4). 참고: MCP SDK가 이미 express 5를 전이
+  의존으로 가져오므로 트리에 express 4·5가 공존한다.

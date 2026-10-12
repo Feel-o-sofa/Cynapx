@@ -15,6 +15,7 @@ import { toCanonical } from '../utils/paths';
 import { CrossProjectResolver } from './cross-project-resolver';
 import { StructuralTagger } from './structural-tagger';
 import { EmbeddingManager } from './embedding-manager';
+import { createEmbeddingProviderFromEnv } from './embedding-providers';
 import { CodeNode } from '../types';
 import { GraphEngine } from '../graph/graph-engine';
 import { FullScanStrategy, IncrementalSyncStrategy } from './sync-strategies';
@@ -39,7 +40,7 @@ export class UpdatePipeline {
         private projectPath?: string,
         private graphEngine?: GraphEngine
     ) {
-        this.embeddingManager = new EmbeddingManager(this.db, this.nodeRepo);
+        this.embeddingManager = new EmbeddingManager(this.db, this.nodeRepo, createEmbeddingProviderFromEnv());
         if (this.projectPath) {
             this.crossProjectResolver = new CrossProjectResolver(this.nodeRepo, this.projectPath);
         }
@@ -270,6 +271,7 @@ export class UpdatePipeline {
 
         type BatchResult =
             | { event: FileChangeEvent; delta: DeltaGraph; status: 'success' }
+            | { event: FileChangeEvent; status: 'skipped' }
             | { event: FileChangeEvent; status: 'error'; error: string };
 
         // Chunk parse tasks to avoid overwhelming the WorkerPool's queue.
@@ -281,6 +283,11 @@ export class UpdatePipeline {
             const chunk = events.slice(i, i + CHUNK_SIZE);
             const chunkResults = await Promise.all(chunk.map(async (event): Promise<BatchResult> => {
                 if (event.event === 'DELETE') return { event, delta: { nodes: [], edges: [] }, status: 'success' as const };
+                // Tracked files no parser handles (LICENSE, Dockerfile, .gitignore,
+                // query files, ...) are not failures. Counting them as failures
+                // held lastIndexedCommit back forever, so every start re-indexed
+                // the whole repository.
+                if (!this.parser.supports(event.file_path)) return { event, status: 'skipped' as const };
                 try {
                     const delta = this.workerPool
                         ? await this.workerPool.runTask({ filePath: event.file_path, commit: event.commit, version })
@@ -295,6 +302,8 @@ export class UpdatePipeline {
         }
 
         const results = allResults;
+        const skipped = results.filter(r => r.status === 'skipped').length;
+        if (skipped > 0) log.info(`Skipped ${skipped} file(s) with no parser.`);
 
         // H-4: pre-fetch git history for every non-DELETE file BEFORE opening
         // the transaction, so the transaction body below contains zero `await`

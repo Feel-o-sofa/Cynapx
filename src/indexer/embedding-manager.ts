@@ -335,6 +335,15 @@ export class PythonEmbeddingProvider implements EmbeddingProvider {
 }
 
 /**
+ * True when a provider cannot produce embeddings: the null provider (embeddings
+ * off, the frontier-profile default) or a sidecar that exhausted its restarts.
+ */
+export function isEmbeddingUnavailable(provider: EmbeddingProvider): boolean {
+    return (provider as { unavailable?: boolean }).unavailable === true
+        || (provider as { fallbackMode?: boolean }).fallbackMode === true;
+}
+
+/**
  * NullEmbeddingProvider is used when embeddings are unavailable
  * (e.g., Python sidecar failed and max retries exhausted).
  * Returns null/empty values, allowing the system to degrade gracefully.

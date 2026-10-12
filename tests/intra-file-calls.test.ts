@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
-import { TreeSitterParser } from '../src/indexer/tree-sitter-parser';
+import { TreeSitterParser, isReceiverQualifiedCall } from '../src/indexer/tree-sitter-parser';
 import type { RawCodeEdge } from '../src/indexer/types';
 
 let tmpDir: string;
@@ -109,6 +109,87 @@ func Run() {
         expect(configureCall!.dynamic).toBe(true);
     });
 
+    it('resolves an uppercase same-file free call while the same-named method call stays dynamic (Go)', async () => {
+        // localSymbolMap keys come from canonicalized (lowercase) qnames, so the
+        // lookup must be case-insensitive: the free call `Configure()` resolves,
+        // while the receiver call `c.Configure()` is never resolved to it.
+        const src = `package main
+
+type Client struct{}
+
+func (c *Client) Configure() {}
+
+func Configure() {}
+
+func Run() {
+    c := &Client{}
+    c.Configure()
+    Configure()
+}
+`;
+        const file = path.join(tmpDir, 'mixed.go');
+        fs.writeFileSync(file, src);
+
+        const parser = new TreeSitterParser();
+        const { edges } = await parser.parse(file, 'commit1', 1);
+
+        const fromRun = callEdges(edges).filter(e => e.from_qname.endsWith('#run'));
+        const resolved = fromRun.filter(e => e.to_qname.includes('#configure') && e.dynamic === false);
+        const dynamic = fromRun.filter(e => e.to_qname === 'c.Configure' && e.dynamic === true);
+
+        // Exactly one statically resolved edge (the free call) and one dynamic
+        // dotted edge (the receiver call keeps its selector text).
+        expect(resolved.length).toBe(1);
+        expect(dynamic.length).toBe(1);
+    });
+
+    it('does not resolve a C# member-access invocation to a same-file free method', async () => {
+        const src = `class Runner {
+    static void Configure() {}
+
+    static void Run(Client c) {
+        c.Configure();
+    }
+}
+`;
+        const file = path.join(tmpDir, 'runner.cs');
+        fs.writeFileSync(file, src);
+
+        const parser = new TreeSitterParser();
+        const { edges } = await parser.parse(file, 'commit1', 1);
+
+        const memberCall = callEdges(edges).find(e => e.to_qname.toLowerCase().includes('configure') && e.dynamic);
+        expect(memberCall).toBeDefined();
+        // The member access keeps its dotted selector text and is never
+        // statically resolved to the same-file free method.
+        expect(memberCall!.to_qname).toBe('c.Configure');
+        const misresolved = callEdges(edges).filter(e => e.to_qname.includes('#configure') && e.dynamic === false);
+        expect(misresolved.length).toBe(0);
+    });
+
+    it('does not resolve a Java receiver invocation but resolves the bare one', async () => {
+        const src = `class Runner {
+    void configure() {}
+
+    void run(Client c) {
+        c.configure();
+        configure();
+    }
+}
+`;
+        const file = path.join(tmpDir, 'Runner.java');
+        fs.writeFileSync(file, src);
+
+        const parser = new TreeSitterParser();
+        const { edges } = await parser.parse(file, 'commit1', 1);
+
+        const fromRun = callEdges(edges).filter(e => e.from_qname.endsWith('#run'));
+        const resolved = fromRun.filter(e => e.to_qname.includes('#configure') && e.dynamic === false);
+        const dynamic = fromRun.filter(e => e.to_qname === 'configure' && e.dynamic === true);
+        expect(resolved.length).toBe(1);
+        expect(dynamic.length).toBe(1);
+    });
+
     it('only the bare same-file call is resolved; member access is not captured as a resolved call', async () => {
         // A direct same-file call `method()` resolves to `#method`. A member
         // access `ns.method()` is NOT an identifier-form call target, so it is
@@ -140,5 +221,49 @@ function caller(): void {
         // there is exactly one resolved `#method` edge, the direct call.
         // (The member access `ns.method()` does not contribute a second one.)
         expect(resolved.length).toBe(1);
+    });
+});
+
+describe('isReceiverQualifiedCall (direct gates)', () => {
+    // Minimal stand-ins exposing only the fields the function reads:
+    // parent.type and parent.childForFieldName('object').
+    function nameNodeWithParent(parentType: string, objectField: unknown = null): any {
+        return {
+            parent: {
+                type: parentType,
+                childForFieldName: (field: string) => (field === 'object' ? objectField : null),
+            },
+        };
+    }
+
+    it('returns false for undefined and for a parentless node', () => {
+        expect(isReceiverQualifiedCall(undefined)).toBe(false);
+        expect(isReceiverQualifiedCall({ parent: null } as any)).toBe(false);
+    });
+
+    it('returns true for every receiver-context parent type', () => {
+        for (const type of [
+            'selector_expression',      // Go
+            'member_access_expression', // C#
+            'navigation_expression',    // Kotlin
+            'attribute',                // Python / GDScript
+            'field_expression',         // Rust / C / C++
+            'member_expression',        // JavaScript / TypeScript
+        ]) {
+            expect(isReceiverQualifiedCall(nameNodeWithParent(type))).toBe(true);
+        }
+    });
+
+    it('returns true for a Java method_invocation with an object field', () => {
+        expect(isReceiverQualifiedCall(nameNodeWithParent('method_invocation', { type: 'identifier' }))).toBe(true);
+    });
+
+    it('returns false for a Java method_invocation without an object field (free call)', () => {
+        expect(isReceiverQualifiedCall(nameNodeWithParent('method_invocation', null))).toBe(false);
+    });
+
+    it('returns false for non-receiver parent contexts', () => {
+        expect(isReceiverQualifiedCall(nameNodeWithParent('call_expression'))).toBe(false);
+        expect(isReceiverQualifiedCall(nameNodeWithParent('function_call_expression'))).toBe(false);
     });
 });

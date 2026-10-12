@@ -111,7 +111,7 @@ Head Agent (Opus)
 | `cynapx-dev` | 현재 워크트리 `src/` | 개발 버전 (작업 중) |
 
 - `cynapx-dev`는 워크트리의 `.mcp.json`에만 정의되며, `cwd`가 해당 워크트리로 고정됨
-- `ts-node`로 실행하므로 빌드 불필요
+- `tsx`로 실행하므로 빌드 불필요
 
 ### 5.2 소스 변경 후 반영 절차
 
@@ -128,11 +128,11 @@ Head Agent (Opus)
   "mcpServers": {
     "cynapx": {
       "command": "npx",
-      "args": ["ts-node", "src/bootstrap.ts", "--path", "."]
+      "args": ["tsx", "src/bootstrap.ts", "--path", "."]
     },
     "cynapx-dev": {
       "command": "npx",
-      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
+      "args": ["tsx", "src/bootstrap.ts", "--path", "."],
       "cwd": "C:/Workspace/ProjectAnalyzer/.claude/worktrees/<worktree-name>"
     }
   }

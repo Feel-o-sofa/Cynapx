@@ -16,12 +16,7 @@ import { getAuditLogger } from './utils/audit-logger';
 import { InteractiveShell } from './server/interactive-shell';
 import { WorkspaceManager, EngineContext } from './server/workspace-manager';
 import { LanguageRegistry } from './indexer/language-registry';
-import { TreeSitterParser } from './indexer/tree-sitter-parser';
-import { TypeScriptParser } from './indexer/typescript-parser';
-import { CompositeParser } from './indexer/composite-parser';
-import { YamlParser } from './indexer/yaml-parser';
-import { MarkdownParser } from './indexer/markdown-parser';
-import { JsonConfigParser } from './indexer/json-config-parser';
+import { createDefaultParser } from './indexer/default-parser';
 import { GitService } from './indexer/git-service';
 import { UpdatePipeline } from './indexer/update-pipeline';
 import { FileWatcher } from './watcher/file-watcher';
@@ -128,9 +123,7 @@ async function bootstrap() {
         console.error(`[*] Initializing Host Engine for: ${ctx.projectPath}`);
         await workspaceManager.initializeEngine(ctx.projectHash);
 
-        const treeSitterParser = new TreeSitterParser();
-        const typescriptParser = new TypeScriptParser();
-        const compositeParser = new CompositeParser([typescriptParser, treeSitterParser, new YamlParser(), new MarkdownParser(), new JsonConfigParser()]);
+        const compositeParser = createDefaultParser();
         const gitService = new GitService(ctx.projectPath);
         const workerPool = lifecycle.track(new WorkerPool(Math.min(os.cpus().length, 4)));
         // H-6: hold the worker pool on the context so unmountProject(hash) can
@@ -407,8 +400,6 @@ async function bootstrap() {
         }
     };
 
-    await acquireAndRun();
-
     // [Restoration 3] Dynamic One-Shot CLI Argument Parsing
     let command: string | undefined;
     const commandArgs: any = {};
@@ -425,6 +416,35 @@ async function bootstrap() {
             } else { commandArgs[key] = true; }
         }
     }
+
+    let shuttingDown = false;
+    const shutdown = async () => {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        console.error("\n[*] Shutting down gracefully...");
+        await lifecycle.disposeAll();
+        await lockManager.release();
+        process.exit(0);
+    };
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+    // MCP stdio lifecycle: a client disconnects by closing the server's stdin
+    // and waiting for it to exit. Without this the server outlives its client,
+    // and if the client's follow-up SIGTERM only reaches a wrapper (npx/tsx),
+    // the orphan keeps holding the singleton lock and IPC host.
+    //
+    // The transport also connects before the initial index sync: a first index
+    // (or a start after many commits) can outlast a client's connect timeout,
+    // and tools already block on readiness until markReady(true).
+    const stdioMode = !options.interactive && !options.api && !command;
+    if (stdioMode) {
+        process.stdin.once('end', shutdown);
+        process.stdin.once('close', shutdown);
+        await mcpServer.start();
+        console.error("[*] MCP Server ready on stdio (index sync continues in the background).");
+    }
+
+    await acquireAndRun();
 
     if (command && !options.interactive && !options.api) {
         console.error(`[*] One-Shot CLI: ${command}`);
@@ -477,19 +497,8 @@ async function bootstrap() {
     if (options.interactive) {
         const shell = new InteractiveShell(mcpServer);
         await shell.start();
-    } else if (!options.api && !command) {
-        await mcpServer.start();
-        console.error("[*] MCP Server ready on stdio.");
     }
 
-    const shutdown = async () => {
-        console.error("\n[*] Shutting down gracefully...");
-        await lifecycle.disposeAll();
-        await lockManager.release();
-        process.exit(0);
-    };
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
 }
 
 bootstrap().catch(err => {

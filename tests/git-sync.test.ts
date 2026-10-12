@@ -122,6 +122,7 @@ describe('GitService.getLatestCommitsForFiles() — O-2 single pass', () => {
  */
 function makeParser(): CodeParser {
     return {
+        supports: () => true,
         async parse(filePath: string, commit: string, version: number): Promise<DeltaGraph> {
             const qname = `${path.basename(filePath)}#sym`;
             return {

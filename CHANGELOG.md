@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.0.0] - 2026-10-12
+
+Cynapx is refocused as a layer that **complements** frontier AI agents instead of competing with them: a new default `frontier` tool profile serves the 21 tools that cover what an agent cannot do on its own, and keeps embeddings off. Nothing was removed — `CYNAPX_TOOL_PROFILE=full` restores all 27 tools and the embedding sidecar for smaller local models. The release also clears every known advisory (12 → 0), repairs the source-run path and the stdio shutdown lifecycle, and ships the P8 polyglot follow-ups and availability fixes. **No schema change.** A re-index is recommended to pick up new docstrings, test specs and corrected call edges. See [RELEASE_NOTES_v4.0.0.md](./RELEASE_NOTES_v4.0.0.md).
+
+### Breaking
+- **Default tool profile is `frontier` (21 of 27 tools)** — `find_similar_symbols`, `propose_refactor`, `discover_latent_policies`, `export_graph`, `re_tag_project`, `get_remediation_strategy` and the `find-similar` prompt are hidden by default. Set `CYNAPX_TOOL_PROFILE=full` to restore them; calling a hidden tool returns an error that says so
+- **Embeddings are off by default** — without `CYNAPX_EMBED_PROVIDER`, the `frontier` profile uses no embedding provider (no Python sidecar). `search_symbols` answers `semantic: true` / `query_embedding` requests from the keyword index and appends a notice. `full` keeps the Jina sidecar default
+- **Source runner is `tsx`** — `npm start`, `npm run dev`, `npm run admin`, `.mcp.json` and `.claude/launch.json` use `tsx`; `ts-node` and `ts-node-dev` were removed (the built `dist/` entry point is unchanged)
+
+### Added
+- **Tool profiles** (`CYNAPX_TOOL_PROFILE=frontier|full`) — profile-aware tool list, prompt list and operator instructions; hidden tools keep their code and tests
+- **Weekly scheduled maintenance workflow** — prod audit gate, full-tree audit and outdated reports, MCP TypeScript SDK v2 watch, type check and tests; a failed scheduled run opens one deduplicated issue
+- **stdio lifecycle e2e gate** — drives the server through the real source runner: initialize, JSON-only stdout, clean exit on stdin EOF
+- **C# test-spec extraction** — xUnit `[Fact]`/`[Theory]`, NUnit `[Test]`/`[TestCase]`/`[TestCaseSource]`, and MSTest `[TestMethod]`/`[DataTestMethod]` methods (including qualified attributes like `[Xunit.Fact]`) with their `Assert.*` assertions are captured as `test_specs`
+- **Go module import resolution** — imports under the nearest `go.mod`'s module path now resolve to the package's actual `.go` files (cached go.mod/package-dir lookups), producing real file-to-file `depends_on` edges; external imports keep the `package:` form
+- **Best-effort `targetQname` for tree-sitter test specs** — test specs now link to the production symbol/file they exercise, so `get_related_tests` / `get_symbol_details` can surface them: Go `foo_test.go` + `TestAdd` → `foo.go#add` (symbol-level, subtests inherit); Rust same-file `#[test]` → its own file qname; Python/Java/Kotlin/C#/C++/PHP → file-level target via naming conventions (`test_x.py`, `XTest.java` with `src/test → src/main` mapping, `x_test.cpp`, …); unresolvable targets simply never match a lookup
+- **Kotlin test-spec extraction** — `@Test`-annotated functions (JUnit and `kotlin.test`, including fully qualified annotations) with their `assert*` assertions are captured as `test_specs`
+- **PHP test-spec extraction** — PHPUnit `test*` methods and `#[Test]`-attribute methods inside test classes (`*Test` / extends `TestCase`), with `$this->assert*`, `self::assert*`, and `expect*` assertions
+- **C++ test-spec extraction** — GoogleTest `TEST` / `TEST_F` / `TEST_P` / `TYPED_TEST` blocks captured as `Suite.Name` specs with their `EXPECT_*` / `ASSERT_*` assertions
+- **Availability verification report and probe** — `docs/availability-verification.md` (99.9% uptime feasibility assessment: resilience inventory, 90s soak + fault-injection measurements, SIGKILL MTTR 0.7–2.7s, SLO arithmetic, operational preconditions) plus the reusable `scripts/availability-probe.mjs` soak/fault-injection harness
+- **Kotlin and PHP docstring normalizers** — KDoc and PHPDoc block markers (and `//` / `#` line-comment markers) are stripped so stored docstrings are clean semantic text
+
+### Fixed
+- **Incremental indexing works again; startups no longer re-index everything** — tracked files no parser handles (`LICENSE`, `Dockerfile`, `.gitignore`, …) were counted as parse failures, which held `lastIndexedCommit` back forever, so every start re-indexed the whole repository (~30 s for 286 files). They are now skipped. Workers and the main thread share one parser set (`createDefaultParser()`); the main thread's set had lacked `DependencyParser`
+- **MCP `initialize` is answered before the initial index sync** — a first index, or a start after many commits, delayed it past the client's 30 s connect timeout (32.6 s measured on this repository). Tools still wait for the index before answering. Cold start is now ~2 s
+- **The server now exits when the MCP client closes stdin** — it ignored stdin EOF and outlived every client; when the client's follow-up SIGTERM only reached the `npx`/`tsx` wrapper, the orphan kept the singleton lock and IPC host
+- **Source-run path repaired** — `npm start`, `npm run dev`, `npm run admin`, every `.claude/launch.json` entry and the repository's `.mcp.json` server crashed at startup since 2026-06-15 (`.js`-suffixed imports that `ts-node` could not resolve), which is why the repository's own Cynapx MCP server failed to connect. Source-mode index workers now load through a `tsx/cjs` bootstrap
+- **Index-time embeddings honour `CYNAPX_EMBED_*`** — the indexer always started the Python sidecar regardless of configuration, so `=null` still spawned it and `=openai` searched vectors from a different model; query and index time now share one provider resolver
+- **Unknown tool names and hidden prompts answer immediately** — they previously waited for project readiness first and hung until indexing finished
+- **`.mcp.json` no longer ships a machine-specific `cynapx-dev` entry** — its `cwd` pointed at a Windows path to an ephemeral worktree; per-machine entries belong in local scope
+- **`/healthz` is exempt from the global rate limiter (AV-1)** — the liveness probe shared the per-IP 100 req/min budget with API traffic, so sustained legitimate load starved it into 429 and the Docker HEALTHCHECK would mark a healthy container unhealthy (restart loop). Reproduced empirically, fixed with a limiter `skip`, and gated. See `docs/availability-verification.md`
+- **Client faults no longer surface as 5xx (AV-2)** — malformed JSON and >1MB bodies rejected by the body parser fell through to the catch-all 500 handler, poisoning 5xx-based availability SLIs; the error handler now honours the parser's 4xx status (400/413). Verified by fault injection (30/30 correct), gated
+- **Kotlin KDoc capture** — KDoc blocks are emitted as `multiline_comment` nodes by the Kotlin grammar and were previously dropped entirely; they are now stored as the symbol's docstring
+- **Intra-file call resolution was case-sensitive against lowercased keys** — resolution silently failed for any symbol containing an uppercase letter (most Go/C#/Java/Rust names); lookups are now case-normalized, so e.g. a Go `Configure()` call resolves to the same-file `func Configure`
+- **Receiver-qualified calls no longer resolve to same-named free functions** — a method call through a receiver (Java `obj.configure()`, Kotlin navigation calls, member-access fallback paths) previously could be statically resolved to an unrelated same-file free function; such calls now keep their bare name and stay `dynamic`
+
+### Security
+- **12 prod advisories → 0, and the full tree including dev is at 0** — `simple-git` ^4.0.2 (2 critical), `@modelcontextprotocol/sdk` ^1.32.1 (high, outside the OAuth advisory band), `js-yaml` ^4.3.2 (high, reachable: the indexer parses repository YAML), `express` ^4.22.3, and override floors for `proxy-addr` (critical), `fast-uri`, `ip-address`, `qs`, `hono`, `@hono/node-server` and per-major `body-parser`; dev: `vitest`/`vite`/`postcss` refreshed and `ts-node-dev` (unmaintained since 2022) replaced
+- **Lockfile regenerated with npm 11** — npm 10.9.x crashes on any fresh resolve of this manifest (arborist `#loadPeerSet`), so the lockfile could no longer be refreshed; `npm ci` under npm 10 installs the result cleanly
+
 ## [3.1.0] - 2026-06-22
 
 A post-release refinement of the v3.0.0 Vision Arc: documentation corrected against source, the in-protocol agent guidance refreshed with new prompts and a repo playbook, and a security-hygiene fix to the Docker smoke script. **No breaking changes, no schema change, no re-index required.** See [RELEASE_NOTES_v3.1.0.md](./RELEASE_NOTES_v3.1.0.md).

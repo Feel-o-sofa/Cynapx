@@ -8,7 +8,7 @@
  * Reads project registry and SQLite DBs directly; no server required.
  *
  * Usage:
- *   npx ts-node src/cli/admin.ts [command]
+ *   npx tsx src/cli/admin.ts [command]
  *   node dist/cli/admin.js [command]
  *
  * Commands:

@@ -95,7 +95,10 @@ export const rustDescriptor: LanguageDescriptor = {
             specs.push({
                 testQname: `${fileQname}#${name}`,
                 title: name,
-                targetQname: undefined,
+                // #[cfg(test)] tests live beside the code they exercise, so the
+                // file itself is the target (matches the file-level fallback in
+                // get_related_tests).
+                targetQname: fileQname,
                 assertions: collectRustAsserts(fn),
                 filePath,
                 startLine: fn.startPosition.row + 1

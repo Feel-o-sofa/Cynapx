@@ -76,11 +76,16 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: windows-latest
+          # windows-latest ships Visual Studio 2026 (v18), which npm's bundled
+          # node-gyp cannot detect yet (nodejs/node-gyp#3282). tree-sitter-kotlin
+          # has no prebuilds, so `npm ci` must compile it with a detectable VS.
+          - os: windows-2022
             platform: win-x64
           - os: ubuntu-latest
             platform: linux-x64
-          - os: macos-13
+          # macos-13 was retired on 2025-12-04; macos-15-intel is GitHub's
+          # Intel replacement.
+          - os: macos-15-intel
             platform: darwin-x64
           - os: macos-latest
             platform: darwin-arm64

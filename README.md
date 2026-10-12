@@ -1,9 +1,9 @@
-# 🧠 Cynapx v3.0.0
+# 🧠 Cynapx v4.0.0
 ### High-Performance AI-Native Code Knowledge Engine for AI Agents
 
 **Cynapx** transforms a codebase into a persistent, queryable knowledge graph of symbols and relationships — giving AI agents real structural understanding that survives session boundaries, context resets, and model restarts.
 
-> **v3.0.0** completes the Vision Arc (P1–P9): docstring/intent capture, temporal context, agent annotation write-back, architecture drift detection, polyglot test-spec & import enrichment, and **model-agnostic semantic search** with pluggable embedding providers. See [RELEASE_NOTES_v3.0.0.md](./RELEASE_NOTES_v3.0.0.md).
+> **v4.0.0** refocuses Cynapx on what AI agents cannot do on their own — cross-session memory, symbol history, declared-architecture checks, reverse call relationships and deterministic metrics. The default `frontier` profile serves 21 tools; `CYNAPX_TOOL_PROFILE=full` keeps all 27 for smaller local models. See [RELEASE_NOTES_v4.0.0.md](./RELEASE_NOTES_v4.0.0.md).
 
 ---
 
@@ -91,11 +91,13 @@ initialize_project  →  mode: "existing"             # re-index a previously re
 initialize_project  →  mode: "custom", path: "/your/project"   # index any path on disk
 ```
 
-After indexing completes, all 27 tools are active. Use `get_setup_context` at any time to check status and disk usage.
+After indexing completes, the default `frontier` profile serves 21 tools; `CYNAPX_TOOL_PROFILE=full` serves all 27 (see **Tool Profiles** below). Use `get_setup_context` at any time to check status and disk usage.
 
 ---
 
-## 🛠️ MCP Tools — 27 Total
+## 🛠️ MCP Tools — 27 Total (21 in the default profile)
+
+Tools marked † are served only under the `full` profile.
 
 ### Setup & Lifecycle
 
@@ -105,15 +107,15 @@ After indexing completes, all 27 tools are active. Use `get_setup_context` at an
 | `get_project_overview` | Token-efficient whole-project briefing for agents bootstrapping context |
 | `initialize_project` | Index a project into the knowledge graph (`mode`: `"current"` \| `"existing"` \| `"custom"`) |
 | `purge_index` | Permanently delete the local index — requires `confirm: true` |
-| `re_tag_project` | Re-run structural characteristic tagging without full re-index |
+| `re_tag_project` † | Re-run structural characteristic tagging without full re-index |
 | `backfill_history` | Walk Git commit history and map commits to indexed symbols |
 
-### Symbol Navigation & Semantic Search
+### Symbol Navigation & Search
 
 | Tool | Description |
 |---|---|
-| `search_symbols` | Keyword search with optional semantic (vector) mode; accepts a pre-computed `query_embedding` for model-agnostic queries |
-| `find_similar_symbols` | K-NN semantic similarity over stored embeddings — duplicate detection, pattern discovery, refactoring |
+| `search_symbols` | Keyword search; with embeddings enabled, an optional semantic (vector) mode that also accepts a pre-computed `query_embedding` |
+| `find_similar_symbols` † | K-NN semantic similarity over stored embeddings — duplicate detection, pattern discovery, refactoring |
 | `get_symbol_details` | Full metrics, structural tags, churn history, and source snippet for a symbol |
 | `get_callers` | All symbols that directly call a given symbol |
 | `get_callees` | All symbols called by a given symbol |
@@ -134,8 +136,8 @@ After indexing completes, all 27 tools are active. Use `get_setup_context` at an
 |---|---|
 | `get_architecture` | Declared architecture intent + drift report against the real graph |
 | `check_architecture_violations` | Detect illegal layer/domain crossings and circular dependencies |
-| `get_remediation_strategy` | Generate a 3-step, prioritized fix plan for a detected violation |
-| `discover_latent_policies` | Surface implicit architectural patterns encoded in the graph |
+| `get_remediation_strategy` † | Generate a 3-step, prioritized fix plan for a detected violation |
+| `discover_latent_policies` † | Surface implicit architectural patterns encoded in the graph |
 
 ### Quality & Risk
 
@@ -150,9 +152,26 @@ After indexing completes, all 27 tools are active. Use `get_setup_context` at an
 
 | Tool | Description |
 |---|---|
-| `propose_refactor` | Risk-aware refactoring proposal anchored to the symbol's actual graph position |
-| `export_graph` | Structural summary of the knowledge graph in `json` (with embedded Mermaid), `graphml`, or `dot` (Graphviz) format |
+| `propose_refactor` † | Risk-aware refactoring proposal anchored to the symbol's actual graph position |
+| `export_graph` † | Structural summary of the knowledge graph in `json` (with embedded Mermaid), `graphml`, or `dot` (Graphviz) format |
 | `check_consistency` | Verify graph integrity against disk state and Git HEAD |
+
+---
+
+## 🎚️ Tool Profiles
+
+Cynapx is built to cover what an AI agent cannot do on its own — cross-session memory, symbol history, declared-architecture checks, reverse call relationships and deterministic metrics — rather than compete with what a frontier model already does well. `CYNAPX_TOOL_PROFILE` picks the toolset per server process:
+
+| Profile | Tools | Embeddings by default | Intended for |
+|---|---|---|---|
+| `frontier` (default) | 21 | Off | Frontier-class agents (Claude, Codex, …) |
+| `full` | 27 | Jina sidecar | Smaller local models |
+
+Under `frontier`, the † tools above are hidden, not removed: calling one returns an error explaining how to enable it, and `search_symbols` answers semantic requests from the keyword index with a notice. Set the variable in the `env` block of your MCP server config:
+
+```json
+"cynapx": { "command": "node", "args": ["/path/to/Cynapx/dist/bootstrap.js"], "env": { "CYNAPX_TOOL_PROFILE": "full" } }
+```
 
 ---
 
@@ -176,7 +195,7 @@ The `cynapx-admin` binary provides operational control over all registered proje
 
 ## 🌐 REST API
 
-In addition to the MCP interface, Cynapx can expose its analysis engine over an authenticated HTTP REST API. Start it by passing `--api` at boot (optionally `--api-port <number>`, default `3000`; `--bind <addr>`, default `127.0.0.1`; `--https` for an ephemeral TLS cert). All `/api/*` routes require a **Bearer token** (constant-time validated) and are protected by per-IP **rate limiting** (global 100 req/min; heavy analysis routes 10 req/min). The token is taken from the `KNOWLEDGE_TOOL_TOKEN` environment variable, or auto-generated and written to `~/.cynapx/api-token` (mode `0600`) when that variable is unset. The full contract is published as an OpenAPI 3.0 spec (`src/server/openapi.ts`), served via Swagger UI at `/api/docs` in non-production environments.
+In addition to the MCP interface, Cynapx can expose its analysis engine over an authenticated HTTP REST API. It is opt-in and not recommended by default — for remote access, prefer the MCP HTTP endpoint (`/mcp`) served by the same flag. Start it by passing `--api` at boot (optionally `--api-port <number>`, default `3000`; `--bind <addr>`, default `127.0.0.1`; `--https` for an ephemeral TLS cert). All `/api/*` routes require a **Bearer token** (constant-time validated) and are protected by per-IP **rate limiting** (global 100 req/min; heavy analysis routes 10 req/min). The token is taken from the `KNOWLEDGE_TOOL_TOKEN` environment variable, or auto-generated and written to `~/.cynapx/api-token` (mode `0600`) when that variable is unset. The full contract is published as an OpenAPI 3.0 spec (`src/server/openapi.ts`), served via Swagger UI at `/api/docs` in non-production environments.
 
 | Route | Description |
 |---|---|
@@ -194,7 +213,7 @@ In addition to the MCP interface, Cynapx can expose its analysis engine over an 
 
 ## 🔌 Model-Agnostic Embeddings
 
-Cynapx's semantic layer is **pluggable** so it can serve any AI agent model — Claude, ChatGPT Codex, local LLMs, and future models. The embedding provider is selected at runtime; the default is the bundled Jina code-embeddings sidecar.
+Cynapx's semantic layer is **pluggable** so it can serve any AI agent model — Claude, ChatGPT Codex, local LLMs, and future models. The embedding provider is selected at runtime. Without `CYNAPX_EMBED_PROVIDER`, embeddings are off under the default `frontier` profile and use the bundled Jina code-embeddings sidecar under `full`.
 
 | Env var | Purpose | Example |
 |---|---|---|
@@ -206,8 +225,8 @@ Cynapx's semantic layer is **pluggable** so it can serve any AI agent model — 
 
 - **OpenAI-compatible** — native `fetch` to `/v1/embeddings`; works with OpenAI, Azure OpenAI, vLLM, and LM Studio.
 - **Ollama** — native `fetch` to `localhost:11434/api/embed` (e.g. `nomic-embed-text`).
-- **Jina sidecar** — bundled `jina-code-embeddings` (896 dims), the default.
-- **Per-project override** — set `embedding` in the project profile to pin a provider for one project.
+- **Jina sidecar** — bundled `jina-code-embeddings` (896 dims), the default under the `full` profile.
+- **Per project** — the provider is chosen per server process; set these variables in each project's MCP server `env` block.
 
 Agents can also bypass server-side embedding entirely by passing a pre-computed `query_embedding` to `search_symbols` — keeping the query vector in the same model space the agent uses.
 

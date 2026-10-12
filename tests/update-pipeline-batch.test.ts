@@ -61,7 +61,7 @@ describe('UpdatePipeline.processBatch() — H-7 lastIndexedCommit watermark', ()
         nodeRepo = makeMockNodeRepo();
         edgeRepo = makeMockEdgeRepo();
         metadataRepo = makeMockMetadataRepo();
-        parser = { parse: vi.fn() } as any;
+        parser = { parse: vi.fn(), supports: vi.fn().mockReturnValue(true) } as any;
 
         pipeline = new UpdatePipeline(db, nodeRepo, edgeRepo, parser, metadataRepo, undefined, undefined, '/mock/project');
         // Avoid spawning the real Python embedding sidecar from the background refresh.
@@ -90,6 +90,41 @@ describe('UpdatePipeline.processBatch() — H-7 lastIndexedCommit watermark', ()
         const events: FileChangeEvent[] = [
             { event: 'ADD', file_path: '/mock/project/src/a.ts', commit: 'c1' },
             { event: 'ADD', file_path: '/mock/project/src/b.ts', commit: 'c2' },
+        ];
+
+        await pipeline.processBatch(events, Date.now(), 'new-head');
+
+        expect(metadataRepo.setLastIndexedCommit).not.toHaveBeenCalled();
+    });
+
+    it('skips files no parser supports without holding the watermark back', async () => {
+        // Every real repository tracks files no parser handles (LICENSE,
+        // Dockerfile, .gitignore). Counting them as failures kept
+        // lastIndexedCommit from ever advancing, so each start re-indexed
+        // the whole repository.
+        (parser.supports as any).mockImplementation((fp: string) => fp.endsWith('.ts'));
+        (parser.parse as any).mockResolvedValue({ nodes: [], edges: [] });
+
+        const events: FileChangeEvent[] = [
+            { event: 'ADD', file_path: '/mock/project/src/a.ts', commit: 'c1' },
+            { event: 'ADD', file_path: '/mock/project/LICENSE', commit: 'c1' },
+            { event: 'ADD', file_path: '/mock/project/Dockerfile', commit: 'c1' },
+        ];
+
+        await pipeline.processBatch(events, Date.now(), 'new-head');
+
+        expect(parser.parse).toHaveBeenCalledTimes(1);
+        expect(parser.parse).toHaveBeenCalledWith('/mock/project/src/a.ts', 'c1', expect.any(Number));
+        expect(metadataRepo.setLastIndexedCommit).toHaveBeenCalledWith('new-head');
+    });
+
+    it('still holds the watermark when a supported file fails alongside skipped ones', async () => {
+        (parser.supports as any).mockImplementation((fp: string) => fp.endsWith('.ts'));
+        (parser.parse as any).mockRejectedValue(new Error('parse failure'));
+
+        const events: FileChangeEvent[] = [
+            { event: 'ADD', file_path: '/mock/project/src/a.ts', commit: 'c1' },
+            { event: 'ADD', file_path: '/mock/project/LICENSE', commit: 'c1' },
         ];
 
         await pipeline.processBatch(events, Date.now(), 'new-head');
@@ -126,7 +161,7 @@ describe('UpdatePipeline.processBatch() — H-4 git prefetch before transaction'
         nodeRepo = makeMockNodeRepo();
         edgeRepo = makeMockEdgeRepo();
         metadataRepo = makeMockMetadataRepo();
-        parser = { parse: vi.fn().mockResolvedValue({ nodes: [], edges: [] }) } as any;
+        parser = { parse: vi.fn().mockResolvedValue({ nodes: [], edges: [] }), supports: vi.fn().mockReturnValue(true) } as any;
 
         gitService = {
             getHistoryForFile: vi.fn().mockImplementation(async (fp: string) => {

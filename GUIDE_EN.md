@@ -1,4 +1,4 @@
-# 🧠 Cynapx v3.0.0 — User Guide
+# 🧠 Cynapx v4.0.0 — User Guide
 
 > Complete how-to reference for the AI-native Code Knowledge Engine
 
@@ -18,6 +18,7 @@
    - [2.4 Developer Workflow (Live Source Changes)](#24-developer-workflow-live-source-changes)
    - [2.5 CLI Options](#25-cli-options)
    - [2.6 Model-Agnostic Embeddings](#26-model-agnostic-embeddings)
+   - [2.7 Tool Profiles](#27-tool-profiles)
 3. [Project Lifecycle](#3-project-lifecycle)
 4. [MCP Tool Reference](#4-mcp-tool-reference)
    - [4.1 Setup & Lifecycle](#41-setup--lifecycle)
@@ -121,7 +122,7 @@ Cynapx never writes to your project directory. All persistent data lives in `~/.
 |-------------|---------|-------|
 | Node.js | >= 22 | Required |
 | Git | Any recent | Required for `backfill_history` and churn metrics |
-| Python | 3.x | Optional — enables `semantic: true` vector search in `search_symbols` |
+| Python | 3.x | Optional — runs the Jina embedding sidecar, the default provider under the `full` profile (§2.7) |
 
 > Cynapx is **not published to npm**. Installation is via `git clone` only.
 
@@ -178,34 +179,36 @@ Replace `/absolute/path/to/Cynapx` with the actual path where you cloned the rep
 }
 ```
 
-After saving `.mcp.json`, restart Claude Code. Cynapx appears in the MCP tools panel and all 27 tools become available.
+After saving `.mcp.json`, restart Claude Code. Cynapx appears in the MCP tools panel with 21 tools under the default `frontier` profile, or all 27 with `CYNAPX_TOOL_PROFILE=full` (§2.7).
 
 ### 2.4 Developer Workflow (Live Source Changes)
 
-When developing Cynapx itself (or testing patches in a worktree), use `ts-node` to skip the build step and pick up source changes immediately:
+When developing Cynapx itself (or testing patches in a worktree), use `tsx` to skip the build step and pick up source changes immediately:
 
 ```json
 {
   "mcpServers": {
     "cynapx": {
       "command": "npx",
-      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
+      "args": ["tsx", "src/bootstrap.ts", "--path", "."],
       "cwd": "/absolute/path/to/Cynapx"
     },
     "cynapx-dev": {
       "command": "npx",
-      "args": ["ts-node", "src/bootstrap.ts", "--path", "."],
+      "args": ["tsx", "src/bootstrap.ts", "--path", "."],
       "cwd": "/absolute/path/to/Cynapx/.claude/worktrees/<branch-name>"
     }
   }
 }
 ```
 
-`cynapx-dev` points to the worktree for the feature branch being developed. After editing source in the worktree, restart the Claude Code session — `ts-node` transpiles on the fly, no `npm run build` needed.
+`cynapx-dev` points to the worktree for the feature branch being developed. After editing source in the worktree, restart the Claude Code session — `tsx` transpiles on the fly, no `npm run build` needed. Because its `cwd` is machine-specific, register it in your local scope (`claude mcp add --scope local …`) rather than in the shared `.mcp.json`.
+
+> `ts-node` cannot run the source tree: imports use `.js` suffixes (required for the compiled output), which ts-node's CommonJS mode does not map back to `.ts`. Use `tsx` (`npm start`, `npm run dev`).
 
 ### 2.5 CLI Options
 
-These options are passed to `node dist/bootstrap.js` (or `ts-node src/bootstrap.ts`):
+These options are passed to `node dist/bootstrap.js` (or `npx tsx src/bootstrap.ts`):
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -227,7 +230,7 @@ These options are passed to `node dist/bootstrap.js` (or `ts-node src/bootstrap.
 
 ### 2.6 Model-Agnostic Embeddings
 
-Cynapx's semantic layer (vector search, `find_similar_symbols`, and the optional `semantic: true` mode of `search_symbols`) is **pluggable**. The embedding provider is chosen at runtime so Cynapx can serve any AI agent model — Claude, ChatGPT Codex, local LLMs, and future models — without vendor lock-in. If no provider is configured, the bundled Jina code-embeddings sidecar is used.
+Cynapx's semantic layer (vector search, `find_similar_symbols`, and the optional `semantic: true` mode of `search_symbols`) is **pluggable**. The embedding provider is chosen at runtime so Cynapx can serve any AI agent model — Claude, ChatGPT Codex, local LLMs, and future models — without vendor lock-in. If no provider is configured, embeddings are off under the default `frontier` profile; under `full` the bundled Jina code-embeddings sidecar is used (§2.7).
 
 **Provider selection via environment variables:**
 
@@ -245,14 +248,45 @@ Cynapx's semantic layer (vector search, `find_similar_symbols`, and the optional
 |----------|-----------|---------------|-------|
 | `openai` | native `fetch` → `/v1/embeddings` | `text-embedding-3-small` (1536) | Compatible with OpenAI, Azure OpenAI, vLLM, LM Studio |
 | `ollama` | native `fetch` → `localhost:11434/api/embed` | `nomic-embed-text` (768) | Fully local |
-| `jina-sidecar` | Python sidecar | `jina-code-embeddings` (896) | Bundled default |
-| `null` | — | — | No-op fallback; disables semantic features |
+| `jina-sidecar` | Python sidecar | `jina-code-embeddings` (896) | Bundled; default under `full` |
+| `null` | — | — | Disables semantic features; default under `frontier` |
 
-**Per-project override.** A project profile may set an `embedding` block to pin a provider for a single project, overriding the environment default.
+**Per project.** The provider is chosen per server process from these variables — set them in each project's MCP server `env` block to use different providers per project.
 
 **Query-time pass-through.** Agents that already compute embeddings with their own model can pass a pre-computed `query_embedding` array to `search_symbols`. The server skips re-embedding and searches directly with the supplied vector — keeping the query in the agent's own model space and avoiding cross-model mismatch. Supplying a vector enables semantic search even without `semantic: true`.
 
 > **Re-indexing after a provider change.** Stored embeddings are produced by whichever provider was active at index time. If you switch providers (or dimensions), run `purge_index` then `initialize_project` to regenerate embeddings consistently.
+
+### 2.7 Tool Profiles
+
+Cynapx complements AI agents rather than competing with them. It concentrates on what an agent cannot do on its own: cross-session memory (`add_annotation`), symbol history, declared-architecture checks, reverse call relationships (`get_callers`, `analyze_impact`) and deterministic metrics. `CYNAPX_TOOL_PROFILE` selects the toolset for a server process:
+
+| Profile | Tools served | Embeddings without `CYNAPX_EMBED_PROVIDER` | Intended for |
+|---------|--------------|--------------------------------------------|--------------|
+| `frontier` (default) | 21 | Off | Frontier-class agents (Claude, Codex, …) |
+| `full` | 27 | Jina sidecar | Smaller local models |
+
+Under `frontier` these tools are hidden — not removed — and marked † in §4: `find_similar_symbols`, `propose_refactor`, `discover_latent_policies`, `export_graph`, `re_tag_project`, `get_remediation_strategy` (plus the `find-similar` prompt). Their code and tests stay intact.
+
+- Calling a hidden tool returns an error result that explains how to enable it, so a client with a cached tool list is never left guessing.
+- `search_symbols` with `semantic: true` or `query_embedding` answers from the keyword index and appends a one-line notice when embeddings are off.
+- The operator instructions sent at connect time describe only the tools the profile serves.
+
+The profile is resolved once per process, because MCP clients fetch the tool list at connect time. Set it in the `env` block of the server entry:
+
+```json
+{
+  "mcpServers": {
+    "cynapx": {
+      "command": "node",
+      "args": ["/absolute/path/to/Cynapx/dist/bootstrap.js", "--path", "."],
+      "env": { "CYNAPX_TOOL_PROFILE": "full" }
+    }
+  }
+}
+```
+
+Unknown values fall back to `frontier` with a warning on stderr.
 
 ---
 
@@ -444,6 +478,8 @@ Registry entry retained (unregister: false)
 
 #### `re_tag_project`
 
+> † **`full` profile only** — hidden under the default `frontier` profile ([§2.7](#27-tool-profiles)).
+
 Re-run the full 5-pass structural tagging algorithm over every indexed node. This re-derives all `layer:*`, `role:*`, `domain:*`, and `trait:*` tags from the current graph topology.
 
 **Parameters:** none
@@ -551,6 +587,8 @@ Found 3 results for "authenticate" (type: method):
 ---
 
 #### `find_similar_symbols`
+
+> † **`full` profile only** — hidden under the default `frontier` profile ([§2.7](#27-tool-profiles)).
 
 Find symbols that are **semantically similar** to a given symbol via K-nearest-neighbor search over stored embeddings. Useful for duplicate detection, surfacing repeated patterns, and finding refactoring candidates. The query symbol itself is excluded from results.
 
@@ -945,6 +983,8 @@ Architecture violations found: 3
 
 #### `get_remediation_strategy`
 
+> † **`full` profile only** — hidden under the default `frontier` profile ([§2.7](#27-tool-profiles)).
+
 Get a concrete refactoring plan to fix a specific architecture violation.
 
 **Parameters:**
@@ -985,6 +1025,8 @@ Risk:   Low — no public API changes; event-driven decoupling is reversible
 ---
 
 #### `discover_latent_policies`
+
+> † **`full` profile only** — hidden under the default `frontier` profile ([§2.7](#27-tool-profiles)).
 
 Analyze the graph to surface implicit architectural conventions — patterns that exist in practice but have never been formally declared.
 
@@ -1211,6 +1253,8 @@ Distance 3:
 
 #### `propose_refactor`
 
+> † **`full` profile only** — hidden under the default `frontier` profile ([§2.7](#27-tool-profiles)).
+
 Generate a risk-aware, step-by-step refactoring proposal for a symbol, taking its complexity, coupling, and dependent graph into account.
 
 **Parameters:**
@@ -1259,6 +1303,8 @@ Ordered steps:
 ---
 
 #### `export_graph`
+
+> † **`full` profile only** — hidden under the default `frontier` profile ([§2.7](#27-tool-profiles)).
 
 Export a subgraph (or the full project graph) as a Mermaid diagram and structured JSON.
 

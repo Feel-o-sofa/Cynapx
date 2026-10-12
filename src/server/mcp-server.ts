@@ -21,6 +21,7 @@ import { registerPromptHandlers } from './prompt-provider';
 import { HealthMonitor } from './health-monitor';
 import { registerToolHandlers, ToolDeps, executeTool } from './tool-dispatcher';
 import { Logger } from '../utils/logger';
+import { ToolProfile, resolveToolProfile, FRONTIER_HIDDEN_TOOLS } from '../utils/tool-profile';
 
 
 const log = new Logger('MCP');
@@ -32,16 +33,26 @@ const log = new Logger('MCP');
  * tool-accurate, and concise. The version is interpolated so it never goes
  * stale; update the body whenever tools or the recommended flow change.
  */
-function buildCynapxInstructions(version: string): string {
+export function buildCynapxInstructions(version: string, profile: ToolProfile = 'full'): string {
+    const frontier = profile === 'frontier';
+    const locate = frontier
+        ? '2. **Locate** — `search_symbols` (keyword index) to find symbols by name or text.'
+        : '2. **Locate** — `search_symbols` (keyword or semantic) to find symbols; `find_similar_symbols` to surface duplicates/patterns. You may pass a pre-computed `query_embedding` to keep queries in your own model space.';
+    const guard = frontier
+        ? '5. **Guard architecture** — `get_architecture` and `check_architecture_violations` after structural work.'
+        : '5. **Guard architecture** — `get_architecture` and `check_architecture_violations` after structural work; `get_remediation_strategy` for fixes.';
+    const profileNote = frontier
+        ? `## Tool profile: frontier\nThis server exposes the tools that cover what an agent cannot do on its own: cross-session memory, symbol history, declared-architecture checks, reverse call relationships and deterministic metrics. ${FRONTIER_HIDDEN_TOOLS.size} tools (semantic similarity, refactor proposals, pattern discovery, graph export, re-tagging, remediation) and semantic search are off; a server started with CYNAPX_TOOL_PROFILE=full enables them for smaller local models.`
+        : '## Tool profile: full\nEvery tool is enabled, including semantic search and similarity (embedding provider permitting).';
     return `# Cynapx Operator Manual (v${version})
 Cynapx is a persistent code knowledge graph. Query structure and intent directly instead of guessing from raw text. All tools are model-agnostic.
 
 ## Recommended flow
 1. **Orient** — call \`get_project_overview\` first on an unfamiliar codebase (purpose, stack, architecture, entry points, hotspots).
-2. **Locate** — \`search_symbols\` (keyword or semantic) to find symbols; \`find_similar_symbols\` to surface duplicates/patterns. You may pass a pre-computed \`query_embedding\` to keep queries in your own model space.
+${locate}
 3. **Understand** — \`get_symbol_details\`, \`get_callers\`, \`get_callees\`, \`get_related_tests\`. Ask "why does this exist" with \`get_symbol_history\`; "what changed lately" with \`get_recent_changes\`.
 4. **Investigate before editing** — ALWAYS run \`analyze_impact\` (ripple effect) before changing a symbol.
-5. **Guard architecture** — \`get_architecture\` and \`check_architecture_violations\` after structural work; \`get_remediation_strategy\` for fixes.
+${guard}
 6. **Write back** — record decisions, gotchas, todos, and rationale with \`add_annotation\` so future sessions inherit your context; read them with \`get_annotations\`.
 
 ## Invariants
@@ -52,7 +63,9 @@ Cynapx is a persistent code knowledge graph. Query structure and intent directly
 - **Consistency**: inspect the \`graph://ledger\` resource; run \`check_consistency\` (with \`repair: true\`) if counts diverge.
 
 ## Resources
-\`graph://summary\`, \`graph://hotspots\`, \`graph://clusters\`, \`graph://ledger\`.`;
+\`graph://summary\`, \`graph://hotspots\`, \`graph://clusters\`, \`graph://ledger\`.
+
+${profileNote}`;
 }
 
 export class McpServer {
@@ -70,21 +83,23 @@ export class McpServer {
     private onPurgeCallback?: (hash: string) => Promise<void>;
     private healthMonitor: HealthMonitor = new HealthMonitor();
     private toolDeps!: ToolDeps;
+    public readonly toolProfile: ToolProfile;
 
     constructor(workspaceManager?: WorkspaceManager) {
         const version = getVersion();
+        this.toolProfile = resolveToolProfile();
 
         this.sdkServer = new SdkMcpServer({
             name: "cynapx",
             version
         }, {
             capabilities: { resources: {}, tools: {}, prompts: {} },
-            instructions: buildCynapxInstructions(version)
+            instructions: buildCynapxInstructions(version, this.toolProfile)
         });
 
         this.workspaceManager = workspaceManager || new WorkspaceManager();
-        // P9-0: provider is selected from env vars (CYNAPX_EMBED_*). Absent
-        // config falls back to the jina-sidecar default — unchanged behavior.
+        // P9-0: provider is selected from env vars (CYNAPX_EMBED_*). Without
+        // an explicit provider the tool profile decides (frontier: off).
         this.embeddingProvider = createEmbeddingProviderFromEnv();
         this.remediationEngine = new RemediationEngine();
 
@@ -187,13 +202,13 @@ export class McpServer {
             version
         }, {
             capabilities: { resources: {}, tools: {}, prompts: {} },
-            instructions: buildCynapxInstructions(version)
+            instructions: buildCynapxInstructions(version, this.toolProfile)
         });
 
         // Re-register all handlers on the per-session server using shared deps
         registerResourceHandlers(sessionServer, this.waitUntilReady.bind(this), this.getContext.bind(this));
         registerToolHandlers(sessionServer, this.toolDeps);
-        registerPromptHandlers(sessionServer, this.waitUntilReady.bind(this));
+        registerPromptHandlers(sessionServer, this.waitUntilReady.bind(this), this.toolProfile);
 
         return sessionServer;
     }
@@ -205,7 +220,7 @@ export class McpServer {
         registerResourceHandlers(this.sdkServer, this.waitUntilReady.bind(this), this.getContext.bind(this));
         this.toolDeps = this.buildToolDeps();
         registerToolHandlers(this.sdkServer, this.toolDeps);
-        registerPromptHandlers(this.sdkServer, this.waitUntilReady.bind(this));
+        registerPromptHandlers(this.sdkServer, this.waitUntilReady.bind(this), this.toolProfile);
     }
 
     public async executeTool(name: string, args: any): Promise<any> {
@@ -226,6 +241,7 @@ export class McpServer {
             onPurge: (hash: string) => this.onPurgeCallback ? this.onPurgeCallback(hash) : Promise.resolve(),
             markReady: this.markReady.bind(this),
             getIsInitialized: () => this.isInitialized,
+            toolProfile: this.toolProfile,
             setIsInitialized: (value: boolean) => {
                 if (!value) {
                     this.markReady(false);
