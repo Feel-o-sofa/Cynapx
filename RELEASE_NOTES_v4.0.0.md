@@ -37,6 +37,8 @@ How it behaves:
 
 ## 🛠️ Fixes That Matter
 
+- **Startups are fast and incremental again.** Files that no parser handles, such as `LICENSE`, `Dockerfile` and `.gitignore` (every repository has some), were counted as failures. That kept the index watermark from ever advancing, so **every start re-indexed the entire repository**. They are now skipped, and a start with no new commits processes nothing.
+- **The MCP server connects within the client's timeout.** `initialize` used to wait for the startup index sync, which took 32.6 s on this repository against a 30 s connect timeout. It is now answered in about 2 s; tool calls made during indexing wait and then return results from the finished index.
 - **The server exits when its MCP client disconnects.** MCP clients close a stdio server's stdin and wait for it to exit. Cynapx ignored that, outlived every client, and could be orphaned holding the singleton lock when the client's SIGTERM reached only the `npx`/`tsx` wrapper.
 - **Running from source works again.** Since 2026-06-15, `npm start`, `npm run dev`, `npm run admin`, `.claude/launch.json` and the repository's own `.mcp.json` crashed at startup. Tests and the built `dist/` kept passing, so nothing flagged it — this is why the repository's Cynapx MCP server would not connect. The source runner is now `tsx`, and index workers load correctly from source.
 - **Embedding configuration now reaches the indexer.** Index time always started the Python sidecar, ignoring `CYNAPX_EMBED_*`. With `=openai`, queries ran against vectors from a different model. Query and index time now share one resolver.
