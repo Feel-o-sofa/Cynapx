@@ -1,9 +1,9 @@
-# 🧠 Cynapx v3.0.0
+# 🧠 Cynapx v4.0.0
 ### High-Performance AI-Native Code Knowledge Engine for AI Agents
 
 **Cynapx** transforms a codebase into a persistent, queryable knowledge graph of symbols and relationships — giving AI agents real structural understanding that survives session boundaries, context resets, and model restarts.
 
-> **v3.0.0** completes the Vision Arc (P1–P9): docstring/intent capture, temporal context, agent annotation write-back, architecture drift detection, polyglot test-spec & import enrichment, and **model-agnostic semantic search** with pluggable embedding providers. See [RELEASE_NOTES_v3.0.0.md](./RELEASE_NOTES_v3.0.0.md).
+> **v4.0.0** refocuses Cynapx on what AI agents cannot do on their own — cross-session memory, symbol history, declared-architecture checks, reverse call relationships and deterministic metrics. The default `frontier` profile serves 21 tools; `CYNAPX_TOOL_PROFILE=full` keeps all 27 for smaller local models. See [RELEASE_NOTES_v4.0.0.md](./RELEASE_NOTES_v4.0.0.md).
 
 ---
 
