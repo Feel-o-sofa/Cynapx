@@ -64,6 +64,39 @@ export function splitCallee(text: string, nameNode: Parser.SyntaxNode | undefine
     return { name: text };
 }
 
+/**
+ * The declared types of a definition's parameters, by parameter name, for the
+ * parameters whose type is a plain named type: `c *client.Client` (Go),
+ * `Client c` (Java, C#), `c: Client` (Python, Kotlin), `c: &Client` (Rust).
+ * A call through such a parameter, `c.configure()`, is a call on that type.
+ */
+export function parameterTypes(defNode: Parser.SyntaxNode): Map<string, string> {
+    const types = new Map<string, string>();
+    const params = defNode.childForFieldName('parameters')
+        ?? defNode.namedChildren.find(c => c.type === 'function_value_parameters');
+    if (!params) return types;
+    for (const param of params.namedChildren) {
+        const typeNode = param.childForFieldName('type') ?? param.namedChildren.find(c => c.type.includes('type'));
+        if (!typeNode) continue;
+        const nameNode = param.childForFieldName('name') ?? param.childForFieldName('pattern')
+            ?? param.namedChildren.find(c => c.id !== typeNode.id && c.type.includes('identifier'));
+        const typeName = namedType(typeNode.text);
+        if (nameNode && typeName) types.set(nameNode.text, typeName);
+    }
+    return types;
+}
+
+/** `*client.Client`, `&mut Client`, `"Client"`, `Optional[Client]` → `Client`; anything else → undefined. */
+function namedType(text: string): string | undefined {
+    let t = text.trim().replace(/^["']|["']$/g, '');
+    const optional = /^Optional\[(.+)\]$/s.exec(t);
+    if (optional) t = optional[1];
+    t = t.replace(/^&\s*(?:'\w+\s+)?(?:mut\s+)?/, '').replace(/^\*+/, '');
+    const name = t.split(/::|\./).pop() ?? '';
+    // Type names are capitalized; this also skips primitives such as `int`.
+    return /^[A-Z]\w*$/.test(name) ? name : undefined;
+}
+
 /** `new Client()` is a receiver of type `Client`; `a::b` is written `a.b`. */
 function normalizeQualifier(qualifier: string): string {
     const constructed = /^new\s+([\w.]+)\s*(?:<.*>)?\s*\(.*\)$/s.exec(qualifier.trim());
@@ -340,10 +373,12 @@ export class TreeSitterParser implements CodeParser {
                             localTarget = resolveLocal(callee.name.toLowerCase(), fromQName);
                         }
                     } else {
-                        const qualifier = normalizeQualifier(callee.qualifier);
+                        let qualifier = normalizeQualifier(callee.qualifier);
                         const receiverVar = callerNode ? provider.receiverName?.(callerNode) : undefined;
                         if (SELF_RECEIVERS.has(qualifier) || qualifier === receiverVar) {
                             localTarget = resolveOwnMember(callee.name.toLowerCase(), fromQName);
+                        } else if (callerNode) {
+                            qualifier = parameterTypes(callerNode).get(qualifier) ?? qualifier;
                         }
                         toQName = `${qualifier}.${callee.name}`;
                     }

@@ -121,6 +121,24 @@ describe('cross-file call resolution', () => {
         expect(await indexCalls([util, logger, main])).toEqual(['main.java#main.run -> util.java#util.log']);
     });
 
+    it('resolves a call through a typed parameter to that type\'s method, not a same-named module function (Go)', async () => {
+        write('go.mod', 'module example.com/m\n');
+        const client = write('client/client.go', 'package client\n\nfunc Configure() {}\n\ntype Client struct{}\n\nfunc (c *Client) Configure() {}\n');
+        const main = write('main.go', 'package main\n\nimport "example.com/m/client"\n\nfunc Use(c *client.Client) {\n    c.Configure()\n}\n');
+        expect(await indexCalls([client, main])).toEqual(['main.go#use -> client/client.go#client.configure']);
+    });
+
+    it('resolves a call through a typed parameter (Python, Rust)', async () => {
+        const py = write('py/client.py', 'class Client:\n    def configure(self):\n        pass\n');
+        const pyMain = write('py/main.py', 'from .client import Client\n\ndef use(c: Client):\n    c.configure()\n');
+        const rs = write('rs/client.rs', 'pub struct Client;\n\nimpl Client {\n    pub fn configure(&self) {}\n}\n');
+        const rsMain = write('rs/main.rs', 'mod client;\nuse client::Client;\n\nfn use_it(c: &mut Client) {\n    c.configure();\n}\n');
+        expect(await indexCalls([py, pyMain, rs, rsMain])).toEqual([
+            'py/main.py#use -> py/client.py#client.configure',
+            'rs/main.rs#use_it -> rs/client.rs#client.configure',
+        ]);
+    });
+
     it('leaves an ambiguous bare name with nothing in scope unresolved', async () => {
         const a = write('a/helpers.py', 'def helper():\n    pass\n');
         const b = write('b/helpers.py', 'def helper():\n    pass\n');

@@ -654,12 +654,13 @@ export class UpdatePipeline {
      *   caller's file, then files it imports, then its directory (a Go package,
      *   a Java package). An ambiguous name with no candidate in scope is left
      *   unresolved: picking one would fabricate an edge.
-     * - `Q.name`: first a function in an imported file whose module is `Q`
-     *   (Go `util.Format`, Rust `util::log`), then, when `Q` is capitalized
-     *   like a type, a member of the type `Q` (Java `Util.log`, Rust
-     *   `Client::new`), preferred the same way.
-     * - A qualifier that is a variable (`c.configure`) or an expression is left
-     *   unresolved, since its type is unknown here.
+     * - `Q.name` with `Q` capitalized like a type: a member of type `Q`
+     *   (Java `Util.log`, Rust `Client::new`, or `Client.configure` for a call
+     *   through a parameter the parser saw declared `c: Client`), preferred the
+     *   same way.
+     * - `q.name` otherwise: a function in an imported file whose module is `q`
+     *   (Go `util.Format`, Rust `util::log`). A variable of unknown type
+     *   (`c.configure`) or an expression qualifier is left unresolved.
      */
     private resolveCallTarget(fromQName: string, target: string, internalMap: Map<string, number>, imports: ReadonlySet<string>): number | undefined {
         const lookup = (qname: string): number | undefined => {
@@ -679,17 +680,21 @@ export class UpdatePipeline {
         } else {
             const [, qualifier, name] = qualified;
             if (/[()\[\]]/.test(qualifier)) return undefined;
+            // Qnames are lowercase, so case is the only cue left: a qualifier
+            // written like a type (`Util`, `Client`) names a type, otherwise a
+            // module. Without it, a parameter `c: Client` would make `Client.run`
+            // match module `client`, and a variable `logger` type `Logger`.
             const last = qualifier.slice(qualifier.lastIndexOf('.') + 1);
-            for (const file of imports) {
-                if (!moduleNames(file).includes(last.toLowerCase())) continue;
-                const id = lookup(`${file}#${name}`);
-                if (id !== undefined) return id;
+            if (/^[A-Z]/.test(last)) {
+                candidates = this.nodeRepo.findNodesBySymbolName(`${last}.${name}`).filter(isCallable);
+            } else {
+                for (const file of imports) {
+                    if (!moduleNames(file).includes(last.toLowerCase())) continue;
+                    const id = lookup(`${file}#${name}`);
+                    if (id !== undefined) return id;
+                }
+                candidates = [];
             }
-            // Qnames are lowercase, so `logger.log` would match type `Logger`.
-            // Only a qualifier written like a type is treated as one.
-            candidates = /^[A-Z]/.test(last)
-                ? this.nodeRepo.findNodesBySymbolName(`${last}.${name}`).filter(isCallable)
-                : [];
         }
 
         if (candidates.length > 0) {

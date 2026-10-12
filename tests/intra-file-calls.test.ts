@@ -160,9 +160,9 @@ func Run() {
 
         const memberCall = callEdges(edges).find(e => e.to_qname.toLowerCase().includes('configure') && e.dynamic);
         expect(memberCall).toBeDefined();
-        // The member access keeps its dotted selector text and is never
-        // statically resolved to the same-file free method.
-        expect(memberCall!.to_qname).toBe('c.Configure');
+        // The member access is qualified by the parameter's declared type and
+        // is never statically resolved to the same-file free method.
+        expect(memberCall!.to_qname).toBe('Client.Configure');
         const misresolved = callEdges(edges).filter(e => e.to_qname.includes('#configure') && e.dynamic === false);
         expect(misresolved.length).toBe(0);
     });
@@ -183,11 +183,11 @@ func Run() {
         const parser = new TreeSitterParser();
         const { edges } = await parser.parse(file, 'commit1', 1);
 
-        // Members are qualified by their class; the receiver call keeps its
-        // receiver so the update pipeline never mistakes it for this method.
+        // Members are qualified by their class; the receiver call is qualified
+        // by the parameter's type, so it is never mistaken for this method.
         const fromRun = callEdges(edges).filter(e => e.from_qname.endsWith('#runner.run'));
         const resolved = fromRun.filter(e => e.to_qname.endsWith('#runner.configure') && e.dynamic === false);
-        const dynamic = fromRun.filter(e => e.to_qname === 'c.configure' && e.dynamic === true);
+        const dynamic = fromRun.filter(e => e.to_qname === 'Client.configure' && e.dynamic === true);
         expect(resolved.length).toBe(1);
         expect(dynamic.length).toBe(1);
     });
