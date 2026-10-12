@@ -1,0 +1,40 @@
+{
+  "language": "java",
+  "edges": [
+    [
+      "src/gold/Client.java:4 Client.configure",
+      "src/gold/Util.java:4 Util.format"
+    ],
+    [
+      "src/gold/Client.java:8 Client.run",
+      "src/gold/Client.java:4 Client.configure"
+    ],
+    [
+      "src/gold/Util.java:11 Util.factorial",
+      "src/gold/Util.java:11 Util.factorial"
+    ],
+    [
+      "src/gold/Main.java:7 Main.useClient",
+      "src/gold/Client.java:4 Client.configure"
+    ],
+    [
+      "src/gold/Main.java:7 Main.useClient",
+      "src/gold/Config.java:4 Config.configure"
+    ],
+    [
+      "src/gold/Main.java:7 Main.useClient",
+      "src/gold/Util.java:8 Util.log"
+    ],
+    [
+      "src/gold/Main.java:7 Main.useClient",
+      "src/gold/Util.java:11 Util.factorial"
+    ]
+  ],
+  "cases": {
+    "receiver_vs_free": "A receiver call c.configure() targets the method; the bare configure() targets the same-named free function. The two must stay distinct.",
+    "self_call": "this/self method call inside the class resolves to the sibling method.",
+    "cross_file": "Calls to functions defined in another file of the project.",
+    "recursion": "factorial calls itself.",
+    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge."
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "cynapx",
-  "version": "4.0.0",
+  "version": "4.1.0",
   "description": "Cynapx: High-Performance Isolated Code Knowledge Engine for AI Agents",
   "main": "dist/bootstrap.js",
   "bin": {
@@ -23,7 +23,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "bench": "vitest bench",
-    "admin": "tsx src/cli/admin.ts"
+    "admin": "tsx src/cli/admin.ts",
+    "goldset": "tsx tests/goldset/report.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.1",

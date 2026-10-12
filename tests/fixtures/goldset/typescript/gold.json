@@ -1,0 +1,40 @@
+{
+  "language": "typescript",
+  "edges": [
+    [
+      "src/client.ts:8 Client.configure",
+      "src/util.ts:1 format"
+    ],
+    [
+      "src/client.ts:12 Client.run",
+      "src/client.ts:8 Client.configure"
+    ],
+    [
+      "src/util.ts:9 factorial",
+      "src/util.ts:9 factorial"
+    ],
+    [
+      "src/main.ts:4 useClient",
+      "src/client.ts:8 Client.configure"
+    ],
+    [
+      "src/main.ts:4 useClient",
+      "src/client.ts:3 configure"
+    ],
+    [
+      "src/main.ts:4 useClient",
+      "src/util.ts:5 log"
+    ],
+    [
+      "src/main.ts:4 useClient",
+      "src/util.ts:9 factorial"
+    ]
+  ],
+  "cases": {
+    "receiver_vs_free": "A receiver call c.configure() targets the method; the bare configure() targets the same-named free function. The two must stay distinct.",
+    "self_call": "this/self method call inside the class resolves to the sibling method.",
+    "cross_file": "Calls to functions defined in another file of the project.",
+    "recursion": "factorial calls itself.",
+    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge."
+  }
+}

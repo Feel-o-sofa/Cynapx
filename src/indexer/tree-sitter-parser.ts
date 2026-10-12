@@ -43,6 +43,69 @@ export function isReceiverQualifiedCall(nameNode: Parser.SyntaxNode | undefined)
     return parent.type === 'method_invocation' && parent.childForFieldName('object') !== null;
 }
 
+/** Receivers that name the caller's own type. */
+const SELF_RECEIVERS = new Set(['self', 'this', 'cls', 'Self']);
+
+/**
+ * Splits a captured callee into its qualifier and name. Go and Rust capture the
+ * whole callee (`util.Format`, `util::log`); other languages capture only the
+ * name, and the qualifier is the receiver that precedes it in the enclosing
+ * member expression. Kotlin captures the receiver itself, which is left bare.
+ */
+export function splitCallee(text: string, nameNode: Parser.SyntaxNode | undefined): { qualifier?: string; name: string } {
+    const qualified = /^(.+)(?:\.|::)([^.:]+)$/s.exec(text);
+    if (qualified) return { qualifier: qualified[1], name: qualified[2] };
+    if (nameNode && isReceiverQualifiedCall(nameNode)) {
+        const receiver = nameNode.parent!.namedChildren[0];
+        if (receiver && receiver.id !== nameNode.id && receiver.endIndex <= nameNode.startIndex) {
+            return { qualifier: receiver.text, name: text };
+        }
+    }
+    return { name: text };
+}
+
+/**
+ * The declared types of a definition's parameters, by parameter name, for the
+ * parameters whose type is a plain named type: `c *client.Client` (Go),
+ * `Client c` (Java, C#), `c: Client` (Python, Kotlin), `c: &Client` (Rust).
+ * A call through such a parameter, `c.configure()`, is a call on that type.
+ */
+export function parameterTypes(defNode: Parser.SyntaxNode): Map<string, string> {
+    const types = new Map<string, string>();
+    const params = defNode.childForFieldName('parameters')
+        ?? defNode.namedChildren.find(c => c.type === 'function_value_parameters');
+    if (!params) return types;
+    for (const param of params.namedChildren) {
+        const typeNode = param.childForFieldName('type') ?? param.namedChildren.find(c => c.type.includes('type'));
+        if (!typeNode) continue;
+        const nameNode = param.childForFieldName('name') ?? param.childForFieldName('pattern')
+            ?? param.namedChildren.find(c => c.id !== typeNode.id && c.type.includes('identifier'));
+        const typeName = namedType(typeNode.text);
+        if (nameNode && typeName) types.set(nameNode.text, typeName);
+    }
+    return types;
+}
+
+/** `*client.Client`, `&mut Client`, `"Client"`, `Optional[Client]` → `Client`; anything else → undefined. */
+function namedType(text: string): string | undefined {
+    let t = text.trim().replace(/^["']|["']$/g, '');
+    const optional = /^Optional\[(.+)\]$/s.exec(t);
+    if (optional) t = optional[1];
+    t = t.replace(/^&\s*(?:'\w+\s+)?(?:mut\s+)?/, '').replace(/^\*+/, '');
+    const name = t.split(/::|\./).pop() ?? '';
+    // Type names are capitalized; this also skips primitives such as `int`.
+    return /^[A-Z]\w*$/.test(name) ? name : undefined;
+}
+
+/** `new Client()` is a receiver of type `Client`; `a::b` is written `a.b`. */
+function normalizeQualifier(qualifier: string): string {
+    const constructed = /^new\s+([\w.]+)\s*(?:<.*>)?\s*\(.*\)$/s.exec(qualifier.trim());
+    return (constructed ? constructed[1] : qualifier.trim()).replace(/::/g, '.');
+}
+
+/** Symbol types whose members are qualified by their name (`file#Type.member`). */
+const OWNER_SYMBOL_TYPES = new Set<SymbolType>(['class', 'interface', 'module']);
+
 /**
  * Optimized Generic TreeSitterParser that delegates language-specific logic to LanguageProviders.
  */
@@ -134,7 +197,11 @@ export class TreeSitterParser implements CodeParser {
         // 2. Map for context-aware relation extraction
         const nodeToSymbolMap = new Map<number, string>(); 
 
-        // First pass: Extract Definitions
+        // First pass: Extract Definitions. Names are collected before qnames are
+        // built because a definition's qname depends on its owner (below).
+        interface Definition { node: Parser.SyntaxNode; match: Parser.QueryMatch; prefix: string; type: SymbolType; name: string }
+        const definitions: Definition[] = [];
+        const definitionById = new Map<number, Definition>();
         for (const match of matches) {
             for (const capture of match.captures) {
                 if (capture.name.endsWith('.def')) {
@@ -152,53 +219,111 @@ export class TreeSitterParser implements CodeParser {
                         name = idNode ? idNode.text : `unknown_${node.type}_${node.startPosition.row}`;
                     }
 
-                    const qname = toCanonical(`${normalizedFilePath}#${name}`);
-
-                    // Metadata Extraction
-                    const paramsCapture = match.captures.find(c => c.name === `${prefix}.params`);
-                    const returnCapture = match.captures.find(c => c.name === `${prefix}.return`);
-                    const modifiersCapture = match.captures.find(c => c.name === `${prefix}.modifiers`);
-
-                    nodes.push({
-                        qualified_name: qname,
-                        symbol_type: type,
-                        language: provider.languageName,
-                        file_path: normalizedFilePath,
-                        start_line: node.startPosition.row + 1,
-                        end_line: node.endPosition.row + 1,
-                        visibility: 'public',
-                        is_generated: false,
-                        last_updated_commit: commit,
-                        version: version,
-                        loc: node.endPosition.row - node.startPosition.row + 1,
-                        cyclomatic: MetricsCalculator.calculateCyclomaticComplexityTreeSitter(node, provider.getDecisionPoints()),
-                        signature: paramsCapture ? `${name}${paramsCapture.node.text}` : undefined,
-                        return_type: returnCapture ? returnCapture.node.text.replace(/^[:\s->]+/, '') : undefined,
-                        modifiers: modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : undefined,
-                        docstring: this.extractTreeSitterDocstring(node, provider)
-                    });
-
-                    edges.push({
-                        from_qname: canonicalFilePath,
-                        to_qname: qname,
-                        edge_type: 'defines',
-                        dynamic: false
-                    });
-
-                    nodeToSymbolMap.set(node.id, qname);
+                    const def: Definition = { node, match, prefix, type, name };
+                    definitions.push(def);
+                    if (!definitionById.has(node.id)) definitionById.set(node.id, def);
                 }
             }
         }
 
-        // Build name → qname index for intra-file call resolution (P8-2)
+        // A member is qualified by its enclosing types, `file#Outer.Inner.member`,
+        // as the TypeScript parser does; otherwise a method and a same-named free
+        // function in one file would collapse into a single node. Only types
+        // qualify: a function nested in a function keeps its own name.
+        const ownerPath = (def: Definition): string[] => {
+            const owners: string[] = [];
+            for (let current = def.node.parent; current; current = current.parent) {
+                const owner = definitionById.get(current.id);
+                if (owner && OWNER_SYMBOL_TYPES.has(owner.type)) owners.unshift(owner.name);
+            }
+            const receiverType = provider.ownerTypeName?.(def.node);
+            if (receiverType) owners.push(receiverType);
+            return owners;
+        };
+
+        // Member paths (the part after '#') that name a type, for scope lookup.
+        const typeScopes = new Set<string>();
+        for (const def of definitions) {
+            const { node, match, prefix, type, name } = def;
+            const memberPath = [...ownerPath(def), name].join('.');
+            if (OWNER_SYMBOL_TYPES.has(type)) typeScopes.add(memberPath.toLowerCase());
+            const qname = toCanonical(`${normalizedFilePath}#${memberPath}`);
+
+            // Metadata Extraction
+            const paramsCapture = match.captures.find(c => c.name === `${prefix}.params`);
+            const returnCapture = match.captures.find(c => c.name === `${prefix}.return`);
+            const modifiersCapture = match.captures.find(c => c.name === `${prefix}.modifiers`);
+
+            nodes.push({
+                qualified_name: qname,
+                symbol_type: type,
+                language: provider.languageName,
+                file_path: normalizedFilePath,
+                start_line: node.startPosition.row + 1,
+                end_line: node.endPosition.row + 1,
+                visibility: 'public',
+                is_generated: false,
+                last_updated_commit: commit,
+                version: version,
+                loc: node.endPosition.row - node.startPosition.row + 1,
+                cyclomatic: MetricsCalculator.calculateCyclomaticComplexityTreeSitter(node, provider.getDecisionPoints()),
+                signature: paramsCapture ? `${name}${paramsCapture.node.text}` : undefined,
+                return_type: returnCapture ? returnCapture.node.text.replace(/^[:\s->]+/, '') : undefined,
+                modifiers: modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : undefined,
+                docstring: this.extractTreeSitterDocstring(node, provider)
+            });
+
+            edges.push({
+                from_qname: canonicalFilePath,
+                to_qname: qname,
+                edge_type: 'defines',
+                dynamic: false
+            });
+
+            nodeToSymbolMap.set(node.id, qname);
+        }
+
+        // Build member path → qname index for intra-file call resolution (P8-2)
         const localSymbolMap = new Map<string, string>();
         for (const [, qname] of nodeToSymbolMap) {
             const hashIdx = qname.lastIndexOf('#');
             if (hashIdx >= 0) {
-                const name = qname.slice(hashIdx + 1);
-                localSymbolMap.set(name, qname);
+                localSymbolMap.set(qname.slice(hashIdx + 1), qname);
             }
         }
+
+        /**
+         * Resolves a bare call to a definition in this file. The caller's
+         * enclosing types are searched innermost first, but only in languages
+         * where a bare call can name a member (Java's `foo()` is `this.foo()`;
+         * Python's `foo()` never is). The file scope is searched last.
+         */
+        const resolveLocal = (name: string, fromQName: string): string | undefined => {
+            const hashIdx = fromQName.lastIndexOf('#');
+            const callerPath = hashIdx >= 0 ? fromQName.slice(hashIdx + 1).split('.') : [];
+            if (provider.implicitMemberCalls) {
+                for (let i = callerPath.length; i > 0; i--) {
+                    const scope = callerPath.slice(0, i).join('.');
+                    if (!typeScopes.has(scope)) continue;
+                    const hit = localSymbolMap.get(`${scope}.${name}`);
+                    if (hit) return hit;
+                }
+            }
+            return localSymbolMap.get(name);
+        };
+
+        /**
+         * Resolves `self.name` to a member of the caller's own type. The owner
+         * is the caller's member path minus the caller itself, so a Go method
+         * resolves even though its type is declared elsewhere in the file.
+         */
+        const resolveOwnMember = (name: string, fromQName: string): string | undefined => {
+            const hashIdx = fromQName.lastIndexOf('#');
+            if (hashIdx < 0) return undefined;
+            const callerPath = fromQName.slice(hashIdx + 1).split('.');
+            if (callerPath.length < 2) return undefined;
+            return localSymbolMap.get(`${callerPath.slice(0, -1).join('.')}.${name}`);
+        };
 
         // Second pass: Extract Relations (Calls, Inheritance, Imports)
         for (const match of matches) {
@@ -216,6 +341,7 @@ export class TreeSitterParser implements CodeParser {
                     }
                     current = current.parent;
                 }
+                const callerNode = current;
 
                 if (cName.endsWith('.expr')) {
                     // Call expression
@@ -231,21 +357,36 @@ export class TreeSitterParser implements CodeParser {
                     }
 
                     // P8-2: resolve intra-file calls to fully qualified names.
-                    // Receiver-qualified calls (method calls on an object) keep
-                    // their bare name and stay dynamic — resolving them to a
-                    // same-named free function would fabricate a wrong edge.
-                    // Lookups are lowercased because localSymbolMap keys come
-                    // from canonicalized (lowercase) qnames.
-                    const lookupKey = targetName.toLowerCase();
-                    const isReceiverCall = targetName.includes('.') || isReceiverQualifiedCall(targetNode);
-                    const resolvedTarget = (!isReceiverCall && localSymbolMap.has(lookupKey))
-                        ? localSymbolMap.get(lookupKey)!
-                        : targetName;
+                    // A bare call resolves through the caller's scopes. A call
+                    // through `self`/`this` (or a Go method's receiver) resolves
+                    // to the caller's own type. Any other qualified call keeps its
+                    // qualifier, `util.Format` or `Config.configure`, for the
+                    // update pipeline to resolve against the file's imports;
+                    // resolving it here to a same-named local function would
+                    // fabricate a wrong edge. Lookups are lowercased because
+                    // localSymbolMap keys come from canonical (lowercase) qnames.
+                    const callee = splitCallee(targetName, targetNode);
+                    let localTarget: string | undefined;
+                    let toQName = targetName;
+                    if (callee.qualifier === undefined) {
+                        if (!isReceiverQualifiedCall(targetNode)) {
+                            localTarget = resolveLocal(callee.name.toLowerCase(), fromQName);
+                        }
+                    } else {
+                        let qualifier = normalizeQualifier(callee.qualifier);
+                        const receiverVar = callerNode ? provider.receiverName?.(callerNode) : undefined;
+                        if (SELF_RECEIVERS.has(qualifier) || qualifier === receiverVar) {
+                            localTarget = resolveOwnMember(callee.name.toLowerCase(), fromQName);
+                        } else if (callerNode) {
+                            qualifier = parameterTypes(callerNode).get(qualifier) ?? qualifier;
+                        }
+                        toQName = `${qualifier}.${callee.name}`;
+                    }
                     edges.push({
                         from_qname: fromQName,
-                        to_qname: resolvedTarget,
+                        to_qname: localTarget ?? toQName,
                         edge_type: 'calls',
-                        dynamic: isReceiverCall || !localSymbolMap.has(lookupKey),
+                        dynamic: localTarget === undefined,
                         call_site_line: node.startPosition.row + 1
                     });
                 } else if (cName.includes('relation') || cName.includes('import')) {

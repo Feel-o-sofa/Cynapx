@@ -137,6 +137,15 @@ export const goDescriptor: LanguageDescriptor = {
     normalizeDocstring(raw: string): string {
         return raw.replace(/^\s*\/\/\s?/gm, '').trim();
     },
+    ownerTypeName(defNode) {
+        // `func (c *Client) Run()`: the receiver's type names the owner.
+        if (defNode.type !== 'method_declaration') return undefined;
+        return defNode.childForFieldName('receiver')?.descendantsOfType('type_identifier')[0]?.text;
+    },
+    receiverName(defNode) {
+        if (defNode.type !== 'method_declaration') return undefined;
+        return defNode.childForFieldName('receiver')?.descendantsOfType('parameter_declaration')[0]?.childForFieldName('name')?.text;
+    },
     resolveImport(node, fromQName, edges, _captureName, absFilePath) {
         const pathNode = node.descendantsOfType('interpreted_string_literal')[0];
         if (!pathNode) return;

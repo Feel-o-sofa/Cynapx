@@ -1,0 +1,40 @@
+{
+  "language": "rust",
+  "edges": [
+    [
+      "src/client.rs:10 Client::configure",
+      "src/util.rs:1 format"
+    ],
+    [
+      "src/client.rs:14 Client::run",
+      "src/client.rs:10 Client::configure"
+    ],
+    [
+      "src/util.rs:9 factorial",
+      "src/util.rs:9 factorial"
+    ],
+    [
+      "src/main.rs:6 use_client",
+      "src/client.rs:10 Client::configure"
+    ],
+    [
+      "src/main.rs:6 use_client",
+      "src/client.rs:3 configure"
+    ],
+    [
+      "src/main.rs:6 use_client",
+      "src/util.rs:5 log"
+    ],
+    [
+      "src/main.rs:6 use_client",
+      "src/util.rs:9 factorial"
+    ]
+  ],
+  "cases": {
+    "receiver_vs_free": "A receiver call c.configure() targets the method; the bare configure() targets the same-named free function. The two must stay distinct.",
+    "self_call": "this/self method call inside the class resolves to the sibling method.",
+    "cross_file": "Calls to functions defined in another file of the project.",
+    "recursion": "factorial calls itself.",
+    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge."
+  }
+}
