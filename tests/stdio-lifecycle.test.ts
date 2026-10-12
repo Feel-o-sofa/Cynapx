@@ -5,7 +5,7 @@
  * End-to-end gate for the stdio MCP process lifecycle, run through the same
  * source runner `.mcp.json` and `npm start` use (tsx).
  *
- * It guards two defects that unit tests could not see:
+ * It guards three defects that unit tests could not see:
  *   1. The source-run path was broken: src/ imports use `.js` suffixes that
  *      ts-node (CJS) could not map to `.ts`, so `npm start`, `npm run dev` and
  *      the `.mcp.json` server all crashed at startup while vitest (vite
@@ -14,9 +14,11 @@
  *      a server that lingers gets SIGTERM'd, and when that signal only reaches
  *      the npx/tsx wrapper the real server is orphaned holding the singleton
  *      lock and IPC host.
+ *   3. `initialize` waited for the initial index sync, so a first index (or a
+ *      start after many commits) outlasted the client's connect timeout.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { spawn } from 'child_process';
+import { spawn, execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -80,5 +82,52 @@ describe('stdio MCP lifecycle (source runner)', () => {
         ]);
         if (code === 'lingered') child.kill('SIGKILL');
         expect(code).toBe(0);
+    }, 90_000);
+});
+
+describe('stdio MCP startup order', () => {
+    let indexedProject: string;
+
+    beforeAll(() => {
+        // An anchored git project, so the server performs a real index sync.
+        indexedProject = fs.mkdtempSync(path.join(os.tmpdir(), 'cynapx-stdio-index-'));
+        fs.writeFileSync(path.join(indexedProject, '.cynapx-config'), '{}');
+        fs.writeFileSync(path.join(indexedProject, 'a.ts'), 'export const a = (): number => 1;\n');
+        const git = (...a: string[]) => execFileSync('git', a, { cwd: indexedProject, stdio: 'ignore' });
+        git('init', '-q');
+        git('add', '-A');
+        git('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'init');
+    });
+
+    afterAll(() => {
+        fs.rmSync(indexedProject, { recursive: true, force: true });
+    });
+
+    it('connects the stdio transport before the initial index sync starts', async () => {
+        // A first index can outlast a client's connect timeout (30 s in Claude
+        // Code), so `initialize` must not wait for it. Tools gate on readiness.
+        const child = spawn(TSX, ['src/bootstrap.ts', '--path', indexedProject, '--no-watch'], {
+            cwd: REPO_ROOT,
+            env: { ...process.env, CYNAPX_EMBED_PROVIDER: 'null', CYNAPX_LOG_LEVEL: 'silent' },
+            stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        let stderr = '';
+        child.stderr.on('data', d => { stderr += d.toString(); });
+        const exited = new Promise<number | null>(resolve => child.on('exit', code => resolve(code)));
+
+        await new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => reject(new Error(`sync never started; stderr: ${stderr.slice(-300)}`)), 60_000);
+            child.stderr.on('data', () => {
+                if (stderr.includes('Synchronizing index')) { clearTimeout(timer); resolve(); }
+            });
+        });
+
+        const ready = stderr.indexOf('MCP Server ready on stdio');
+        const sync = stderr.indexOf('Synchronizing index');
+        expect(ready).toBeGreaterThanOrEqual(0);
+        expect(ready).toBeLessThan(sync);
+
+        child.stdin.end();
+        expect(await exited).toBe(0);
     }, 90_000);
 });
