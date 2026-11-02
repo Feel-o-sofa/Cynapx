@@ -106,7 +106,7 @@ initialize_project  →  mode: "custom", path: "/your/project"   # 디스크의 
 | `get_setup_context` | 초기화 상태, `disk_usage_mb`, 등록된 프로젝트 확인 |
 | `get_project_overview` | 컨텍스트를 부트스트랩하는 에이전트를 위한 토큰 효율적 프로젝트 전체 브리핑 |
 | `initialize_project` | 프로젝트를 지식 그래프에 인덱싱 (`mode`: `"current"` \| `"existing"` \| `"custom"`) |
-| `purge_index` | 로컬 인덱스를 영구 삭제 — `confirm: true` 필요 |
+| `purge_index` | 로컬 인덱스를 영구 삭제 (어노테이션은 유지) — `confirm: true` 필요 |
 | `re_tag_project` † | 전체 재인덱싱 없이 구조적 특성 태깅만 재실행 |
 | `backfill_history` | Git 커밋 이력을 역추적하여 인덱싱된 심볼에 커밋을 매핑 |
 

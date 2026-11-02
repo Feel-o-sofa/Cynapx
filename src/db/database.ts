@@ -9,6 +9,7 @@ import path from 'path';
 import * as sqliteVec from 'sqlite-vec';
 
 import { Disposable } from '../types';
+import { restoreAnnotations } from './annotation-carryover';
 
 /**
  * DatabaseManager handles SQLite connection and schema initialization.
@@ -55,6 +56,7 @@ export class DatabaseManager implements Disposable {
 
         this.initializeSchema();
         this.runMigrations();
+        if (dbPath !== ':memory:') restoreAnnotations(this.db, dbPath);
     }
 
     /**

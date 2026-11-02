@@ -106,7 +106,7 @@ Tools marked † are served only under the `full` profile.
 | `get_setup_context` | Check initialization status, `disk_usage_mb`, and registered projects |
 | `get_project_overview` | Token-efficient whole-project briefing for agents bootstrapping context |
 | `initialize_project` | Index a project into the knowledge graph (`mode`: `"current"` \| `"existing"` \| `"custom"`) |
-| `purge_index` | Permanently delete the local index — requires `confirm: true` |
+| `purge_index` | Permanently delete the local index (annotations are kept) — requires `confirm: true` |
 | `re_tag_project` † | Re-run structural characteristic tagging without full re-index |
 | `backfill_history` | Walk Git commit history and map commits to indexed symbols |
 
