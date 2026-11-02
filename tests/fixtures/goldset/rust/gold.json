@@ -40,6 +40,26 @@
     [
       "src/service.rs:13 build",
       "src/client.rs:10 Client::configure"
+    ],
+    [
+      "src/factory.rs:12 Holder::via_field",
+      "src/client.rs:10 Client::configure"
+    ],
+    [
+      "src/factory.rs:17 via_return",
+      "src/factory.rs:7 make"
+    ],
+    [
+      "src/factory.rs:17 via_return",
+      "src/client.rs:10 Client::configure"
+    ],
+    [
+      "src/factory.rs:22 via_chain",
+      "src/factory.rs:7 make"
+    ],
+    [
+      "src/factory.rs:22 via_chain",
+      "src/client.rs:10 Client::configure"
     ]
   ],
   "cases": {
@@ -48,6 +68,8 @@
     "cross_file": "Calls to functions defined in another file of the project.",
     "recursion": "factorial calls itself.",
     "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge.",
-    "assignment_receiver": "let c: Client = ...; and let w = Worker::new(): a let's annotation, or a `Type::new()` constructor, types the binding."
+    "assignment_receiver": "let c: Client = ...; and let w = Worker::new(): a let's annotation, or a `Type::new()` constructor, types the binding.",
+    "field_type": "self.c.configure(): the struct field's declared type types self.c.",
+    "return_type": "let c = make(); and make().configure(): the function's return type types the result."
   }
 }

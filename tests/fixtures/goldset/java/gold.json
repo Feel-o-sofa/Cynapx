@@ -48,6 +48,22 @@
     [
       "src/gold/Service.java:10 Service.build",
       "src/gold/Service.java:4 Service.setup"
+    ],
+    [
+      "src/gold/Factory.java:10 Factory.viaField",
+      "src/gold/Client.java:4 Client.configure"
+    ],
+    [
+      "src/gold/Factory.java:14 Factory.viaThisField",
+      "src/gold/Client.java:4 Client.configure"
+    ],
+    [
+      "src/gold/Factory.java:18 Factory.viaChain",
+      "src/gold/Factory.java:6 Factory.make"
+    ],
+    [
+      "src/gold/Factory.java:18 Factory.viaChain",
+      "src/gold/Client.java:4 Client.configure"
     ]
   ],
   "cases": {
@@ -57,6 +73,8 @@
     "recursion": "factorial calls itself.",
     "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge.",
     "super_and_inherited": "super.setup() targets the base method; a bare shared() inside a subclass targets the inherited method.",
-    "assignment_receiver": "Client c = new Client() and var svc = new Service(): the local's declared or constructed type types the receiver."
+    "assignment_receiver": "Client c = new Client() and var svc = new Service(): the local's declared or constructed type types the receiver.",
+    "field_type": "client.configure() and this.client.configure(): the field's declared type types the receiver.",
+    "return_type": "make().configure(): the method's return type types the chained call."
   }
 }

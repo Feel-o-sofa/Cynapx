@@ -60,6 +60,34 @@
     [
       "pkg/service.py:20 build",
       "pkg/util.py:9 factorial"
+    ],
+    [
+      "pkg/factory.py:4 make_client",
+      "pkg/client.py:8 Client"
+    ],
+    [
+      "pkg/factory.py:9 Holder.__init__",
+      "pkg/client.py:8 Client"
+    ],
+    [
+      "pkg/factory.py:12 Holder.use",
+      "pkg/client.py:9 Client.configure"
+    ],
+    [
+      "pkg/factory.py:16 via_return",
+      "pkg/factory.py:4 make_client"
+    ],
+    [
+      "pkg/factory.py:16 via_return",
+      "pkg/client.py:9 Client.configure"
+    ],
+    [
+      "pkg/factory.py:21 via_chain",
+      "pkg/factory.py:4 make_client"
+    ],
+    [
+      "pkg/factory.py:21 via_chain",
+      "pkg/client.py:9 Client.configure"
     ]
   ],
   "cases": {
@@ -70,6 +98,8 @@
     "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge.",
     "absolute_import": "from pkg.util import log / from pkg import util: absolute imports of the project's own package resolve to its files, not to an external package.",
     "super_and_inherited": "super().setup() targets the base method; self.shared() targets a method defined only on the base class.",
-    "assignment_receiver": "c = Client(); c.configure(): the receiver's type comes from the assignment. Calling a class is a call to it (construction)."
+    "assignment_receiver": "c = Client(); c.configure(): the receiver's type comes from the assignment. Calling a class is a call to it (construction).",
+    "return_type": "c = make_client() with `-> Client`, and the chained make_client().configure(): the declared return type types the result.",
+    "attribute_type": "self.client = Client() in __init__ types self.client in other methods."
   }
 }

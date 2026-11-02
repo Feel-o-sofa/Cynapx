@@ -40,6 +40,22 @@
     [
       "worker.go:11 Build",
       "worker.go:7 (*Worker).Run"
+    ],
+    [
+      "factory.go:20 (*Holder).ViaField",
+      "client/client.go:11 (*Client).Configure"
+    ],
+    [
+      "factory.go:24 (*Holder).ViaEmbedding",
+      "factory.go:7 (*Base).Ping"
+    ],
+    [
+      "factory.go:28 ViaReturn",
+      "factory.go:16 NewClient"
+    ],
+    [
+      "factory.go:28 ViaReturn",
+      "client/client.go:11 (*Client).Configure"
     ]
   ],
   "cases": {
@@ -48,6 +64,9 @@
     "cross_file": "Calls to functions defined in another file of the project.",
     "recursion": "factorial calls itself.",
     "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge.",
-    "assignment_receiver": "c := &client.Client{} and w := Worker{}: a composite literal types the variable."
+    "assignment_receiver": "c := &client.Client{} and w := Worker{}: a composite literal types the variable.",
+    "return_type": "c := NewClient(): the function's result type types c.",
+    "field_type": "h.c.Configure(): the struct field's declared type types h.c.",
+    "embedding": "h.Ping(): Ping is promoted from the embedded Base."
   }
 }
