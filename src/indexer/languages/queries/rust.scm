@@ -1,6 +1,7 @@
 (function_item 
     name: (identifier) @function.name
     parameters: (parameters) @function.params
+    return_type: (_)? @function.return
 ) @function.def
 (struct_item name: (type_identifier) @class.name) @class.def
 (enum_item name: (type_identifier) @class.name) @class.def

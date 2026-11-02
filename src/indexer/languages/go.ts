@@ -150,7 +150,13 @@ export const goDescriptor: LanguageDescriptor = {
         if (defNode.type !== 'method_declaration') return undefined;
         return defNode.childForFieldName('receiver')?.descendantsOfType('parameter_declaration')[0]?.childForFieldName('name')?.text;
     },
-    resolveImport(node, fromQName, edges, _captureName, absFilePath) {
+    resolveImport(node, fromQName, edges, captureName, absFilePath) {
+        if (captureName === 'relation.embeds') {
+            // An embedded field promotes its type's methods, like a base class.
+            const embedded = node.text.replace(/^\*/, '').split('.').pop();
+            if (embedded) edges.push({ from_qname: fromQName, to_qname: embedded, edge_type: 'inherits', dynamic: false });
+            return;
+        }
         const pathNode = node.descendantsOfType('interpreted_string_literal')[0];
         if (!pathNode) return;
         const pkgPath = pathNode.text.replace(/"/g, '');

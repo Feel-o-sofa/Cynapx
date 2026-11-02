@@ -231,3 +231,35 @@ describe('receivers typed by assignment, super and inherited calls (4.3.0)', () 
         expect(await indexCalls([base, mid, leaf, init])).toEqual(['lib/leaf.py#leaf.run -> lib/base.py#base.save']);
     });
 });
+
+describe('receivers typed by fields and call results (4.4.0)', () => {
+    const calls = async (name: string, src: string) => {
+        const { edges } = await new TreeSitterParser().parse(write(name, src), 'c', 1);
+        return edges.filter(e => e.edge_type === 'calls').map(e => e.to_qname);
+    };
+
+    it('types C# and Kotlin fields', async () => {
+        expect(await calls('A.cs', 'class A {\n  private Client client = new Client();\n  void F() { client.Configure(); }\n}\n')).toContain('Client.Configure');
+        expect(await calls('a.kt', 'class A {\n    private val client = Client()\n    fun f() {\n        client.configure()\n    }\n}\n')).toContain('Client.configure');
+    });
+
+    it('records a local assigned from a call as that call\'s result', async () => {
+        expect(await calls('r.py', 'def f():\n    c = make_client()\n    c.configure()\n')).toContain('make_client().configure');
+        expect(await calls('r.go', 'package r\n\nfunc F() {\n\tc := pkg.New()\n\tc.Configure()\n}\n')).toContain('pkg.New().Configure');
+    });
+
+    it('keeps an attribute of unknown type as self.<attr>, never a module path', async () => {
+        expect(await calls('u.py', 'class A:\n    def f(self):\n        self.client.configure()\n')).toContain('self.client.configure');
+    });
+
+    it('resolves a chained call through the inner call\'s declared return type', async () => {
+        const client = write('svc/client.py', 'class Client:\n    def configure(self):\n        pass\n');
+        const factory = write('svc/factory.py', 'from .client import Client\n\ndef make() -> Client:\n    return Client()\n\ndef run():\n    make().configure()\n');
+        const init = write('svc/__init__.py', '');
+        expect(await indexCalls([client, factory, init])).toEqual([
+            'svc/factory.py#make -> svc/client.py#client',
+            'svc/factory.py#run -> svc/client.py#client.configure',
+            'svc/factory.py#run -> svc/factory.py#make',
+        ]);
+    });
+});
