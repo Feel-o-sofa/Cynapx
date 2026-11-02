@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.4.0] - 2026-11-02
+
+**Calls through return values, fields and Go embedding.** The gold set gained 20 cases for the gaps 4.3.0 listed. They are all found now (74/74, no false positives). One of the new cases exposed a latent false positive, now fixed. Against 4.3.0, unseen code gained call edges and lost none: Python stdlib `email` +28 and Go `text/template` +22. All 50 additions were checked by hand. **The index rebuilds automatically on first start.**
+
+### Added
+- **Receivers typed by a function's return type, and chained calls** — `c := NewClient()`, `c = make_client()`, `make().configure()`, `NewIdentifier(x).SetTree(t).SetPos(p)`. Return types are now captured for Go, Rust and Java (Python already was), including `Self`, `(*T, error)` and `Optional[T]`
+- **Receivers typed by attributes and fields** — `self.x = Client()` (Python), field declarations (Java, C#), struct fields (Go, Rust), properties (Kotlin). In Java, C# and Kotlin a bare field name means `this.field`
+- **Go struct embedding** — methods promoted from an embedded type resolve like inherited ones
+- **Construction through any class name** — `_Formatter()` and other names that don't start with a capital now type their result
+
+### Fixed
+- **An attribute named like a module** — `self.client.configure()` resolved to the free function `configure` in an imported module `client`. An attribute of unknown type is no longer treated as a module
+
+### Known gaps
+- Calls through an interface to its implementations (one call, several targets), generic type parameters, and `Result` / `Option` unwrapping stay unresolved
+
 ## [4.3.0] - 2026-11-02
 
 **Calls through local variables, `super` and inheritance.** The call-edge gold set gained 18 cases for what 4.1.0 left unresolved. They are now all found (54/54, no false positives). On Python's stdlib `email` package, which the gold set was not built from, 164 call edges were added and none removed relative to 4.2.0; 40 sampled additions checked correct. **The index rebuilds automatically on first start.**
