@@ -1,4 +1,4 @@
-# 🧠 Cynapx v4.1.0 — User Guide
+# 🧠 Cynapx v4.2.0 — User Guide
 
 > Complete how-to reference for the AI-native Code Knowledge Engine
 
@@ -447,9 +447,9 @@ Duration: 8.3s
 
 #### `purge_index`
 
-Permanently delete the SQLite knowledge graph for the current project.
+Delete the SQLite knowledge graph for the current project. Annotations are kept: they are set aside beside the database (under `~/.cynapx`, never in the project) and restored when the project is initialized again.
 
-> **Warning:** This is irreversible. Run `initialize_project` again to rebuild.
+> **Warning:** The index itself is not recoverable. Run `initialize_project` again to rebuild it.
 
 **Parameters:**
 
@@ -457,21 +457,19 @@ Permanently delete the SQLite knowledge graph for the current project.
 |------|------|---------|-------------|
 | `confirm` | boolean | required | Must be `true` — safety gate to prevent accidental deletion |
 | `unregister` | boolean | `false` | Also remove the project from `registry.json` |
+| `keep_annotations` | boolean | `true` (`false` with `unregister`) | Keep annotations across the purge |
 
 **Example call:**
 
 ```
 Tool: purge_index
 confirm: true
-unregister: false
 ```
 
 **Example output:**
 
 ```
-Index purged for: my-project (/home/user/my-project)
-Database file deleted: ~/.cynapx/a3f9e1d2_v2.db
-Registry entry retained (unregister: false)
+Project index purged successfully. Server in PENDING mode. 3 annotation(s) were kept and return when the project is initialized again.
 ```
 
 ---
@@ -1078,19 +1076,25 @@ Latent policies discovered (2):
 
 #### `find_dead_code`
 
-Identify symbols with `fan_in = 0` (nothing in the indexed codebase calls them), split into confidence tiers.
+Find functions and methods that nothing in the indexed codebase calls (`fan_in = 0`) and whose name is not referenced anywhere else either, split into confidence tiers.
 
 **Parameters:** none
 
-**Returns:** Summary counts per tier, full symbol list for HIGH and MEDIUM, count-only for LOW.
+**Returns:** Summary counts per tier, the full HIGH and MEDIUM lists, the first 30 LOW entries, and counts of what was not analyzed or was set aside.
 
-| Tier | Criteria | False-Positive Rate | Recommended Action |
-|------|----------|---------------------|--------------------|
-| **HIGH** | `private` visibility + `fan_in = 0` | < 5% | Delete or document why it exists |
-| **MEDIUM** | `public` + `trait:internal` tag + `fan_in = 0` | ~30% | Review in context before deleting |
-| **LOW** | `public` + `fan_in = 0`, no `trait:internal` | > 80% | Likely external API surface — count only |
+| Tier | Criteria | Recommended Action |
+|------|----------|--------------------|
+| **HIGH** | `private` (declared, Rust without `pub`, Go unexported) | Delete or document why it exists |
+| **MEDIUM** | Not private, but internal by convention (`_name`, `protected`) | Review in context before deleting |
+| **LOW** | Public | May be external API or a registered callback — confirm before deleting |
 
-> **Note:** Static analysis does not resolve all dynamic call patterns (e.g., `this.registry[key]()`, reflection). MEDIUM and LOW tiers will always contain some false positives.
+What is **not** judged, because call fan-in cannot show it unused:
+
+- **Data assets and non-callables** — JSON / YAML keys, Markdown sections, fields, imports, types. The output reports how many were left out.
+- **Code called implicitly** — constructors, `__dunder__` methods, `init` / `main`, decorated or annotated definitions (`@app.route`, `@property`, `@Override`), overrides in types that inherit or implement, local functions, and code in test files.
+- **Functions referenced by name** — a candidate whose name occurs anywhere in the project besides its definition (a callback, a bare decorator, an alias, a config entry) is set aside and counted, not listed.
+
+> **Note:** Names built at runtime (e.g. `getattr(obj, 'handle_' + kind)`) cannot be seen statically, so verify before deleting.
 
 **Example call:**
 
@@ -1102,20 +1106,21 @@ Tool: find_dead_code
 **Example output:**
 
 ```
-Dead code analysis complete.
+Found 2 functions and methods that nothing calls or names:
+- HIGH confidence (private): 0
+- MEDIUM confidence (internal by convention, e.g. _name or protected): 1
+- LOW confidence (public; may be external API or a registered callback): 1
 
-HIGH confidence (11 symbols — review immediately):
-  • InternalCache._evictStale          src/cache/InternalCache.ts:204   [private]
-  • UserRepository._legacyFindAll      src/repositories/UserRepository.ts:341  [private]
-  • (+ 9 more)
+Analyzed 15 functions and methods | Share without callers: 13.33%
+Not analyzed: 31 other symbols (data assets such as JSON/YAML keys and Markdown sections, fields, imports, types) — call fan-in cannot show them unused.
+Set aside: 2 more have no callers but their name occurs elsewhere in the project (callbacks, decorators, aliases, config entries, dynamic dispatch).
+Excluded as called implicitly: constructors, __dunder__ methods, init/main, decorated or annotated definitions, overrides, local functions, test files. Names built at runtime (e.g. getattr(obj, 'handle_' + kind)) cannot be seen, so verify before deleting.
 
-MEDIUM confidence (24 symbols — review with context):
-  • ReportBuilder.buildLegacyPdf       src/reports/ReportBuilder.ts:88  [public, trait:internal]
-  • (+ 23 more)
+MEDIUM confidence:
+  - /home/user/app/app/palette_parser.py#_unused_helper [function] (/home/user/app/app/palette_parser.py:10)
 
-LOW confidence (103 symbols — likely external API surface, count only):
-  103 public symbols with fan_in=0 and no trait:internal tag.
-  These are probably intended to be called by consumers outside this codebase.
+LOW confidence (1 of 1 shown):
+  - /home/user/app/app/palette_parser.py#remove_background_ai_torch [function] (/home/user/app/app/palette_parser.py:14)
 ```
 
 ---
@@ -1496,20 +1501,16 @@ Registry doctor — scanning 3 entries...
 
 ### `purge <name>`
 
-Delete the SQLite database files for a project. The registry entry is kept unless `--yes` is combined with `unregister`.
+Delete the SQLite database files for a project. Without `--yes` it only says what it would delete. The registry entry is kept (use `unregister` to remove it). Annotations are set aside beside the database and return when the project is indexed again; add `--drop-annotations` to delete them too.
 
 ```bash
-cynapx-admin purge my-project
-# or skip the confirmation prompt:
 cynapx-admin purge my-project --yes
+cynapx-admin purge my-project --yes --drop-annotations
 ```
 
 ```
-Purging index for: my-project
-  DB file: ~/.cynapx/a3f9e1d2_v2.db (48 MB)
-
-Confirm deletion? [y/N]: y
-Deleted. Registry entry retained.
+✓ Purged 1 file(s) for project 'my-project'.
+  3 annotation(s) kept; they return when the project is indexed again (--drop-annotations to delete them).
 ```
 
 ### `unregister <name>`

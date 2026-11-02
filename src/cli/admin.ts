@@ -37,6 +37,7 @@ import {
 import { AuditLogger, AuditEvent } from '../utils/audit-logger';
 import { LockManager } from '../utils/lock-manager';
 import { getVersion } from '../utils/version';
+import { setAsideAnnotations } from '../db/annotation-carryover';
 
 // ─── ANSI colour helpers ──────────────────────────────────────────────────────
 const c = {
@@ -324,7 +325,7 @@ function cmdDoctor(): void {
     console.log('');
 }
 
-function cmdPurge(name: string, opts: { yes?: boolean; force?: boolean }): void {
+function cmdPurge(name: string, opts: { yes?: boolean; force?: boolean; dropAnnotations?: boolean }): void {
     const registry = readRegistry();
     const entry = registry.find(e => e.name.toLowerCase() === name.toLowerCase() || e.path === name);
     if (!entry) {
@@ -340,6 +341,14 @@ function cmdPurge(name: string, opts: { yes?: boolean; force?: boolean }): void 
 
     if (!assertNoLiveHost(entry.path, 'purge', opts.force)) process.exit(1);
 
+    // Annotations are agent memory, not index data: set them aside so the next
+    // index of this project takes them back (see db/annotation-carryover).
+    let kept = 0;
+    if (!opts.dropAnnotations && fs.existsSync(entry.db_path)) {
+        const db = new Database(entry.db_path, { readonly: true, fileMustExist: true });
+        try { kept = setAsideAnnotations(db, entry.db_path); } finally { db.close(); }
+    }
+
     const targets = [entry.db_path, `${entry.db_path}-wal`, `${entry.db_path}-shm`];
     let deleted = 0;
     for (const t of targets) {
@@ -351,6 +360,7 @@ function cmdPurge(name: string, opts: { yes?: boolean; force?: boolean }): void 
 
     new AuditLogger().log('purge', { project: entry.path });
     console.log(green(`✓ Purged ${deleted} file(s) for project '${entry.name}'.`));
+    if (kept > 0) console.log(`  ${kept} annotation(s) kept; they return when the project is indexed again (--drop-annotations to delete them).`);
 }
 
 function cmdUnregister(name: string, opts: { yes?: boolean }): void {
@@ -558,7 +568,8 @@ program
     .description('Delete index database files for a project')
     .option('-y, --yes', 'Skip confirmation prompt')
     .option('-f, --force', 'Proceed even if a live Host holds the project lock')
-    .action((name: string, opts: { yes?: boolean; force?: boolean }) => cmdPurge(name, opts));
+    .option('--drop-annotations', 'Also delete the project\'s annotations (kept by default)')
+    .action((name: string, opts: { yes?: boolean; force?: boolean; dropAnnotations?: boolean }) => cmdPurge(name, opts));
 
 program
     .command('unregister <name>')

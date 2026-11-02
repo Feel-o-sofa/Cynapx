@@ -20,6 +20,15 @@ export function extractSymbolName(qualifiedName: string): string {
     return idx === -1 ? qualifiedName : qualifiedName.slice(idx + 1);
 }
 
+/** Symbol types whose call fan-in can show them unused. */
+const DEAD_CODE_SYMBOL_TYPES = ['function', 'method'];
+
+/** Names a runtime calls implicitly: constructors, Python dunders, Go `init`, entry `main`. */
+function isImplicitlyCalled(node: CodeNode): boolean {
+    const name = (extractSymbolName(node.qualified_name).split('.').pop() ?? '').toLowerCase();
+    return name === 'constructor' || name === 'main' || name === 'init' || /^__\w+__$/.test(name);
+}
+
 /**
  * Safely parses a JSON string, returning a fallback value on parse failure or empty input.
  */
@@ -353,41 +362,52 @@ export class NodeRepository {
     }
 
     /**
-     * A-3/A-2: Finds dead-code candidates for a given confidence tier.
-     * Moved from OptimizationEngine.findDeadCode() and rewritten to use the
-     * node_tags JOIN table instead of `tags LIKE '%...%'` on the JSON column.
+     * Dead-code candidates: functions and methods with no callers.
      *
-     * Common filter (applied to all tiers):
-     *   - fan_in = 0
-     *   - Exclude files, tests, packages, constructors
-     *   - Exclude entrypoints and abstract symbols (via node_tags)
-     *   - Exclude methods whose containing class implements an interface (interface dispatch)
-     *   - Exclude methods whose containing class inherits from a parent (polymorphic override)
+     * fan_in counts `calls` edges, so it says nothing about symbols that are
+     * never called by name: data assets (JSON / YAML keys, Markdown sections),
+     * fields, imports and types. Those are not candidates (#21). Also excluded:
+     * - names the runtime calls implicitly (constructors, Python `__x__`, Go
+     *   `init`, `main`) and code in test files (run by the test framework)
+     * - entry points, abstract members, decorated or annotated definitions
+     *   (`@app.route`, `@property`, `@Override`: framework or dispatch calls)
+     * - members of types that inherit or implement (polymorphic overrides)
+     * - local functions defined inside another function (returned or passed
+     *   by reference, as decorators and callbacks are)
      *
-     * HIGH   : private symbols — likely genuine dead code
-     * MEDIUM : public symbols (non class/interface/function) — internal but exposed
-     * LOW    : public symbols (non class/interface/function) without trait:internal — may be external API surface
+     * HIGH   : private — nothing outside its scope can call it
+     * MEDIUM : not private but marked internal (`_name`, protected)
+     * LOW    : public — may still be external API or a registered callback
      */
     public findDeadCodeCandidates(tier: 'high' | 'medium' | 'low'): CodeNode[] {
+        const hasTag = (tag: string) => `EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = '${tag}')`;
         const COMMON_FILTER = `
             WHERE n.fan_in = 0
-            AND n.symbol_type NOT IN ('file', 'test', 'package')
-            AND n.qualified_name NOT LIKE '%#constructor'
-            AND NOT EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = 'trait:entrypoint')
-            AND NOT EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = 'trait:abstract')
+            AND n.symbol_type IN (${DEAD_CODE_SYMBOL_TYPES.map(t => `'${t}'`).join(', ')})
+            AND NOT ${hasTag('trait:entrypoint')}
+            AND NOT ${hasTag('trait:abstract')}
+            AND NOT ${hasTag('trait:decorated')}
             AND NOT EXISTS (
                 SELECT 1 FROM edges cont
                 JOIN edges impl ON impl.from_id = cont.from_id
                 WHERE cont.to_id = n.id
                 AND cont.edge_type = 'contains'
-                AND impl.edge_type = 'implements'
+                AND impl.edge_type IN ('implements', 'inherits')
             )
             AND NOT EXISTS (
-                SELECT 1 FROM edges cont
-                JOIN edges inh ON inh.from_id = cont.from_id
-                WHERE cont.to_id = n.id
-                AND cont.edge_type = 'contains'
-                AND inh.edge_type = 'inherits'
+                SELECT 1 FROM nodes outer_fn
+                WHERE outer_fn.file_path = n.file_path
+                AND outer_fn.id != n.id
+                AND outer_fn.symbol_type IN ('function', 'method')
+                AND outer_fn.start_line <= n.start_line AND outer_fn.end_line >= n.end_line
+                AND (outer_fn.start_line < n.start_line OR outer_fn.end_line > n.end_line)
+            )
+            AND NOT EXISTS (
+                SELECT 1 FROM nodes owner
+                JOIN edges rel ON rel.from_id = owner.id AND rel.edge_type IN ('implements', 'inherits')
+                WHERE owner.file_path = n.file_path
+                AND owner.symbol_type IN ('class', 'interface')
+                AND n.qualified_name LIKE owner.qualified_name || '.%'
             )
         `;
 
@@ -397,17 +417,24 @@ export class NodeRepository {
                 tierFilter = `AND n.visibility = 'private'`;
                 break;
             case 'medium':
-                tierFilter = `AND n.visibility = 'public' AND n.symbol_type NOT IN ('class', 'interface', 'function')`;
+                tierFilter = `AND n.visibility != 'private' AND ${hasTag('trait:internal')}`;
                 break;
             case 'low':
-                tierFilter = `AND n.visibility = 'public'
-                    AND n.symbol_type NOT IN ('class', 'interface', 'function')
-                    AND NOT EXISTS (SELECT 1 FROM node_tags nt WHERE nt.node_id = n.id AND nt.tag = 'trait:internal')`;
+                tierFilter = `AND n.visibility != 'private' AND NOT ${hasTag('trait:internal')}`;
                 break;
         }
 
         const rows = this.db.prepare(`SELECT n.* FROM nodes n ${COMMON_FILTER} ${tierFilter}`).all() as NodeRow[];
-        return rows.map(row => this.mapRowToNode(row));
+        const testFiles = new Set((this.db.prepare('SELECT DISTINCT file_path FROM test_specs').all() as { file_path: string }[]).map(r => r.file_path));
+        return rows.map(row => this.mapRowToNode(row))
+            .filter(node => !isImplicitlyCalled(node) && !testFiles.has(node.file_path));
+    }
+
+    /** Number of symbols find_dead_code can judge (see findDeadCodeCandidates). */
+    public countDeadCodeAnalyzable(): number {
+        return (this.db.prepare(
+            `SELECT COUNT(*) AS c FROM nodes WHERE symbol_type IN (${DEAD_CODE_SYMBOL_TYPES.map(t => `'${t}'`).join(', ')})`
+        ).get() as { c: number }).c;
     }
 
     public findNodesBySymbolName(name: string): CodeNode[] {

@@ -6,6 +6,7 @@
 import * as fs from 'fs';
 import { getDatabasePath, removeFromRegistry } from '../../utils/paths.js';
 import { getAuditLogger } from '../../utils/audit-logger.js';
+import { setAsideAnnotations } from '../../db/annotation-carryover.js';
 import { ToolDeps } from '../tool-dispatcher.js';
 import { ToolHandler, ToolResult } from './_types.js';
 
@@ -17,6 +18,11 @@ export const purgeIndexHandler: ToolHandler = {
             return { content: [{ type: 'text', text: 'Error: No active project. Run initialize_project first.' }], isError: true };
         }
         const dbPath = getDatabasePath(ctx.projectPath);
+        // Annotations are agent memory, not index data: keep them unless told
+        // otherwise. Unregistering forgets the project, so it drops them by default.
+        const keepAnnotations = typeof args.keep_annotations === 'boolean' ? args.keep_annotations : !args.unregister;
+        const db = ctx.dbManager?.getDb();
+        const kept = keepAnnotations && db ? setAsideAnnotations(db, dbPath) : 0;
         // H-6: onPurge wires WorkspaceManager.unmountProject(hash) — it disposes
         // the watcher/worker-pool/dbManager in order and nulls every engine
         // field so no closed-handle reference survives and re-initialization is
@@ -36,6 +42,9 @@ export const purgeIndexHandler: ToolHandler = {
             auditPurge.log('unregister', { project: ctx.projectPath });
         }
         auditPurge.log('purge', { project: ctx.projectPath });
-        return { content: [{ type: "text", text: "Project index purged successfully. Server in PENDING mode." }] };
+        const memory = kept > 0
+            ? ` ${kept} annotation(s) were kept and return when the project is initialized again.`
+            : keepAnnotations ? '' : ' Annotations were deleted.';
+        return { content: [{ type: "text", text: `Project index purged successfully. Server in PENDING mode.${memory}` }] };
     }
 };

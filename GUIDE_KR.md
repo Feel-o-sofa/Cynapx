@@ -1,4 +1,4 @@
-# 🧠 Cynapx v4.1.0 — 사용자 가이드
+# 🧠 Cynapx v4.2.0 — 사용자 가이드
 
 > AI-Native 코드 지식 엔진 완전 레퍼런스
 
@@ -436,9 +436,9 @@ Duration: 8.3s
 
 #### `purge_index`
 
-현재 프로젝트의 SQLite 지식 그래프를 영구 삭제합니다.
+현재 프로젝트의 SQLite 지식 그래프를 삭제합니다. 어노테이션은 유지됩니다 — 데이터베이스 옆(`~/.cynapx` 아래, 프로젝트 안이 아님)에 보관했다가 프로젝트를 다시 초기화하면 복원합니다.
 
-> **경고:** 되돌릴 수 없습니다. 재구성하려면 `initialize_project`를 다시 실행해야 합니다.
+> **경고:** 인덱스 자체는 복구할 수 없습니다. 재구성하려면 `initialize_project`를 다시 실행해야 합니다.
 
 **파라미터:**
 
@@ -446,21 +446,19 @@ Duration: 8.3s
 |------|------|--------|------|
 | `confirm` | boolean | 필수 | 반드시 `true`여야 함 — 우발적 삭제를 방지하는 안전 게이트 |
 | `unregister` | boolean | `false` | `registry.json`에서 프로젝트도 제거 |
+| `keep_annotations` | boolean | `true` (`unregister` 시 `false`) | 어노테이션을 퍼지 이후에도 유지 |
 
 **호출 예시:**
 
 ```
 도구: purge_index
 confirm: true
-unregister: false
 ```
 
 **출력 예시:**
 
 ```
-Index purged for: my-project (/home/user/my-project)
-Database file deleted: ~/.cynapx/a3f9e1d2_v2.db
-Registry entry retained (unregister: false)
+Project index purged successfully. Server in PENDING mode. 3 annotation(s) were kept and return when the project is initialized again.
 ```
 
 ---
@@ -1042,19 +1040,25 @@ Latent policies discovered (2):
 
 #### `find_dead_code`
 
-인덱싱된 코드베이스 내에서 아무도 호출하지 않는(`fan_in = 0`) 심볼을 신뢰도 계층으로 분류하여 식별합니다.
+인덱싱된 코드베이스에서 아무도 호출하지 않고(`fan_in = 0`) 다른 곳에서 이름조차 참조되지 않는 함수·메서드를 신뢰도 계층으로 분류하여 찾습니다.
 
 **파라미터:** 없음
 
-**반환값:** 계층별 요약 수, HIGH와 MEDIUM의 전체 심볼 목록, LOW는 수만 표시.
+**반환값:** 계층별 요약 수, HIGH·MEDIUM 전체 목록, LOW는 처음 30개, 그리고 분석 제외·보류된 수.
 
-| 계층 | 기준 | 오탐률 | 권장 조치 |
-|------|------|--------|-----------|
-| **HIGH** | `private` 가시성 + `fan_in = 0` | < 5% | 삭제하거나 존재 이유 문서화 |
-| **MEDIUM** | `public` + `trait:internal` 태그 + `fan_in = 0` | ~30% | 컨텍스트와 함께 검토 후 삭제 |
-| **LOW** | `public` + `fan_in = 0`, `trait:internal` 없음 | > 80% | 외부 API 표면일 가능성 — 수 확인만 |
+| 계층 | 기준 | 권장 조치 |
+|------|------|-----------|
+| **HIGH** | `private` (선언, `pub` 없는 Rust, 비공개 Go 이름) | 삭제하거나 존재 이유 문서화 |
+| **MEDIUM** | private은 아니지만 관례상 내부용 (`_name`, `protected`) | 컨텍스트와 함께 검토 후 삭제 |
+| **LOW** | public | 외부 API이거나 등록된 콜백일 수 있음 — 삭제 전 확인 |
 
-> **참고:** 정적 분석은 모든 동적 호출 패턴(예: `this.registry[key]()`, 리플렉션)을 해석하지 못합니다. MEDIUM과 LOW 계층에는 항상 일부 오탐이 포함됩니다.
+호출 fan-in으로는 미사용을 판단할 수 없어 **판정하지 않는** 것:
+
+- **데이터 자산과 호출 불가 심볼** — JSON / YAML 키, Markdown 섹션, 필드, 임포트, 타입. 제외된 수를 출력에 표시합니다.
+- **암묵적으로 호출되는 코드** — 생성자, `__dunder__` 메서드, `init` / `main`, 데코레이터·애노테이션이 붙은 정의(`@app.route`, `@property`, `@Override`), 상속·구현하는 타입의 오버라이드, 지역 함수, 테스트 파일의 코드.
+- **이름으로 참조되는 함수** — 정의 외에 프로젝트 어딘가에 이름이 나오는 후보(콜백, 괄호 없는 데코레이터, 별칭, 설정 항목)는 목록에서 빼고 수만 표시합니다.
+
+> **참고:** 런타임에 조립되는 이름(예: `getattr(obj, 'handle_' + kind)`)은 정적으로 보이지 않으므로 삭제 전 확인하세요.
 
 **호출 예시:**
 
@@ -1066,20 +1070,21 @@ Latent policies discovered (2):
 **출력 예시:**
 
 ```
-Dead code analysis complete.
+Found 2 functions and methods that nothing calls or names:
+- HIGH confidence (private): 0
+- MEDIUM confidence (internal by convention, e.g. _name or protected): 1
+- LOW confidence (public; may be external API or a registered callback): 1
 
-HIGH confidence (11 symbols — 즉시 검토):
-  • InternalCache._evictStale          src/cache/InternalCache.ts:204   [private]
-  • UserRepository._legacyFindAll      src/repositories/UserRepository.ts:341  [private]
-  • (+ 9개 더)
+Analyzed 15 functions and methods | Share without callers: 13.33%
+Not analyzed: 31 other symbols (data assets such as JSON/YAML keys and Markdown sections, fields, imports, types) — call fan-in cannot show them unused.
+Set aside: 2 more have no callers but their name occurs elsewhere in the project (callbacks, decorators, aliases, config entries, dynamic dispatch).
+Excluded as called implicitly: constructors, __dunder__ methods, init/main, decorated or annotated definitions, overrides, local functions, test files. Names built at runtime (e.g. getattr(obj, 'handle_' + kind)) cannot be seen, so verify before deleting.
 
-MEDIUM confidence (24 symbols — 컨텍스트와 함께 검토):
-  • ReportBuilder.buildLegacyPdf       src/reports/ReportBuilder.ts:88  [public, trait:internal]
-  • (+ 23개 더)
+MEDIUM confidence:
+  - /home/user/app/app/palette_parser.py#_unused_helper [function] (/home/user/app/app/palette_parser.py:10)
 
-LOW confidence (103 symbols — 외부 API 표면 가능성, 수만 확인):
-  fan_in=0이고 trait:internal 태그가 없는 public 심볼 103개.
-  이것들은 아마 이 코드베이스 외부의 소비자가 호출하도록 의도된 것입니다.
+LOW confidence (1 of 1 shown):
+  - /home/user/app/app/palette_parser.py#remove_background_ai_torch [function] (/home/user/app/app/palette_parser.py:14)
 ```
 
 ---
@@ -1447,16 +1452,16 @@ Registry doctor — scanning 3 entries...
 
 ### `purge <name>`
 
-프로젝트의 SQLite DB 파일을 삭제합니다. `--yes`를 사용하면 확인 프롬프트를 건너뜁니다.
+프로젝트의 SQLite DB 파일을 삭제합니다. `--yes` 없이 실행하면 무엇을 삭제할지만 알려줍니다. 레지스트리 항목은 유지됩니다(제거하려면 `unregister`). 어노테이션은 DB 옆에 보관했다가 프로젝트를 다시 인덱싱하면 복원합니다. 함께 삭제하려면 `--drop-annotations`를 추가하세요.
 
 ```bash
 cynapx-admin purge my-project --yes
+cynapx-admin purge my-project --yes --drop-annotations
 ```
 
 ```
-Purging index for: my-project
-  DB file: ~/.cynapx/a3f9e1d2_v2.db (48 MB)
-Deleted. Registry entry retained.
+✓ Purged 1 file(s) for project 'my-project'.
+  3 annotation(s) kept; they return when the project is indexed again (--drop-annotations to delete them).
 ```
 
 ### `unregister <name>`

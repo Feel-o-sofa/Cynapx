@@ -1,9 +1,9 @@
-# 🧠 Cynapx v4.1.0
+# 🧠 Cynapx v4.2.0
 ### High-Performance AI-Native Code Knowledge Engine for AI Agents
 
 **Cynapx** transforms a codebase into a persistent, queryable knowledge graph of symbols and relationships — giving AI agents real structural understanding that survives session boundaries, context resets, and model restarts.
 
-> **v4.0.0** refocuses Cynapx on what AI agents cannot do on their own — cross-session memory, symbol history, declared-architecture checks, reverse call relationships and deterministic metrics. The default `frontier` profile serves 21 tools; `CYNAPX_TOOL_PROFILE=full` keeps all 27 for smaller local models. See [RELEASE_NOTES_v4.0.0.md](./RELEASE_NOTES_v4.0.0.md). **v4.1.0** makes the call graph behind `get_callers` and `analyze_impact` measurably more accurate — see the [CHANGELOG](./CHANGELOG.md#410---2026-10-12).
+> **v4.0.0** refocuses Cynapx on what AI agents cannot do on their own — cross-session memory, symbol history, declared-architecture checks, reverse call relationships and deterministic metrics. The default `frontier` profile serves 21 tools; `CYNAPX_TOOL_PROFILE=full` keeps all 27 for smaller local models. See [RELEASE_NOTES_v4.0.0.md](./RELEASE_NOTES_v4.0.0.md). **v4.1.0** makes the call graph behind `get_callers` and `analyze_impact` measurably more accurate — see the [CHANGELOG](./CHANGELOG.md#410---2026-10-12). **v4.2.0** makes `find_dead_code` report only what nothing calls or names, and keeps annotations across `purge_index`.
 
 ---
 
@@ -106,7 +106,7 @@ Tools marked † are served only under the `full` profile.
 | `get_setup_context` | Check initialization status, `disk_usage_mb`, and registered projects |
 | `get_project_overview` | Token-efficient whole-project briefing for agents bootstrapping context |
 | `initialize_project` | Index a project into the knowledge graph (`mode`: `"current"` \| `"existing"` \| `"custom"`) |
-| `purge_index` | Permanently delete the local index — requires `confirm: true` |
+| `purge_index` | Permanently delete the local index (annotations are kept) — requires `confirm: true` |
 | `re_tag_project` † | Re-run structural characteristic tagging without full re-index |
 | `backfill_history` | Walk Git commit history and map commits to indexed symbols |
 

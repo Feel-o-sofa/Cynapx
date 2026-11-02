@@ -35,6 +35,8 @@ src-native/index.d.ts
 *temp_*
 *verify_*
 *coverage_*
+# Fixture sources are test inputs, not artifacts (a Python test fixture must be named test_*.py).
+!tests/fixtures/**
 scripts/*
 !scripts/integration-test.js
 !scripts/build-copy.js

@@ -1,0 +1,1 @@
+{ "id": "denoise", "hooks": ["after_load"], "execution_policy": "Universal" }

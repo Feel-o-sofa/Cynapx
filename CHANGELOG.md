@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.2.0] - 2026-11-02
+
+**Dead-code findings you can act on, and memory that survives a purge.** `find_dead_code` judged JSON keys, locale strings and Markdown sections by call fan-in and reported 486 symbols on a project with one dead function (#21). It now judges only functions and methods, and only those whose name is referenced nowhere. On a fixture shaped like that project it reports exactly the two dead functions (36 before). `purge_index` no longer deletes annotations. **The index rebuilds automatically on first start** to pick up visibility, modifiers and test specs.
+
+### Fixed
+- **`find_dead_code` over-reported data assets (#21)** — only functions and methods are candidates now. Data assets, fields, imports and types are counted as not analyzed. Code called implicitly is excluded: constructors, `__dunder__`, `init` / `main`, decorated or annotated definitions, overrides, local functions and test files. A candidate whose name occurs elsewhere (a callback, bare decorator, alias or config entry) is set aside and counted. The MEDIUM tier no longer repeats LOW, and LOW is listed (up to 30)
+- **Dead Python, Go, Rust and Java functions could not be reported** — every tree-sitter symbol was `public`, and public functions were excluded. Stdlib `email`: 0 → 13, of which 3 are `getattr` dispatch (the report warns it cannot see those) and 10 are public API
+- **Test specs reached the index only through the file watcher** — the initial index and git sync dropped them (since 2026-06-17), so `get_related_tests` missed most of them
+- **`purge_index` deleted annotations** — they are now kept beside the database (under `~/.cynapx`) and restored on the next `initialize_project`. Use `keep_annotations: false` to delete them; `cynapx-admin purge` takes `--drop-annotations`
+- **Private methods lost `trait:internal`** after 4.1.0's `Type.member` names
+
+### Added
+- **Visibility and modifiers for tree-sitter languages** — read from Java / Kotlin modifiers and annotations, C# attributes, Rust / PHP visibility modifiers and Python decorators. Go exports by capitalization, and Rust is private without `pub`
+- **Bare Python decorators are call edges** (`@name` calls `name`), so `get_callers` and `analyze_impact` see them
+
 ## [4.1.0] - 2026-10-12
 
 **Call-graph accuracy.** `get_callers`, `get_callees` and `analyze_impact` are only as good as call resolution, which is now measured: a polyglot gold set (`tests/fixtures/goldset/`, `npm run goldset`) scores call edges against hand-verified truth in Go, Java, Python, Rust and TypeScript, and a test fails if any language regresses. Precision went from 96% to 100% and recall from 61% to 100% on that set — a small set, so read it as a regression guard more than a guarantee. On an unseen codebase (Python's stdlib `email` package), 153 call edges were added and the 16 that disappeared were all misattributed or wrong. **The index rebuilds automatically on first start** (the minor version changed), and annotations are carried over.

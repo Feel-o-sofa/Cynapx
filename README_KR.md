@@ -1,9 +1,9 @@
-# 🧠 Cynapx v4.1.0
+# 🧠 Cynapx v4.2.0
 ### 고성능 AI-Native 코드 지식 엔진
 
 **Cynapx**는 코드베이스를 심볼과 관계로 이루어진 영속적이고 질의 가능한 지식 그래프로 변환합니다. 세션 경계, 컨텍스트 초기화, 모델 재시작이 일어나더라도 AI 에이전트가 코드 구조를 실질적으로 이해할 수 있도록 합니다.
 
-> **v4.0.0**은 AI 에이전트가 스스로 할 수 없는 일 — 세션 간 기억, 심볼 이력, 선언된 아키텍처 대조, 역방향 호출 관계, 결정론적 메트릭 — 에 Cynapx를 재집중합니다. 기본 `frontier` 프로파일은 21개 도구를 제공하고, `CYNAPX_TOOL_PROFILE=full`은 소형 로컬 모델을 위해 27개 전부를 유지합니다. [RELEASE_NOTES_v4.0.0.md](./RELEASE_NOTES_v4.0.0.md) 참조. **v4.1.0**은 `get_callers`·`analyze_impact`가 쓰는 호출 그래프의 정확도를 측정 가능한 수준으로 끌어올렸습니다 — [CHANGELOG](./CHANGELOG.md#410---2026-10-12) 참조.
+> **v4.0.0**은 AI 에이전트가 스스로 할 수 없는 일 — 세션 간 기억, 심볼 이력, 선언된 아키텍처 대조, 역방향 호출 관계, 결정론적 메트릭 — 에 Cynapx를 재집중합니다. 기본 `frontier` 프로파일은 21개 도구를 제공하고, `CYNAPX_TOOL_PROFILE=full`은 소형 로컬 모델을 위해 27개 전부를 유지합니다. [RELEASE_NOTES_v4.0.0.md](./RELEASE_NOTES_v4.0.0.md) 참조. **v4.1.0**은 `get_callers`·`analyze_impact`가 쓰는 호출 그래프의 정확도를 측정 가능한 수준으로 끌어올렸습니다 — [CHANGELOG](./CHANGELOG.md#410---2026-10-12) 참조. **v4.2.0**은 `find_dead_code`가 아무도 호출하거나 이름으로 참조하지 않는 것만 보고하게 하고, `purge_index` 후에도 어노테이션을 유지합니다.
 
 ---
 
@@ -106,7 +106,7 @@ initialize_project  →  mode: "custom", path: "/your/project"   # 디스크의 
 | `get_setup_context` | 초기화 상태, `disk_usage_mb`, 등록된 프로젝트 확인 |
 | `get_project_overview` | 컨텍스트를 부트스트랩하는 에이전트를 위한 토큰 효율적 프로젝트 전체 브리핑 |
 | `initialize_project` | 프로젝트를 지식 그래프에 인덱싱 (`mode`: `"current"` \| `"existing"` \| `"custom"`) |
-| `purge_index` | 로컬 인덱스를 영구 삭제 — `confirm: true` 필요 |
+| `purge_index` | 로컬 인덱스를 영구 삭제 (어노테이션은 유지) — `confirm: true` 필요 |
 | `re_tag_project` † | 전체 재인덱싱 없이 구조적 특성 태깅만 재실행 |
 | `backfill_history` | Git 커밋 이력을 역추적하여 인덱싱된 심볼에 커밋을 매핑 |
 

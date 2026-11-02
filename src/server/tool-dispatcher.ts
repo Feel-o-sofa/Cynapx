@@ -200,12 +200,13 @@ export const TOOL_DEFINITIONS = [
     },
     {
         name: "purge_index",
-        description: "Completely delete local database index.",
+        description: "Completely delete local database index. Annotations are kept and restored on the next initialize_project unless keep_annotations is false.",
         inputSchema: {
             type: "object",
             properties: {
                 confirm: { type: "boolean" },
-                unregister: { type: "boolean" }
+                unregister: { type: "boolean" },
+                keep_annotations: { type: "boolean", description: "Keep annotations across the purge (default: true, or false with unregister)" }
             },
             required: ["confirm"]
         }

@@ -4,7 +4,7 @@
  * See LICENSE in the project root for license information.
  */
 import { LanguageProvider, RawCodeEdge, TestSpec } from '../types';
-import { SymbolType } from '../../types';
+import { SymbolType, Visibility } from '../../types';
 import Parser from 'tree-sitter';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -79,6 +79,12 @@ export interface LanguageDescriptor {
      * languages where it always names a free function (Python, Rust, Go, JS).
      */
     implicitMemberCalls?: boolean;
+    /**
+     * Optional visibility rule for languages where it is not (only) a keyword:
+     * Go exports by capitalization, Rust items are private without `pub`.
+     * Returning undefined falls back to modifier keywords, then `public`.
+     */
+    visibilityOf?: (defNode: Parser.SyntaxNode, name: string, modifiers: readonly string[]) => Visibility | undefined;
 }
 
 const QUERIES_DIR = path.resolve(__dirname, 'queries');
@@ -139,6 +145,10 @@ export function createLanguageProvider(descriptor: LanguageDescriptor): Language
 
     if (descriptor.receiverName) {
         provider.receiverName = descriptor.receiverName;
+    }
+
+    if (descriptor.visibilityOf) {
+        provider.visibilityOf = descriptor.visibilityOf;
     }
 
     if (descriptor.implicitMemberCalls) {
