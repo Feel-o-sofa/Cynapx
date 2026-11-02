@@ -84,6 +84,16 @@ export const rustDescriptor: LanguageDescriptor = {
             });
         }
     },
+    visibilityOf(defNode, _name, modifiers) {
+        if (modifiers.some(m => m.startsWith('pub'))) return 'public';
+        // Items in a trait or a trait impl (`impl Display for X`) are as visible
+        // as the trait and are called through it, never by their own name.
+        for (let p = defNode.parent; p; p = p.parent) {
+            if (p.type === 'trait_item' || (p.type === 'impl_item' && p.childForFieldName('trait'))) return 'public';
+            if (p.type === 'impl_item' || p.type === 'mod_item') break;
+        }
+        return 'private';
+    },
     extractTestSpecs(root, filePath, fileQname): TestSpec[] {
         const specs: TestSpec[] = [];
         // Tests may live at the top level or inside `#[cfg(test)] mod tests { ... }`,

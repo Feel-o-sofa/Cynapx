@@ -142,6 +142,10 @@ export const goDescriptor: LanguageDescriptor = {
         if (defNode.type !== 'method_declaration') return undefined;
         return defNode.childForFieldName('receiver')?.descendantsOfType('type_identifier')[0]?.text;
     },
+    visibilityOf(_defNode, name) {
+        // Go exports by capitalization; an unexported name is private to its package.
+        return /^[A-Z]/.test(name) ? 'public' : 'private';
+    },
     receiverName(defNode) {
         if (defNode.type !== 'method_declaration') return undefined;
         return defNode.childForFieldName('receiver')?.descendantsOfType('parameter_declaration')[0]?.childForFieldName('name')?.text;

@@ -109,8 +109,13 @@ export class StructuralTagger {
         if (node.is_generated) tags.add('trait:generated');
         if (node.remote_project_path) tags.add('trait:external');
 
+        // Decorated / annotated definitions (`@app.route`, `@property`, `@Override`,
+        // `[HttpGet]`) are invoked by a framework or through dispatch.
+        if (node.modifiers?.some(m => m.startsWith('@') || m.startsWith('['))) tags.add('trait:decorated');
+
         // 4. Visibility & Access Detection
-        const rawSymbolName = node.qualified_name.split('#').pop() || '';
+        // The symbol's own name: the last segment of `file#Type.member`.
+        const rawSymbolName = (node.qualified_name.split('#').pop() || '').split('.').pop() || '';
         if (node.visibility === 'private' || node.visibility === 'protected' || rawSymbolName.startsWith('_')) {
             tags.add('trait:internal');
         } else if (node.visibility === 'public' || /^[A-Z]/.test(rawSymbolName)) {

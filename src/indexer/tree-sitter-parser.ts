@@ -5,7 +5,7 @@
  */
 import Parser from 'tree-sitter';
 import { CodeParser, DeltaGraph, RawCodeEdge, LanguageProvider, TestSpec } from './types';
-import { CodeNode, SymbolType } from '../types';
+import { CodeNode, SymbolType, Visibility } from '../types';
 import * as fs from 'fs';
 import * as path from 'path';
 import { calculateChecksum } from '../utils/checksum';
@@ -95,6 +95,36 @@ function namedType(text: string): string | undefined {
     const name = t.split(/::|\./).pop() ?? '';
     // Type names are capitalized; this also skips primitives such as `int`.
     return /^[A-Z]\w*$/.test(name) ? name : undefined;
+}
+
+/**
+ * Modifiers, annotations and decorators declared on a definition: Java and
+ * Kotlin `modifiers` (`@Override private static`), C# `[Attr]` and `modifier`,
+ * Rust and PHP `visibility_modifier`, Python `@decorator` lines.
+ */
+export function declaredModifiers(defNode: Parser.SyntaxNode): string[] {
+    const out: string[] = [];
+    if (defNode.parent?.type === 'decorated_definition') {
+        for (const c of defNode.parent.namedChildren) if (c.type === 'decorator') out.push(c.text.trim());
+    }
+    for (const c of defNode.namedChildren) {
+        if (c.type === 'modifiers') {
+            // Keywords such as `private` are anonymous nodes, so read every child.
+            out.push(...c.children.map(m => m.text.trim()));
+        } else if (c.type === 'modifier' || c.type === 'visibility_modifier' || c.type === 'attribute_list') {
+            out.push(c.text.trim());
+        }
+    }
+    return out.filter(Boolean);
+}
+
+/** Visibility named by a modifier keyword, or undefined when none is declared. */
+function keywordVisibility(modifiers: readonly string[]): Visibility | undefined {
+    for (const m of modifiers) {
+        if (m === 'private' || m === 'protected' || m === 'internal') return m;
+        if (m === 'public' || m.startsWith('pub')) return 'public';
+    }
+    return undefined;
 }
 
 /** `new Client()` is a receiver of type `Client`; `a::b` is written `a.b`. */
@@ -253,6 +283,7 @@ export class TreeSitterParser implements CodeParser {
             const paramsCapture = match.captures.find(c => c.name === `${prefix}.params`);
             const returnCapture = match.captures.find(c => c.name === `${prefix}.return`);
             const modifiersCapture = match.captures.find(c => c.name === `${prefix}.modifiers`);
+            const modifiers = modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : declaredModifiers(node);
 
             nodes.push({
                 qualified_name: qname,
@@ -261,7 +292,7 @@ export class TreeSitterParser implements CodeParser {
                 file_path: normalizedFilePath,
                 start_line: node.startPosition.row + 1,
                 end_line: node.endPosition.row + 1,
-                visibility: 'public',
+                visibility: provider.visibilityOf?.(node, name, modifiers) ?? keywordVisibility(modifiers) ?? 'public',
                 is_generated: false,
                 last_updated_commit: commit,
                 version: version,
@@ -269,7 +300,7 @@ export class TreeSitterParser implements CodeParser {
                 cyclomatic: MetricsCalculator.calculateCyclomaticComplexityTreeSitter(node, provider.getDecisionPoints()),
                 signature: paramsCapture ? `${name}${paramsCapture.node.text}` : undefined,
                 return_type: returnCapture ? returnCapture.node.text.replace(/^[:\s->]+/, '') : undefined,
-                modifiers: modifiersCapture ? modifiersCapture.node.text.split(/\s+/) : undefined,
+                modifiers: modifiers.length > 0 ? modifiers : undefined,
                 docstring: this.extractTreeSitterDocstring(node, provider)
             });
 

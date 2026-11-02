@@ -3,7 +3,7 @@
  * Licensed under the MIT License (MIT).
  * See LICENSE in the project root for license information.
  */
-import { CodeNode, CodeEdge, SymbolType, EdgeType } from '../types';
+import { CodeNode, CodeEdge, SymbolType, EdgeType, Visibility } from '../types';
 import Parser from 'tree-sitter';
 
 export type ChangeType = 'ADD' | 'MODIFY' | 'DELETE';
@@ -69,4 +69,5 @@ export interface LanguageProvider {
     ownerTypeName?: (defNode: Parser.SyntaxNode) => string | undefined;
     receiverName?: (defNode: Parser.SyntaxNode) => string | undefined;
     implicitMemberCalls?: boolean;
+    visibilityOf?: (defNode: Parser.SyntaxNode, name: string, modifiers: readonly string[]) => Visibility | undefined;
 }
