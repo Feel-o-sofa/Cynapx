@@ -14,7 +14,14 @@ drift detection now runs in CI (`.github/workflows/scheduled-maintenance.yml`).
   default branch is `release` (still 3.1.0), not `master`. The same cause meant `git clone` installs still got
   3.1.0 with its 12 advisories. Owner decided: merge PR #24, then fast-forward `release` to `master` after
   each merge (HANDOVER gotcha 17). No 4.1.0 tag (owner's call).
-- Open issue #21 (`find_dead_code` over-reports data assets, since April) is still open.
+- **4.2.0** (same day):
+  - #21 `find_dead_code`: only functions and methods, implicit calls excluded, name-reference filter.
+    Issue-shaped fixture 36 → 2 (exactly the dead ones); stdlib `email` 0 → 13 (3 getattr dispatch, 10 public API).
+    Attaching the reporter's project (Pixlato) to measure directly was refused by the session's
+    permission classifier, so the fixture reproduces its shape instead.
+  - Found on the way: `processBatch` never stored test specs (only the watcher path did, since 2026-06-17),
+    and the tree-sitter parser marked everything `public` with no modifiers. Both fixed.
+  - `purge_index` / `cynapx-admin purge` keep annotations (set aside beside the DB, restored on next open).
 
 ---
 
