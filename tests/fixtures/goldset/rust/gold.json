@@ -28,6 +28,18 @@
     [
       "src/main.rs:6 use_client",
       "src/util.rs:9 factorial"
+    ],
+    [
+      "src/service.rs:13 build",
+      "src/service.rs:6 Worker::new"
+    ],
+    [
+      "src/service.rs:13 build",
+      "src/service.rs:10 Worker::run"
+    ],
+    [
+      "src/service.rs:13 build",
+      "src/client.rs:10 Client::configure"
     ]
   ],
   "cases": {
@@ -35,6 +47,7 @@
     "self_call": "this/self method call inside the class resolves to the sibling method.",
     "cross_file": "Calls to functions defined in another file of the project.",
     "recursion": "factorial calls itself.",
-    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge."
+    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge.",
+    "assignment_receiver": "let c: Client = ...; and let w = Worker::new(): a let's annotation, or a `Type::new()` constructor, types the binding."
   }
 }

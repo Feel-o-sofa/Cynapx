@@ -14,3 +14,4 @@ fn shutdown() -> String {
 }
 
 fn main() {}
+mod service;

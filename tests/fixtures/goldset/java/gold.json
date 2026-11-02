@@ -28,6 +28,26 @@
     [
       "src/gold/Main.java:7 Main.useClient",
       "src/gold/Util.java:11 Util.factorial"
+    ],
+    [
+      "src/gold/Base.java:4 Base.setup",
+      "src/gold/Util.java:8 Util.log"
+    ],
+    [
+      "src/gold/Service.java:4 Service.setup",
+      "src/gold/Base.java:4 Base.setup"
+    ],
+    [
+      "src/gold/Service.java:4 Service.setup",
+      "src/gold/Base.java:8 Base.shared"
+    ],
+    [
+      "src/gold/Service.java:10 Service.build",
+      "src/gold/Client.java:4 Client.configure"
+    ],
+    [
+      "src/gold/Service.java:10 Service.build",
+      "src/gold/Service.java:4 Service.setup"
     ]
   ],
   "cases": {
@@ -35,6 +55,8 @@
     "self_call": "this/self method call inside the class resolves to the sibling method.",
     "cross_file": "Calls to functions defined in another file of the project.",
     "recursion": "factorial calls itself.",
-    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge."
+    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge.",
+    "super_and_inherited": "super.setup() targets the base method; a bare shared() inside a subclass targets the inherited method.",
+    "assignment_receiver": "Client c = new Client() and var svc = new Service(): the local's declared or constructed type types the receiver."
   }
 }
