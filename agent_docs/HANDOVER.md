@@ -254,3 +254,6 @@ CI 신규 워크플로가 수동 트리거로 1회 성공.
     따른다 — `release`가 3.1.0에 머문 3주간 신규 설치는 취약 버전을 받았고 주간 점검은 한 번도 돌지 않았다.
     master 머지 후 `release`를 master로 **fast-forward**하라(오너 승인 2026-11-02, 브랜치 푸시라 세션에서 가능):
     `git push origin origin/master:refs/heads/release`. 강제 푸시는 금지 — fast-forward가 안 되면 멈추고 보고하라.
+18. **`.gitignore`의 `*test_*`·`*temp_*`·`*verify_*` 패턴**은 파일을 조용히 커밋에서 뺀다. `tests/fixtures/**`는
+    예외 처리했지만, 다른 곳에 그런 이름의 파일을 추가하면 `git status`에 안 보인다 — 로컬 그린·CI 레드의 원인이 된다
+    (4.2.0 PR에서 실제로 발생). 새 파일을 추가한 커밋 후엔 `git ls-files <dir>`로 확인하라.
