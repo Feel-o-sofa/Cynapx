@@ -661,8 +661,21 @@ export class TypeScriptParser implements CodeParser {
         return 'field';
     }
 
+    /**
+     * An imported identifier resolves to its import alias, whose declaration is
+     * the import specifier in the *calling* file. Follow it to the real
+     * declaration, or the call is attributed to `<caller file>#name` and never
+     * matches a node.
+     */
+    private resolveAlias(symbol: ts.Symbol): ts.Symbol {
+        if (!(symbol.flags & ts.SymbolFlags.Alias) || !this.typeChecker) return symbol;
+        const target = this.typeChecker.getAliasedSymbol(symbol);
+        return target.declarations?.length ? target : symbol;
+    }
+
     private resolveCall(node: ts.CallExpression, sourceFile: ts.SourceFile, fromQName: string, edges: RawCodeEdge[]) {
-        const symbol = this.typeChecker?.getSymbolAtLocation(node.expression);
+        const found = this.typeChecker?.getSymbolAtLocation(node.expression);
+        const symbol = found && this.resolveAlias(found);
         if (symbol) {
             const declaration = symbol.valueDeclaration || symbol.declarations?.[0];
             if (declaration) {

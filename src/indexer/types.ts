@@ -66,4 +66,7 @@ export interface LanguageProvider {
     getDecisionPoints(): string[];
     normalizeDocstring?: (raw: string) => string;
     extractTestSpecs?: (root: Parser.SyntaxNode, filePath: string, fileQname: string) => TestSpec[];
+    ownerTypeName?: (defNode: Parser.SyntaxNode) => string | undefined;
+    receiverName?: (defNode: Parser.SyntaxNode) => string | undefined;
+    implicitMemberCalls?: boolean;
 }

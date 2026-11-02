@@ -54,6 +54,7 @@ export const csharpDescriptor: LanguageDescriptor = {
         ['interface', 'interface']
     ],
     defaultSymbolType: 'function',
+    implicitMemberCalls: true,
     decisionPoints: ['if_statement', 'for_statement', 'foreach_statement', 'while_statement', 'switch_section', 'catch_clause'],
     normalizeDocstring(raw: string): string {
         return raw
