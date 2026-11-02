@@ -151,6 +151,10 @@ export interface OptimizationReport {
         lowConfidenceDead: number;
         /** Total dead symbols across all tiers */
         deadSymbols: number;
+        /** Symbols fan-in cannot judge (data assets, fields, imports, types) */
+        notAnalyzed: number;
+        /** Candidates with no callers whose name still occurs elsewhere (callbacks, aliases, config) */
+        referencedByName: number;
         optimizationPotential: string;
     };
 }
