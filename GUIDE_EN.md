@@ -1,4 +1,4 @@
-# 🧠 Cynapx v4.2.0 — User Guide
+# 🧠 Cynapx v4.3.0 — User Guide
 
 > Complete how-to reference for the AI-native Code Knowledge Engine
 

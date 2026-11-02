@@ -26,6 +26,33 @@ import { Logger } from '../utils/logger';
 const CALLABLE_TYPES = new Set(['function', 'method', 'class']);
 const isCallable = (node: CodeNode) => CALLABLE_TYPES.has(node.symbol_type);
 
+/**
+ * Picks the candidate in the caller's scope: its file, then a file it imports,
+ * then its directory (a Go or Java package). Otherwise only a unique match.
+ */
+function pickInScope(candidates: CodeNode[], callerFile: string, imports: ReadonlySet<string>): CodeNode | undefined {
+    if (candidates.length === 0) return undefined;
+    const fileOf = (n: CodeNode) => toCanonical(n.file_path);
+    const callerDir = path.posix.dirname(callerFile);
+    return candidates.find(n => fileOf(n) === callerFile)
+        ?? candidates.find(n => imports.has(fileOf(n)))
+        ?? candidates.find(n => path.posix.dirname(fileOf(n)) === callerDir)
+        ?? (candidates.length === 1 ? candidates[0] : undefined);
+}
+
+/** Base type names per class qname, from parsed `inherits` / `implements` edges. */
+function collectBases(deltas: DeltaGraph[]): Map<string, string[]> {
+    const bases = new Map<string, string[]>();
+    for (const delta of deltas) {
+        for (const edge of delta.edges) {
+            if (edge.edge_type !== 'inherits' && edge.edge_type !== 'implements') continue;
+            const key = toCanonical(edge.from_qname);
+            bases.set(key, [...(bases.get(key) ?? []), edge.to_qname]);
+        }
+    }
+    return bases;
+}
+
 /** Canonical paths of the files a parsed file imports (its depends_on targets). */
 function importedFiles(delta: DeltaGraph): Set<string> {
     const files = new Set<string>();
@@ -53,6 +80,11 @@ const log = new Logger('UpdatePipeline');
  * UpdatePipeline manages the incremental update process for the knowledge graph.
  */
 export class UpdatePipeline {
+    /** Base type names per class qname, from the batch being stored (see resolveInherited). */
+    private batchBases = new Map<string, string[]>();
+    /** Imported files per file, from the batch being stored. */
+    private batchImports = new Map<string, Set<string>>();
+
     private embeddingManager: EmbeddingManager;
 
     constructor(
@@ -380,6 +412,9 @@ export class UpdatePipeline {
             this.rekeyLegacyAnnotations(symbolCache.keys());
 
             // Pass 2: Relations
+            this.batchBases = collectBases(results.flatMap(r => r.status === 'success' ? [r.delta] : []));
+            this.batchImports = new Map(results.flatMap(r => r.status === 'success' && r.event.event !== 'DELETE'
+                ? [[toCanonical(r.event.file_path), importedFiles(r.delta)] as [string, Set<string>]] : []));
             for (const res of results) {
                 if (res.status === 'success' && res.event.event !== 'DELETE') {
                     const imports = importedFiles(res.delta);
@@ -427,6 +462,8 @@ export class UpdatePipeline {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
             throw error;
         } finally {
+            this.batchBases = new Map();
+            this.batchImports = new Map();
             this.crossProjectResolver?.endBatch();
             resolveLock!();
         }
@@ -466,6 +503,8 @@ export class UpdatePipeline {
             }
             this.rekeyLegacyAnnotations(symbolCache.keys());
 
+            this.batchBases = collectBases([delta]);
+            this.batchImports = new Map([[toCanonical(filePath), importedFiles(delta)]]);
             const imports = importedFiles(delta);
             for (const edge of delta.edges) {
                 const fromId = this.resolveNodeId(edge, 'from', symbolCache);
@@ -494,6 +533,8 @@ export class UpdatePipeline {
             if (this.db.inTransaction) this.db.prepare('ROLLBACK').run();
             throw e;
         } finally {
+            this.batchBases = new Map();
+            this.batchImports = new Map();
             resolveLock!();
         }
     }
@@ -720,6 +761,13 @@ export class UpdatePipeline {
             // match module `client`, and a variable `logger` type `Logger`.
             const last = qualifier.slice(qualifier.lastIndexOf('.') + 1);
             if (/^[A-Z]/.test(last)) {
+                // Find the type first, then the member on it or its bases. Matching
+                // `Type.member` by name alone would take a same-named member of a
+                // different type that happens to share the type's name.
+                const type = this.typeInScope(last, callerFile, imports);
+                if (type) {
+                    return lookup(`${type.qualified_name}.${name}`) ?? this.resolveInherited(type, name, new Set());
+                }
                 candidates = this.nodeRepo.findNodesBySymbolName(`${last}.${name}`).filter(isCallable);
             } else {
                 for (const file of imports) {
@@ -731,17 +779,64 @@ export class UpdatePipeline {
             }
         }
 
-        if (candidates.length > 0) {
-            const fileOf = (n: CodeNode) => toCanonical(n.file_path);
-            const callerDir = path.posix.dirname(callerFile);
-            const inScope = candidates.find(n => fileOf(n) === callerFile)
-                ?? candidates.find(n => imports.has(fileOf(n)))
-                ?? candidates.find(n => path.posix.dirname(fileOf(n)) === callerDir);
-            if (inScope) return inScope.id;
-            return candidates.length === 1 ? candidates[0].id : undefined;
-        }
+        if (candidates.length > 0) return pickInScope(candidates, callerFile, imports)?.id;
 
         // Boundaryless Edge Discovery (Task 31)
         return this.crossProjectResolver?.resolve(target, toCanonical(target));
+    }
+
+    /**
+     * `Type.member` where the type does not define the member: look for it on
+     * the type's bases, nearest first. Bases come from `inherits` /
+     * `implements` edges, or from this batch's parse results, since a first
+     * index stores those edges in the same pass as the calls.
+     */
+    /** The class or interface named `name` that the caller sees (see pickInScope). */
+    private typeInScope(name: string, scopeFile: string, imports: ReadonlySet<string>): CodeNode | undefined {
+        const types = this.nodeRepo.findNodesBySymbolName(name).filter(n => n.symbol_type === 'class' || n.symbol_type === 'interface');
+        return pickInScope(types, scopeFile, imports);
+    }
+
+    /**
+     * A member the type does not define: look for it on the type's bases,
+     * nearest first. Bases come from `inherits` / `implements` edges, or from
+     * this batch's parse results, since a first index stores those edges in
+     * the same pass as the calls. A base outside the project (`list`) ends
+     * the search: the call stays unresolved.
+     */
+    private resolveInherited(type: CodeNode, member: string, seen: Set<number>): number | undefined {
+        if (type.id === undefined || seen.has(type.id) || seen.size > 16) return undefined;
+        seen.add(type.id);
+        const typeFile = toCanonical(type.file_path);
+        // A base is named in the type's own file, so resolve it from there.
+        const scope = this.importsOf(typeFile);
+        for (const baseName of this.baseNamesOf(type)) {
+            const base = this.typeInScope(baseName, typeFile, scope);
+            if (!base) continue;
+            const own = this.nodeRepo.getNodeByQualifiedName(toCanonical(`${base.qualified_name}.${member}`));
+            if (own?.id !== undefined) return own.id;
+            const deeper = this.resolveInherited(base, member, seen);
+            if (deeper !== undefined) return deeper;
+        }
+        return undefined;
+    }
+
+    /** Files a file imports: from this batch's parse results, else stored depends_on edges. */
+    private importsOf(file: string): ReadonlySet<string> {
+        const fromBatch = this.batchImports.get(file);
+        if (fromBatch) return fromBatch;
+        return new Set((this.db.prepare(`
+            SELECT t.qualified_name AS q FROM edges e
+            JOIN nodes f ON f.id = e.from_id JOIN nodes t ON t.id = e.to_id
+            WHERE f.qualified_name = ? AND e.edge_type = 'depends_on'`).all(file) as { q: string }[]).map(r => r.q));
+    }
+
+    private baseNamesOf(type: CodeNode): string[] {
+        const raw = this.batchBases.get(toCanonical(type.qualified_name))
+            ?? (this.db.prepare(`
+                SELECT t.symbol_name AS name FROM edges e JOIN nodes t ON t.id = e.to_id
+                WHERE e.from_id = ? AND e.edge_type IN ('inherits', 'implements')`).all(type.id) as { name: string }[]).map(r => r.name);
+        // `pkg.Base`, `Base<T>`, `Base[T]` → `Base`
+        return raw.map(b => b.replace(/[<\[].*$/s, '').split(/::|\./).pop() ?? '').filter(Boolean);
     }
 }

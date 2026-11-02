@@ -52,14 +52,18 @@ describe('find_dead_code on a code + data-asset project (#21)', () => {
     });
 
     it('sets aside functions referenced by name but never called by name', () => {
-        // `_on_click` is registered in a dict (a callback). `LocaleManager.get`
-        // is called as `strings.get(...)` on a variable typed by assignment,
-        // which resolution does not follow yet (HANDOVER §5 item 6). Neither
-        // has a call edge, but both names occur elsewhere.
+        // `_on_click` is registered in a dict (a callback): no call edge, but
+        // its name occurs elsewhere.
         const names = [...report.high, ...report.medium, ...report.low].map(n => rel(n.qualified_name));
         expect(names).not.toContain('app/main.py#_on_click');
+        expect(report.summary.referencedByName).toBe(1);
+    });
+
+    it('sees a call through a variable typed by assignment', () => {
+        // `strings = LocaleManager(...)` then `strings.get(...)`: resolved since
+        // 4.3.0, so `get` is neither reported nor set aside.
+        const names = [...report.high, ...report.medium, ...report.low].map(n => rel(n.qualified_name));
         expect(names).not.toContain('app/locale_manager.py#localemanager.get');
-        expect(report.summary.referencedByName).toBe(2);
     });
 
     it('does not judge data assets, and says how many it left out', () => {

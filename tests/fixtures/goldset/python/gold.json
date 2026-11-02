@@ -28,6 +28,38 @@
     [
       "pkg/main.py:7 use_client",
       "pkg/util.py:9 factorial"
+    ],
+    [
+      "pkg/service.py:7 Base.setup",
+      "pkg/util.py:5 log"
+    ],
+    [
+      "pkg/service.py:15 Service.setup",
+      "pkg/service.py:7 Base.setup"
+    ],
+    [
+      "pkg/service.py:15 Service.setup",
+      "pkg/service.py:10 Base.shared"
+    ],
+    [
+      "pkg/service.py:20 build",
+      "pkg/client.py:8 Client"
+    ],
+    [
+      "pkg/service.py:20 build",
+      "pkg/client.py:9 Client.configure"
+    ],
+    [
+      "pkg/service.py:20 build",
+      "pkg/service.py:14 Service"
+    ],
+    [
+      "pkg/service.py:20 build",
+      "pkg/service.py:15 Service.setup"
+    ],
+    [
+      "pkg/service.py:20 build",
+      "pkg/util.py:9 factorial"
     ]
   ],
   "cases": {
@@ -35,6 +67,9 @@
     "self_call": "this/self method call inside the class resolves to the sibling method.",
     "cross_file": "Calls to functions defined in another file of the project.",
     "recursion": "factorial calls itself.",
-    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge."
+    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge.",
+    "absolute_import": "from pkg.util import log / from pkg import util: absolute imports of the project's own package resolve to its files, not to an external package.",
+    "super_and_inherited": "super().setup() targets the base method; self.shared() targets a method defined only on the base class.",
+    "assignment_receiver": "c = Client(); c.configure(): the receiver's type comes from the assignment. Calling a class is a call to it (construction)."
   }
 }

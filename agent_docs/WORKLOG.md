@@ -6,6 +6,19 @@ drift detection now runs in CI (`.github/workflows/scheduled-maintenance.yml`).
 
 ---
 
+## 2026-11-02 (later) — 4.3.0: typed locals, super, inheritance (HANDOVER §5 item 6)
+
+- Gold set first: 18 new edges in new files. Before: 41/54; after: 54/54, still no false positives.
+- Cross-check on stdlib `email` vs 4.2.0: +164 edges, 0 removed. A first sample of 20 caught one false
+  positive (`parser.Header().append` → an unrelated `header.Header.append`; matching `Type.member` by
+  name across same-named types). Fixed by resolving the type first, then the member on it or its bases.
+  20 + 20 more sampled after the fix: all correct, including multi-level inheritance across files.
+- Found on the way: the Kotlin call query captured method calls' receivers instead of the method.
+- `find_dead_code` on `email`: same 13 reported; set-aside 110 → 82 (28 functions gained real callers).
+- Remaining gaps recorded as HANDOVER §5 item 7.
+
+---
+
 ## 2026-11-02 — advisories again, and why nobody was told
 
 - `npm audit` found 7 new advisories (5 prod, 1 high: body-parser DoS) published since 4.0.0. Fixed by raising

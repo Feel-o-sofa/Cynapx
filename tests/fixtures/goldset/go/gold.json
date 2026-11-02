@@ -32,6 +32,14 @@
     [
       "main.go:10 UseClient",
       "util/util.go:9 Factorial"
+    ],
+    [
+      "worker.go:11 Build",
+      "client/client.go:11 (*Client).Configure"
+    ],
+    [
+      "worker.go:11 Build",
+      "worker.go:7 (*Worker).Run"
     ]
   ],
   "cases": {
@@ -39,6 +47,7 @@
     "self_call": "this/self method call inside the class resolves to the sibling method.",
     "cross_file": "Calls to functions defined in another file of the project.",
     "recursion": "factorial calls itself.",
-    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge."
+    "external_collision": "shutdown() calls an external API whose name collides with a project symbol (console.log / logging.log / Logger.log / time.Format / std::fmt::format). It must produce no edge.",
+    "assignment_receiver": "c := &client.Client{} and w := Worker{}: a composite literal types the variable."
   }
 }

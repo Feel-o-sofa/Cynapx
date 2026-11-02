@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [4.3.0] - 2026-11-02
+
+**Calls through local variables, `super` and inheritance.** The call-edge gold set gained 18 cases for what 4.1.0 left unresolved. They are now all found (54/54, no false positives). On Python's stdlib `email` package, which the gold set was not built from, 164 call edges were added and none removed relative to 4.2.0; 40 sampled additions checked correct. **The index rebuilds automatically on first start.**
+
+### Added
+- **Receivers typed by assignment** — `c = Client()` (Python), `Client c = new Client()` / `var c = new Client()` (Java, C#), `c := &pkg.T{}` (Go), `let c: T` / `T::new()` (Rust), `val c = Client()` (Kotlin). A variable assigned two different types is left untyped
+- **`super` and inherited calls** — `super().m()` / `super.m()` resolve to the base class's method, and `self.m()` or a bare Java call to a member the class only inherits resolves through `inherits` / `implements`, across files and levels
+- **Python absolute imports of the project's own package** (`from pkg.util import x`, `import pkg.util`) resolve to the project's files instead of an external `pypi:pkg` dependency
+
+### Fixed
+- **Same-named types** — a type-qualified call now finds the type the caller sees first, then the member on it or its bases. Matching by name alone could pick a same-named member of an unrelated class that happened to share the type's name
+- **Kotlin method calls** were recorded as calls to the receiver's name (`c` in `c.configure()`) instead of the method
+
+### Known gaps
+- Types inferred from a function's return value (`c := client.New()`), attributes typed in another method (`self.x = Client()`), chained calls, Go struct embedding, and calls through an interface to its implementations stay unresolved
+
 ## [4.2.0] - 2026-11-02
 
 **Dead-code findings you can act on, and memory that survives a purge.** `find_dead_code` judged JSON keys, locale strings and Markdown sections by call fan-in and reported 486 symbols on a project with one dead function (#21). It now judges only functions and methods, and only those whose name is referenced nowhere. On a fixture shaped like that project it reports exactly the two dead functions (36 before). `purge_index` no longer deletes annotations. **The index rebuilds automatically on first start** to pick up visibility, modifiers and test specs.
