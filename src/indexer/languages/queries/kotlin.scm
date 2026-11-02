@@ -7,6 +7,6 @@
     (function_value_parameters) @function.params
 ) @function.def
 (call_expression 
-    [(navigation_expression (simple_identifier) @call.name) (simple_identifier) @call.name]
+    [(navigation_expression (navigation_suffix (simple_identifier) @call.name)) (simple_identifier) @call.name]
 ) @call.expr
 (import_header (identifier) @import.name) @import.def

@@ -195,3 +195,39 @@ class B:
         }
     });
 });
+
+describe('receivers typed by assignment, super and inherited calls (4.3.0)', () => {
+    const calls = async (name: string, src: string) => {
+        const { edges } = await new TreeSitterParser().parse(write(name, src), 'c', 1);
+        return edges.filter(e => e.edge_type === 'calls').map(e => e.to_qname);
+    };
+
+    it('types C# and Kotlin locals from their construction', async () => {
+        expect(await calls('A.cs', 'class A { void F() { var c = new Client(); c.Configure(); Client d = Make(); d.Run(); } }'))
+            .toEqual(expect.arrayContaining(['Client.Configure', 'Client.Run']));
+        expect(await calls('a.kt', 'fun f() {\n    val c = Client()\n    c.configure()\n}\n')).toContain('Client.configure');
+    });
+
+    it('does not type a variable assigned two different types', async () => {
+        expect(await calls('two.py', 'def f():\n    c = A()\n    c = B()\n    c.run()\n')).toContain('c.run');
+    });
+
+    it('resolves a member on the type the caller sees, not a same-named type elsewhere', async () => {
+        // `parser.Header` subclasses `list`, so `append` is list.append. Another
+        // module also defines a `Header` class with an `append` method; it must
+        // not be chosen just because the names match.
+        const parser = write('pkg/parser.py', 'class TokenList(list):\n    pass\n\nclass Header(TokenList):\n    pass\n');
+        const other = write('pkg/header.py', 'class Header:\n    def append(self, s):\n        pass\n');
+        const init = write('pkg/__init__.py', '');
+        const main = write('pkg/registry.py', 'from . import parser\n\ndef fold():\n    h = parser.Header()\n    h.append(1)\n');
+        expect(await indexCalls([parser, other, init, main])).toEqual(['pkg/registry.py#fold -> pkg/parser.py#header']);
+    });
+
+    it('resolves a member inherited across files and levels', async () => {
+        const base = write('lib/base.py', 'class Base:\n    def save(self):\n        pass\n');
+        const mid = write('lib/mid.py', 'from .base import Base\n\nclass Mid(Base):\n    pass\n');
+        const leaf = write('lib/leaf.py', 'from .mid import Mid\n\nclass Leaf(Mid):\n    def run(self):\n        self.save()\n');
+        const init = write('lib/__init__.py', '');
+        expect(await indexCalls([base, mid, leaf, init])).toEqual(['lib/leaf.py#leaf.run -> lib/base.py#base.save']);
+    });
+});

@@ -135,10 +135,11 @@ func Run() {
 
         const fromRun = callEdges(edges).filter(e => e.from_qname.endsWith('#run'));
         const resolved = fromRun.filter(e => e.to_qname.includes('#configure') && e.dynamic === false);
-        const dynamic = fromRun.filter(e => e.to_qname === 'c.Configure' && e.dynamic === true);
+        const dynamic = fromRun.filter(e => e.to_qname === 'Client.Configure' && e.dynamic === true);
 
         // Exactly one statically resolved edge (the free call) and one dynamic
-        // dotted edge (the receiver call keeps its selector text).
+        // edge for the receiver call, qualified by the type `c := &Client{}`
+        // gives it, for the update pipeline to resolve to the method.
         expect(resolved.length).toBe(1);
         expect(dynamic.length).toBe(1);
     });
