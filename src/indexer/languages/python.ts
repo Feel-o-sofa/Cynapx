@@ -4,6 +4,7 @@
  * See LICENSE in the project root for license information.
  */
 import Parser from 'tree-sitter';
+import * as fs from 'fs';
 import * as path from 'path';
 import { LanguageDescriptor } from './descriptor';
 import { RawCodeEdge, TestSpec } from '../types';
@@ -91,6 +92,51 @@ function resolvePyRelativeImport(
     }
 }
 
+/**
+ * Directories an absolute import may be relative to: the parent of the
+ * topmost package containing the file (walking up through `__init__.py`),
+ * and the file's own directory (a script importing a sibling module).
+ */
+function pySourceRoots(absFilePath: string): string[] {
+    const fileDir = path.dirname(absFilePath);
+    let top = fileDir;
+    while (fs.existsSync(path.join(top, '__init__.py')) && path.dirname(top) !== top) {
+        top = path.dirname(top);
+    }
+    return top === fileDir ? [fileDir] : [top, fileDir];
+}
+
+/**
+ * Resolves an absolute import of the project's own code (`from pkg.util
+ * import x`, `from pkg import util`, `import pkg.util`) to the files that
+ * exist for it, and emits `depends_on` edges to them. Returns false when no
+ * such file exists, i.e. the import is of an installed package.
+ */
+function resolvePyAbsoluteImport(
+    moduleName: string,
+    importedNames: string[],
+    fromQName: string,
+    edges: RawCodeEdge[],
+    absFilePath?: string
+): boolean {
+    if (!absFilePath) return false;
+    const found: string[] = [];
+    const moduleFiles = (base: string) => [`${base}.py`, path.join(base, '__init__.py')].filter(f => fs.existsSync(f));
+    for (const root of pySourceRoots(absFilePath)) {
+        const target = path.join(root, ...moduleName.split('.'));
+        const own = moduleFiles(target);
+        if (own.length === 0) continue;
+        found.push(...own);
+        // `from pkg import util`: an imported name may itself be a submodule.
+        for (const name of importedNames) found.push(...moduleFiles(path.join(target, name)));
+        break;
+    }
+    for (const file of found) {
+        edges.push({ from_qname: fromQName, to_qname: toCanonical(file), edge_type: 'depends_on', dynamic: false });
+    }
+    return found.length > 0;
+}
+
 export const pythonDescriptor: LanguageDescriptor = {
     name: 'python',
     extensions: ['py'],
@@ -115,15 +161,10 @@ export const pythonDescriptor: LanguageDescriptor = {
         if (node.type === 'import_statement') {
             for (let i = 0; i < node.childCount; i++) {
                 const child = node.child(i)!;
-                if (child.type === 'aliased_import') {
-                    const nameNode = child.childForFieldName('name');
-                    if (nameNode) {
-                        const pkgName = nameNode.text.split('.')[0];
-                        edges.push({ from_qname: fromQName, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
-                    }
-                } else if (child.type === 'dotted_name') {
-                    const pkgName = child.text.split('.')[0];
-                    edges.push({ from_qname: fromQName, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
+                const dotted = child.type === 'aliased_import' ? child.childForFieldName('name')
+                    : child.type === 'dotted_name' ? child : null;
+                if (dotted && !resolvePyAbsoluteImport(dotted.text, [], fromQName, edges, absFilePath)) {
+                    edges.push({ from_qname: fromQName, to_qname: `pypi:${dotted.text.split('.')[0]}`, edge_type: 'depends_on', dynamic: false });
                 }
             }
         } else if (node.type === 'import_from_statement') {
@@ -134,8 +175,16 @@ export const pythonDescriptor: LanguageDescriptor = {
                 // Local/relative import: resolve to a sibling/ancestor .py file.
                 resolvePyRelativeImport(node, moduleNode, fromQName, edges, absFilePath);
             } else {
-                const pkgName = moduleNode.text.split('.')[0];
-                edges.push({ from_qname: fromQName, to_qname: `pypi:${pkgName}`, edge_type: 'depends_on', dynamic: false });
+                const importedNames: string[] = [];
+                for (let i = 0; i < node.childCount; i++) {
+                    const child = node.child(i)!;
+                    if (node.fieldNameForChild(i) !== 'name') continue;
+                    const nameNode = child.type === 'aliased_import' ? child.childForFieldName('name') : child;
+                    if (nameNode) importedNames.push(nameNode.text);
+                }
+                if (!resolvePyAbsoluteImport(moduleNode.text, importedNames, fromQName, edges, absFilePath)) {
+                    edges.push({ from_qname: fromQName, to_qname: `pypi:${moduleNode.text.split('.')[0]}`, edge_type: 'depends_on', dynamic: false });
+                }
             }
         }
     },
