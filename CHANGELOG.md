@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Method calls no longer bind to unrelated same-named functions** elsewhere in the project (e.g. `logger.log()` to `Util.log`)
 - **Annotations on renamed members are kept** — the re-index moves them from `file#member` to `file#Type.member` when exactly one member claims the old name
 
+### Security
+- **Advisories: 7 → 0** published since 4.0.0 (production 5 → 0, including 1 high): `body-parser` 1.x/2.x DoS via trailing bytes after a compressed body (high), `@hono/node-server` static-path double decoding (now 2.x, which the MCP SDK supports), `fast-uri` (4), `qs`, and `@vitest/mocker` (dev). The 4.0.0 override floors are raised to the fixed releases; MCP SDK 1.32.2
+
 ### Known gaps
 - Receivers whose type is only inferable from an assignment (`c := client.New()`, `c = Client()`), inherited methods and `super()` calls stay unresolved
 - Python absolute imports of the project's own package (`from email.utils import x`) are treated as external, so they do not scope resolution

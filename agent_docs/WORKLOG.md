@@ -6,6 +6,18 @@ drift detection now runs in CI (`.github/workflows/scheduled-maintenance.yml`).
 
 ---
 
+## 2026-11-02 — advisories again, and why nobody was told
+
+- `npm audit` found 7 new advisories (5 prod, 1 high: body-parser DoS) published since 4.0.0. Fixed by raising
+  the override floors; 0/0 again.
+- **The weekly maintenance job never ran.** Scheduled workflows fire only from the default branch, and the
+  default branch is `release` (still 3.1.0), not `master`. The same cause meant `git clone` installs still got
+  3.1.0 with its 12 advisories. Owner decided: merge PR #24, then fast-forward `release` to `master` after
+  each merge (HANDOVER gotcha 17). No 4.1.0 tag (owner's call).
+- Open issue #21 (`find_dead_code` over-reports data assets, since April) is still open.
+
+---
+
 ## 2026-10-12 (latest) — 4.1.0: call-edge gold set and resolution (HANDOVER WP-3 item 3)
 
 - **v4.0.0**: merged to master (PR #23, CI green). The tag is **not** pushed: GitHub refuses non-branch

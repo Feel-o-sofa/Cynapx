@@ -247,3 +247,7 @@ CI 신규 워크플로가 수동 트리거로 1회 성공.
     `self`/수신자, 파라미터 타입)와 파이프라인(`update-pipeline.ts` `resolveCallTarget()`: 파일 간) 두 곳이다.
 16. **해소를 바꾸면 `npm run goldset`부터**: 개선했으면 같은 커밋에서 `tests/fixtures/goldset/baseline.json`을 올려라.
     골드셋 심볼은 정의 위치(`file:line`)로 키가 잡혀 있어 qname 체계가 바뀌어도 정답이 유지된다.
+17. **기본 브랜치는 `master`가 아니라 `release`다** (안정 채널). `git clone` 설치와 스케줄 워크플로는 기본 브랜치를
+    따른다 — `release`가 3.1.0에 머문 3주간 신규 설치는 취약 버전을 받았고 주간 점검은 한 번도 돌지 않았다.
+    master 머지 후 `release`를 master로 **fast-forward**하라(오너 승인 2026-11-02, 브랜치 푸시라 세션에서 가능):
+    `git push origin origin/master:refs/heads/release`. 강제 푸시는 금지 — fast-forward가 안 되면 멈추고 보고하라.
