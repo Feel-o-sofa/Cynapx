@@ -9,7 +9,7 @@ import { NodeRepository } from '../db/node-repository';
 import { EdgeRepository } from '../db/edge-repository';
 import { MetadataRepository } from '../db/metadata-repository';
 import { GitService, DiffFailedError } from './git-service';
-import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType } from './types';
+import { FileChangeEvent, CodeParser, DeltaGraph, ChangeType, TestSpec } from './types';
 import { WorkerPool } from './worker-pool';
 import { toCanonical } from '../utils/paths';
 import { CrossProjectResolver } from './cross-project-resolver';
@@ -364,6 +364,7 @@ export class UpdatePipeline {
                         this.edgeRepo.deleteEdgesByNodeId(id);
                     }
                     this.nodeRepo.deleteNodesByFilePath(res.event.file_path);
+                    this.replaceTestSpecs(res.event.file_path, res.event.event === 'DELETE' ? undefined : res.delta.testSpecs);
                     if (res.event.event !== 'DELETE') {
                         const history = this.gitService ? historyByFile.get(res.event.file_path) : undefined;
                         for (const node of res.delta.nodes) {
@@ -480,20 +481,7 @@ export class UpdatePipeline {
             // (the triggers already maintained them incrementally).
             this.recomputeFanMetrics(changedNodeIds);
 
-            // P7: replace this file's test specs with the freshly-parsed set.
-            // On MODIFY we always clear first so specs deleted from the source
-            // (e.g. a removed it() block) don't linger; on ADD the delete is a no-op.
-            if (type === 'MODIFY' || (delta.testSpecs && delta.testSpecs.length > 0)) {
-                this.db.prepare('DELETE FROM test_specs WHERE file_path = ?').run(filePath);
-            }
-            if (delta.testSpecs && delta.testSpecs.length > 0) {
-                const insertSpec = this.db.prepare(
-                    'INSERT INTO test_specs (test_qname, title, target_qname, assertions, file_path, start_line) VALUES (?, ?, ?, ?, ?, ?)'
-                );
-                for (const spec of delta.testSpecs) {
-                    insertSpec.run(spec.testQname, spec.title, spec.targetQname ?? null, JSON.stringify(spec.assertions), spec.filePath, spec.startLine);
-                }
-            }
+            this.replaceTestSpecs(filePath, delta.testSpecs);
 
             this.db.prepare('COMMIT').run();
             this.graphEngine?.invalidateCache();
@@ -647,6 +635,22 @@ export class UpdatePipeline {
 
         return undefined;
     }
+    /**
+     * P7: replaces a file's test specs with the freshly parsed set (none for a
+     * deleted file), so specs removed from the source don't linger. Both the
+     * batch path (initial index, git sync) and the single-file path use it.
+     */
+    private replaceTestSpecs(filePath: string, specs: TestSpec[] | undefined): void {
+        this.db.prepare('DELETE FROM test_specs WHERE file_path = ?').run(filePath);
+        if (!specs || specs.length === 0) return;
+        const insertSpec = this.db.prepare(
+            'INSERT INTO test_specs (test_qname, title, target_qname, assertions, file_path, start_line) VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        for (const spec of specs) {
+            insertSpec.run(spec.testQname, spec.title, spec.targetQname ?? null, JSON.stringify(spec.assertions), spec.filePath, spec.startLine);
+        }
+    }
+
     /**
      * Before 4.1, tree-sitter languages named a member `file#member`; it is now
      * `file#Type.member`. Annotations are keyed by qname, so the re-index that
