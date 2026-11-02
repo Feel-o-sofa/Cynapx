@@ -40,6 +40,34 @@ function pickInScope(candidates: CodeNode[], callerFile: string, imports: Readon
         ?? (candidates.length === 1 ? candidates[0] : undefined);
 }
 
+/** `a.b(x, f(y))` → `a.b`; undefined when the text does not end in a call. */
+function stripTrailingCall(text: string): string | undefined {
+    if (!text.endsWith(')')) return undefined;
+    let depth = 0;
+    for (let i = text.length - 1; i >= 0; i--) {
+        if (text[i] === ')') depth++;
+        else if (text[i] === '(' && --depth === 0) return text.slice(0, i).trim() || undefined;
+    }
+    return undefined;
+}
+
+/**
+ * The type a declared return type names: `*client.Client`, `&mut Client`,
+ * `Optional[Client]`, `"Client"`, the first of Go's `(*Client, error)`.
+ * Capitalized names only, as types are; `Self` stays `Self`.
+ */
+function returnTypeName(ret: string | undefined): string | undefined {
+    if (!ret) return undefined;
+    let t = ret.trim();
+    if (t.startsWith('(')) t = t.slice(1).split(',')[0];
+    t = t.replace(/^["']|["']$/g, '').trim();
+    const optional = /^Optional\[(.+)\]$/s.exec(t);
+    if (optional) t = optional[1];
+    t = t.replace(/^&\s*(?:'\w+\s+)?(?:mut\s+)?/, '').replace(/^\*+/, '').replace(/[<\[].*$/s, '');
+    const name = t.split(/::|\./).pop() ?? '';
+    return /^[A-Z]\w*$/.test(name) ? name : undefined;
+}
+
 /** Base type names per class qname, from parsed `inherits` / `implements` edges. */
 function collectBases(deltas: DeltaGraph[]): Map<string, string[]> {
     const bases = new Map<string, string[]>();
@@ -754,7 +782,12 @@ export class UpdatePipeline {
             candidates = this.nodeRepo.findNodesBySymbolName(target).filter(isCallable);
         } else {
             const [, qualifier, name] = qualified;
+            // `make().configure()`: the member of what the inner call returns.
+            if (qualifier.endsWith(')')) return this.resolveOnCallResult(fromQName, qualifier, name, internalMap, imports);
             if (/[()\[\]]/.test(qualifier)) return undefined;
+            // `self.client`: an attribute whose type the parser could not tell.
+            // Never a module, even when an imported module shares its name.
+            if (/^(self|this)\./.test(qualifier)) return undefined;
             // Qnames are lowercase, so case is the only cue left: a qualifier
             // written like a type (`Util`, `Client`) names a type, otherwise a
             // module. Without it, a parameter `c: Client` would make `Client.run`
@@ -791,6 +824,34 @@ export class UpdatePipeline {
      * `implements` edges, or from this batch's parse results, since a first
      * index stores those edges in the same pass as the calls.
      */
+    /**
+     * `inner(...).member`: resolves `inner` as a call, then `member` on the
+     * type it returns: a class (calling it constructs one) or a function's
+     * declared return type (`-> Client`, `*client.Client`, `Self`), named in
+     * the function's own file.
+     */
+    private resolveOnCallResult(fromQName: string, qualifier: string, member: string, internalMap: Map<string, number>, imports: ReadonlySet<string>, depth = 0): number | undefined {
+        const inner = stripTrailingCall(qualifier);
+        if (!inner || depth > 4) return undefined;
+        const calleeId = this.resolveCallTarget(fromQName, inner, internalMap, imports);
+        const callee = calleeId === undefined ? null : this.nodeRepo.getNodeById(calleeId);
+        if (!callee) return undefined;
+        let type: CodeNode | undefined;
+        if (callee.symbol_type === 'class' || callee.symbol_type === 'interface') {
+            type = callee;
+        } else {
+            const typeName = returnTypeName(callee.return_type);
+            if (!typeName) return undefined;
+            const calleeFile = toCanonical(callee.file_path);
+            type = typeName === 'Self'
+                ? this.nodeRepo.getNodeByQualifiedName(callee.qualified_name.slice(0, callee.qualified_name.lastIndexOf('.'))) ?? undefined
+                : this.typeInScope(typeName, calleeFile, this.importsOf(calleeFile));
+        }
+        if (!type || type.id === undefined) return undefined;
+        return this.nodeRepo.getNodeByQualifiedName(toCanonical(`${type.qualified_name}.${member}`))?.id
+            ?? this.resolveInherited(type, member, new Set());
+    }
+
     /** The class or interface named `name` that the caller sees (see pickInScope). */
     private typeInScope(name: string, scopeFile: string, imports: ReadonlySet<string>): CodeNode | undefined {
         const types = this.nodeRepo.findNodesBySymbolName(name).filter(n => n.symbol_type === 'class' || n.symbol_type === 'interface');

@@ -1,6 +1,6 @@
 (class_declaration name: (identifier) @class.name) @class.def
 (interface_declaration name: (identifier) @interface.name) @interface.def
-(method_declaration name: (identifier) @function.name parameters: (formal_parameters) @function.params) @function.def
+(method_declaration type: (_) @function.return name: (identifier) @function.name parameters: (formal_parameters) @function.params) @function.def
 (constructor_declaration name: (identifier) @function.name parameters: (formal_parameters) @function.params) @function.def
 
 (superclass [(type_identifier) (scoped_type_identifier) (generic_type)] @relation.inherits)

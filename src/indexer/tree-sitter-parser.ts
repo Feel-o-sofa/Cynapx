@@ -103,16 +103,11 @@ export function parameterTypes(defNode: Parser.SyntaxNode): Map<string, string> 
  * different types is left out: which one a call sees is unknown.
  */
 export function localTypes(defNode: Parser.SyntaxNode): Map<string, string> {
-    const types = new Map<string, string | null>();
-    const bind = (nameNode: Parser.SyntaxNode | null | undefined, typeName: string | undefined) => {
-        if (!nameNode || !typeName || !/identifier$/.test(nameNode.type)) return;
-        const prior = types.get(nameNode.text);
-        types.set(nameNode.text, prior === undefined || prior === typeName ? typeName : null);
-    };
+    const { bind, result } = typeBindings();
     for (const n of defNode.descendantsOfType(LOCAL_DECLARATIONS)) {
         switch (n.type) {
             case 'assignment': // Python
-                bind(n.childForFieldName('left'), constructedType(n.childForFieldName('right')));
+                bind(n.childForFieldName('left'), valueType(n.childForFieldName('right')));
                 break;
             case 'local_variable_declaration': // Java
             case 'variable_declaration': { // C#
@@ -121,31 +116,99 @@ export function localTypes(defNode: Parser.SyntaxNode): Map<string, string> {
                     ? namedType(typeNode.text) : undefined;
                 for (const d of n.namedChildren.filter(c => c.type === 'variable_declarator')) {
                     const value = d.childForFieldName('value') ?? (d.namedChildren.length > 1 ? d.namedChildren[d.namedChildren.length - 1] : null);
-                    bind(d.childForFieldName('name') ?? d.namedChildren[0], declared ?? constructedType(value));
+                    bind(d.childForFieldName('name') ?? d.namedChildren[0], declared ?? valueType(value));
                 }
                 break;
             }
             case 'short_var_declaration': { // Go
                 const left = n.childForFieldName('left')?.namedChildren ?? [];
                 const right = n.childForFieldName('right')?.namedChildren ?? [];
-                left.forEach((l, i) => bind(l, constructedType(right[i])));
+                left.forEach((l, i) => bind(l, valueType(right[i])));
                 break;
             }
             case 'let_declaration': { // Rust
                 const t = n.childForFieldName('type');
-                bind(n.childForFieldName('pattern'), t ? namedType(t.text) : constructedType(n.childForFieldName('value')));
+                bind(n.childForFieldName('pattern'), t ? namedType(t.text) : valueType(n.childForFieldName('value')));
                 break;
             }
             case 'property_declaration': { // Kotlin
                 const v = n.namedChildren.find(c => c.type === 'variable_declaration');
                 const declared = v?.namedChildren.find(c => c.type === 'user_type');
                 const value = n.namedChildren[n.namedChildren.length - 1];
-                bind(v?.namedChildren.find(c => c.type === 'simple_identifier'), declared ? namedType(declared.text) : constructedType(value));
+                bind(v?.namedChildren.find(c => c.type === 'simple_identifier'), declared ? namedType(declared.text) : valueType(value));
                 break;
             }
         }
     }
-    return new Map([...types].filter((e): e is [string, string] => e[1] !== null));
+    return result();
+}
+
+/**
+ * Collects name → type bindings. A name bound to two different types is
+ * dropped: which one a call sees is unknown.
+ */
+function typeBindings() {
+    const types = new Map<string, string | null>();
+    const bind = (nameNode: Parser.SyntaxNode | null | undefined, typeName: string | undefined) => {
+        if (!nameNode || !typeName || !/identifier$/.test(nameNode.type)) return;
+        const prior = types.get(nameNode.text);
+        types.set(nameNode.text, prior === undefined || prior === typeName ? typeName : null);
+    };
+    const result = () => new Map([...types].filter((e): e is [string, string] => e[1] !== null));
+    return { bind, result };
+}
+
+/**
+ * Members typed by their declaration or assignment in the type's body:
+ * `self.client = Client()` (Python), `private Client client;` (Java, C#),
+ * struct fields `c *client.Client` / `c: Client` (Go, Rust), Kotlin properties.
+ */
+export function memberTypes(typeNodes: Parser.SyntaxNode[]): Map<string, string> {
+    const { bind, result } = typeBindings();
+    for (const t of typeNodes) {
+        for (const n of t.descendantsOfType(['assignment', 'field_declaration', 'property_declaration'])) {
+            if (n.type === 'assignment') {
+                const left = n.childForFieldName('left');
+                if (left?.type === 'attribute' && SELF_RECEIVERS.has(left.childForFieldName('object')?.text ?? '')) {
+                    bind(left.childForFieldName('attribute'), valueType(n.childForFieldName('right')));
+                }
+            } else if (n.type === 'field_declaration') {
+                const names = n.namedChildren.filter(c => c.type === 'field_identifier'); // Go, Rust
+                if (names.length > 0) {
+                    const typeName = namedType(n.childForFieldName('type')?.text ?? '');
+                    for (const name of names) bind(name, typeName);
+                } else { // Java, C#
+                    const typeNode = n.childForFieldName('type') ?? n.namedChildren.find(c => c.type === 'variable_declaration')?.namedChildren[0];
+                    for (const d of n.descendantsOfType('variable_declarator')) {
+                        const value = d.childForFieldName('value') ?? (d.namedChildren.length > 1 ? d.namedChildren[d.namedChildren.length - 1] : null);
+                        bind(d.childForFieldName('name') ?? d.namedChildren[0], (typeNode && namedType(typeNode.text)) ?? valueType(value));
+                    }
+                }
+            } else { // Kotlin
+                const v = n.namedChildren.find(c => c.type === 'variable_declaration');
+                const declared = v?.namedChildren.find(c => c.type === 'user_type');
+                bind(v?.namedChildren.find(c => c.type === 'simple_identifier'), declared ? namedType(declared.text) : valueType(n.namedChildren[n.namedChildren.length - 1]));
+            }
+        }
+    }
+    return result();
+}
+
+/**
+ * What a value is known to be: the type it constructs, or else the result of
+ * the call that produced it, written `callee()` for the update pipeline to
+ * resolve through the callee's declared return type.
+ */
+function valueType(expr: Parser.SyntaxNode | null | undefined): string | undefined {
+    const constructed = constructedType(expr);
+    if (constructed || !expr) return constructed;
+    const callee = expr.type === 'call' || expr.type === 'call_expression' ? (expr.childForFieldName('function') ?? expr.namedChildren[0])
+        : expr.type === 'method_invocation' ? expr : undefined;
+    if (!callee) return undefined;
+    const text = expr.type === 'method_invocation'
+        ? [expr.childForFieldName('object')?.text, expr.childForFieldName('name')?.text].filter(Boolean).join('.')
+        : callee.text;
+    return /^[\w$.:]+$/.test(text) ? `${text.replace(/::/g, '.')}()` : undefined;
 }
 
 const LOCAL_DECLARATIONS = ['assignment', 'local_variable_declaration', 'variable_declaration', 'short_var_declaration', 'let_declaration', 'property_declaration'];
@@ -473,6 +536,17 @@ export class TreeSitterParser implements CodeParser {
             const receiverType = provider.ownerTypeName?.(defNode);
             return receiverType ? { name: receiverType } : undefined;
         };
+        const memberTypeCache = new Map<string, Map<string, string>>();
+        const memberTypesOf = (typeName: string) => {
+            let types = memberTypeCache.get(typeName);
+            if (!types) {
+                // Every definition of the type in this file: a Rust struct and
+                // its impl blocks, or a Go type and its methods' receiver.
+                const nodes = definitions.filter(d => d.name === typeName && OWNER_SYMBOL_TYPES.has(d.type)).map(d => d.node);
+                memberTypeCache.set(typeName, types = memberTypes(nodes));
+            }
+            return types;
+        };
         const localTypeCache = new Map<number, Map<string, string>>();
         const localTypesOf = (defNode: Parser.SyntaxNode) => {
             let types = localTypeCache.get(defNode.id);
@@ -534,15 +608,37 @@ export class TreeSitterParser implements CodeParser {
                         let qualifier = normalizeQualifier(callee.qualifier);
                         const receiverVar = callerNode ? provider.receiverName?.(callerNode) : undefined;
                         const owner = callerNode ? ownerOf(callerNode) : undefined;
-                        if (SELF_RECEIVERS.has(qualifier) || qualifier === receiverVar) {
+                        const isSelf = (q: string) => SELF_RECEIVERS.has(q) || q === receiverVar;
+                        if (isSelf(qualifier)) {
                             localTarget = resolveOwnMember(callee.name.toLowerCase(), fromQName);
                             // Not defined on the caller's own type here: it may be
                             // inherited, or defined in another file of a Go package.
                             if (owner?.name) qualifier = owner.name;
                         } else if (/^super(\(.*\))?$/s.test(qualifier)) {
                             qualifier = (owner?.node && baseTypeNames(owner.node)[0]) || qualifier;
-                        } else if (callerNode) {
-                            qualifier = parameterTypes(callerNode).get(qualifier) ?? localTypesOf(callerNode).get(qualifier) ?? qualifier;
+                        } else {
+                            // A parameter, a local, or (where `foo` means `this.foo`) a field.
+                            if (callerNode && /^[\w$]+$/.test(qualifier)) {
+                                qualifier = parameterTypes(callerNode).get(qualifier)
+                                    ?? localTypesOf(callerNode).get(qualifier)
+                                    ?? (provider.implicitMemberCalls && owner ? memberTypesOf(owner.name).get(qualifier) : undefined)
+                                    ?? qualifier;
+                            }
+                            // Java `make().configure()`: a bare call in a chain is `this.make()`.
+                            if (provider.implicitMemberCalls && owner && /^[\w$]+\(.*\)$/s.test(qualifier)) {
+                                qualifier = `${owner.name}.${qualifier}`;
+                            }
+                            // `self.client.configure()`: the attribute's type. A call
+                            // on self (`self.make().run()`) is the owner's method. An
+                            // attribute of unknown type stays `self.<attr>`, which is
+                            // never mistaken for a module of the same name.
+                            const head = qualifier.split('.')[0];
+                            if (head !== qualifier && isSelf(head)) {
+                                const rest = qualifier.slice(head.length + 1);
+                                qualifier = rest.endsWith(')')
+                                    ? `${owner?.name ?? 'self'}.${rest}`
+                                    : (owner && /^[\w$]+$/.test(rest) ? memberTypesOf(owner.name).get(rest) : undefined) ?? `self.${rest}`;
+                            }
                         }
                         toQName = `${qualifier}.${callee.name}`;
                     }

@@ -40,6 +40,10 @@ exports[`tree-sitter parser — Go (sample.go) > snapshot: all captures 1`] = `
     "text": "Dog",
   },
   {
+    "name": "relation.embeds",
+    "text": "Animal",
+  },
+  {
     "name": "method.def",
     "text": "func (a *Animal) Speak() string {
 	return fmt.Sprintf("%s makes a sound.", a.Name)
@@ -52,6 +56,10 @@ exports[`tree-sitter parser — Go (sample.go) > snapshot: all captures 1`] = `
   {
     "name": "method.params",
     "text": "()",
+  },
+  {
+    "name": "method.return",
+    "text": "string",
   },
   {
     "name": "call.expr",
@@ -76,6 +84,10 @@ exports[`tree-sitter parser — Go (sample.go) > snapshot: all captures 1`] = `
     "text": "()",
   },
   {
+    "name": "method.return",
+    "text": "string",
+  },
+  {
     "name": "call.expr",
     "text": "fmt.Sprintf("%s barks.", d.Name)",
   },
@@ -98,6 +110,10 @@ exports[`tree-sitter parser — Go (sample.go) > snapshot: all captures 1`] = `
     "text": "()",
   },
   {
+    "name": "method.return",
+    "text": "string",
+  },
+  {
     "name": "call.expr",
     "text": "strings.ToUpper(d.Breed)",
   },
@@ -118,6 +134,10 @@ exports[`tree-sitter parser — Go (sample.go) > snapshot: all captures 1`] = `
   {
     "name": "function.params",
     "text": "(name string)",
+  },
+  {
+    "name": "function.return",
+    "text": "string",
   },
   {
     "name": "call.expr",

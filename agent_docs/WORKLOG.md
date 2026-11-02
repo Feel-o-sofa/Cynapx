@@ -6,6 +6,17 @@ drift detection now runs in CI (`.github/workflows/scheduled-maintenance.yml`).
 
 ---
 
+## 2026-11-02 (latest) — 4.4.0: return types, fields, Go embedding (HANDOVER §5 item 7)
+
+- Gold set: 20 new edges; before 62/74 **plus a false positive** the new cases exposed (`self.client.configure()`
+  matched the imported module `client`; latent since 4.1). After: 74/74, none.
+- Cross-check against 4.3.0 on unseen code: stdlib `email` +28, Go `text/template` (copied with a `go.mod` so its
+  internal imports resolve) +22, nothing removed. Every one of the 50 additions read and correct — including
+  promotion through Go embedding (`Template` embeds `*parse.Tree`) and 3-deep return-type chains.
+- Next: interface dispatch needs a design decision first (HANDOVER §5 item 8).
+
+---
+
 ## 2026-11-02 (later) — 4.3.0: typed locals, super, inheritance (HANDOVER §5 item 6)
 
 - Gold set first: 18 new edges in new files. Before: 41/54; after: 54/54, still no false positives.
